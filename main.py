@@ -23,6 +23,10 @@ def main():
         default="data/game.db",
         help="Path to database file (default: data/game.db)"
     )
+    parser.add_argument(
+        "--new_player",
+        default =False
+    )
 
     args = parser.parse_args()
 
@@ -52,8 +56,11 @@ def main():
                 sys.exit(1)
 
         # Run the game
-        from src.game.session import run_game
-        run_game()
+        from src.game import session
+        if args.new_player:
+            session.create_player()
+        else:
+            session.run_game()
 
 
 if __name__ == "__main__":
