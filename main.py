@@ -2,7 +2,9 @@
 
 import argparse
 import sys
+from dotenv import load_dotenv
 
+load_dotenv()
 
 def main():
     """Main entry point for Agent GM."""

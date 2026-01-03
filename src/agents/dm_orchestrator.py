@@ -3,6 +3,7 @@
 from typing import Any
 
 from strands import Agent
+from strands.session.file_session_manager import FileSessionManager
 
 from src.agents.base import create_agent
 from src.tools.world_read import (
@@ -96,11 +97,14 @@ class DMOrchestrator:
         """
         self.player_id = player_id
 
+        session_manager = FileSessionManager(session_id=player_id)
+
         # Create the Strands agent
         self.agent = create_agent(
             agent_name="dm_orchestrator",
             system_prompt=DM_SYSTEM_PROMPT + f"\n\nThe current player_id is: {player_id}",
             tools=DM_TOOLS,
+            session_manager=session_manager,
         )
 
     def process_input(self, player_input: str) -> dict[str, Any]:

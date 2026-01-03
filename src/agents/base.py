@@ -57,6 +57,7 @@ def create_agent(
     agent_name: str,
     system_prompt: str,
     tools: list | None = None,
+    session_manager: Any = None,
 ) -> Agent:
     """Create a Strands Agent with configuration from agents.yaml.
 
@@ -64,6 +65,7 @@ def create_agent(
         agent_name: Name of the agent (must exist in agents.yaml).
         system_prompt: The system prompt for the agent.
         tools: List of tools the agent can use.
+        session_manager: Optional session manager for conversation history.
 
     Returns:
         Configured Strands Agent.
@@ -74,6 +76,7 @@ def create_agent(
         model=model,
         system_prompt=system_prompt,
         tools=tools or [],
+        session_manager=session_manager,
     )
 
 
