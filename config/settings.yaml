@@ -1,0 +1,36 @@
+# General application settings
+
+database:
+  # Path to SQLite database file (relative to project root)
+  path: "data/game.db"
+  # Echo SQL queries for debugging
+  echo: false
+
+game:
+  # Default time costs for actions (in hours)
+  time_costs:
+    conversation: 0.5      # 30 minutes
+    short_travel: 1.0      # 1 hour (within city)
+    long_travel: 8.0       # 8 hours (between cities)
+    rest: 8.0              # Full rest
+    combat: 0.25           # 15 minutes per encounter
+
+  # How many recent messages to keep in NPC relationship context
+  recent_messages_limit: 10
+
+  # Trigger summary compression after this many messages with NPC
+  summary_trigger_threshold: 20
+
+# API configuration (keys should be in environment variables)
+api:
+  # Environment variable names for API keys
+  openrouter_key_env: "OPENROUTER_API_KEY"
+  anthropic_key_env: "ANTHROPIC_API_KEY"
+  openai_key_env: "OPENAI_API_KEY"
+
+# Display settings
+display:
+  # Use rich formatting for CLI output
+  use_rich: true
+  # Color scheme
+  theme: "monokai"
