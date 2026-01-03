@@ -8,50 +8,50 @@
 
 agents:
   dm_orchestrator:
-    model: "openrouter/anthropic/claude-3.5-sonnet"
+    model: "openrouter/z-ai/glm-4.7"
     temperature: 0.7
     max_tokens: 2048
     description: "Main dungeon master agent that narrates the world"
 
   npc_agent:
-    model: "openrouter/anthropic/claude-3-haiku"
+    model: "openrouter/z-ai/glm-4.7"
     temperature: 0.8
     max_tokens: 1024
     description: "Handles NPC dialogue and personality"
 
   combat_agent:
-    model: "openrouter/anthropic/claude-3.5-sonnet"
+    model: "openrouter/z-ai/glm-4.7"
     temperature: 0.5
     max_tokens: 1024
     description: "Manages combat encounters and narration"
 
   # World Forge agents (Phase 2)
   faction_generator:
-    model: "openrouter/anthropic/claude-3.5-sonnet"
+    model: "openrouter/z-ai/glm-4.7"
     temperature: 0.8
     max_tokens: 4096
     description: "Generates factions for world building"
 
   location_generator:
-    model: "openrouter/anthropic/claude-3.5-sonnet"
+    model: "openrouter/z-ai/glm-4.7"
     temperature: 0.8
     max_tokens: 4096
     description: "Generates locations and world geography"
 
   npc_generator:
-    model: "openrouter/anthropic/claude-3.5-sonnet"
+    model: "openrouter/z-ai/glm-4.7"
     temperature: 0.9
     max_tokens: 4096
     description: "Generates NPCs with personalities and backstories"
 
   history_generator:
-    model: "openrouter/anthropic/claude-3.5-sonnet"
+    model: "openrouter/z-ai/glm-4.7"
     temperature: 0.7
     max_tokens: 4096
     description: "Generates world history and lore"
 
   plot_seeder:
-    model: "openrouter/anthropic/claude-3.5-sonnet"
+    model: "openrouter/z-ai/glm-4.7"
     temperature: 0.7
     max_tokens: 2048
     description: "Creates initial plot threads based on PC and world"
