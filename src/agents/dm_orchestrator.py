@@ -21,6 +21,7 @@ from src.tools.world_write import (
     add_location,
     add_npc,
     update_npc_relationship,
+    update_npc,
     create_event
 )
 from src.tools.narration import (
@@ -45,6 +46,7 @@ DM_SYSTEM_PROMPT = """You are the Dungeon Master (DM) for an immersive, dynamic 
     - If a player tries to go somewhere logical that doesn't exist yet (e.g., "I go into the kitchen" while in a Tavern), **do not refuse**.
     - Use `add_location` to create the room on the fly, link it to the current location, and then `move_player` there.
     - If a player looks for an NPC that fits the setting but isn't there (e.g., "Is there a bartender?"), use `add_npc` to create them immediately.
+    - NPCs can evolve: use `update_npc` when events change them physically (injuries, aging), their goals shift, or they learn new secrets.
 
 3.  **Narration & Output**:
     - Use `describe_location` immediately upon arriving in a new place.
@@ -117,6 +119,7 @@ DM_TOOLS = [
     show_time_passage,
     prompt_creator_agent,
     prompt_npc_agent,
+    update_npc,
 ]
 
 

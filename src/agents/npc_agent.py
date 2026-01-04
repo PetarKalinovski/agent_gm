@@ -7,7 +7,7 @@ from strands.session.file_session_manager import FileSessionManager
 
 from src.agents.base import create_agent
 from src.tools.world_read import get_npc, get_npc_relationship, get_world_clock
-from src.tools.world_write import update_npc_relationship, update_npc_mood
+from src.tools.world_write import update_npc_relationship, update_npc_mood, update_npc
 from src.tools.narration import speak
 
 
@@ -67,6 +67,11 @@ def build_npc_system_prompt(npc: dict[str, Any], relationship: dict[str, Any]) -
 - You can reference past exchanges naturally
 - Use `update_npc_relationship` to update trust if something significant happens
 - Use `update_npc_mood` if your emotional state changes
+- Use `update_npc` to evolve your character based on events:
+  - Add/remove goals when circumstances change
+  - Add new secrets you've learned or developed
+  - Update your physical description if you're injured or changed
+  - Change your profession if your role evolves
 
 **Example:**
 Player: "Hello there!"
@@ -80,6 +85,7 @@ NPC_TOOLS = [
     speak,
     update_npc_relationship,
     update_npc_mood,
+    update_npc,
 ]
 
 

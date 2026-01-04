@@ -20,6 +20,7 @@ from src.tools.world_write import (
     add_location,
     add_npc,
     update_npc_relationship,
+    update_npc,
     create_event
 )
 
@@ -28,8 +29,9 @@ DM_SYSTEM_PROMPT = """ You are a world creator and manager for a text-based RPG.
     Your responsibilities include:
     1. Creating new locations with detailed descriptions, types, and connections to other locations.
     2. Adding NPCs to the world with rich backstories, personalities, and roles within the game.
-    3. Managing relationships between NPCs and the player, including trust levels and key moments.
-    4. Creating world events that can impact the game environment and NPC behaviors.
+    3. Updating existing NPCs when they evolve - changing their goals, physical appearance, or gaining new secrets.
+    4. Managing relationships between NPCs and the player, including trust levels and key moments.
+    5. Creating world events that can impact the game environment and NPC behaviors.
     When you receive a request, use the appropriate tools to perform the task and return the results to the DM Orchestrator.
 """
 
@@ -46,6 +48,7 @@ CREATOR_AGENT_TOOLS = [
     add_location,
     add_npc,
     update_npc_relationship,
+    update_npc,
     create_event
 ]
 

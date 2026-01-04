@@ -309,6 +309,117 @@ def update_npc_mood(npc_id: str, new_mood: str, reason: str = "") -> dict[str, A
 
 
 @tool
+def update_npc(
+    npc_id: str,
+    description_physical: str | None = None,
+    description_personality: str | None = None,
+    voice_pattern: str | None = None,
+    profession: str | None = None,
+    status: str | None = None,
+    add_goal: str | None = None,
+    remove_goal: str | None = None,
+    add_secret: str | None = None,
+    remove_secret: str | None = None,
+    add_skill: str | None = None,
+    add_notable_item: str | None = None,
+) -> dict[str, Any]:
+    """Update an NPC's attributes, goals, or secrets.
+
+    Use this when an NPC changes physically, gains new goals, or evolves their character.
+    NPCs can call this on themselves to reflect changes from events or interactions.
+
+    Args:
+        npc_id: The NPC's ID.
+        description_physical: New physical description (e.g., "now bears a scar across their left cheek").
+        description_personality: New personality description.
+        voice_pattern: New speech pattern description.
+        profession: New profession.
+        status: New status (alive, dead, missing, imprisoned).
+        add_goal: Add a new goal to the NPC's goals list.
+        remove_goal: Remove a goal from the NPC's goals list (exact match).
+        add_secret: Add a new secret to the NPC's secrets list.
+        remove_secret: Remove a secret from the NPC's secrets list (exact match).
+        add_skill: Add a new skill to the NPC's skills list.
+        add_notable_item: Add a notable item to the NPC's inventory.
+
+    Returns:
+        Dictionary with updated NPC details.
+    """
+    with get_session() as session:
+        npc = session.get(NPC, npc_id)
+        if not npc:
+            return {"error": "NPC not found"}
+
+        # Update simple attributes
+        if description_physical is not None:
+            npc.description_physical = description_physical
+        if description_personality is not None:
+            npc.description_personality = description_personality
+        if voice_pattern is not None:
+            npc.voice_pattern = voice_pattern
+        if profession is not None:
+            npc.profession = profession
+        if status is not None:
+            npc.status = status
+
+        # Update goals
+        if add_goal:
+            goals = npc.goals.copy() if npc.goals else []
+            if add_goal not in goals:
+                goals.append(add_goal)
+                npc.goals = goals
+        if remove_goal:
+            goals = npc.goals.copy() if npc.goals else []
+            if remove_goal in goals:
+                goals.remove(remove_goal)
+                npc.goals = goals
+
+        # Update secrets
+        if add_secret:
+            secrets = npc.secrets.copy() if npc.secrets else []
+            if add_secret not in secrets:
+                secrets.append(add_secret)
+                npc.secrets = secrets
+        if remove_secret:
+            secrets = npc.secrets.copy() if npc.secrets else []
+            if remove_secret in secrets:
+                secrets.remove(remove_secret)
+                npc.secrets = secrets
+
+        # Update skills
+        if add_skill:
+            skills = npc.skills.copy() if npc.skills else []
+            if add_skill not in skills:
+                skills.append(add_skill)
+                npc.skills = skills
+
+        # Update inventory
+        if add_notable_item:
+            inventory = npc.inventory_notable.copy() if npc.inventory_notable else []
+            if add_notable_item not in inventory:
+                inventory.append(add_notable_item)
+                npc.inventory_notable = inventory
+
+        session.commit()
+
+        return {
+            "success": True,
+            "npc_id": npc.id,
+            "npc_name": npc.name,
+            "updated_fields": {
+                "physical": description_physical is not None,
+                "personality": description_personality is not None,
+                "voice": voice_pattern is not None,
+                "profession": profession is not None,
+                "status": status is not None,
+                "goals": len(npc.goals),
+                "secrets": len(npc.secrets),
+                "skills": len(npc.skills),
+            }
+        }
+
+
+@tool
 def reveal_secret(npc_id: str, player_id: str, secret_index: int) -> dict[str, Any]:
     """Mark a secret as revealed to the player.
 
