@@ -9,7 +9,6 @@ from rich.text import Text
 
 from src.agents.base import setup_api_keys
 from src.agents.dm_orchestrator import DMOrchestrator
-from src.agents.npc_agent import NPCAgent
 from src.config import load_settings
 from src.game.context import assemble_context
 from src.models import (
@@ -47,10 +46,6 @@ class GameSession:
 
         # Initialize DM
         self.dm = DMOrchestrator(self.player_id)
-
-        # Track current mode
-        self.mode = "exploration"  # exploration, conversation, combat
-        self.current_npc_agent: NPCAgent | None = None
 
     def create_player(self) -> str:
         """Create a new player character.
@@ -183,12 +178,7 @@ class GameSession:
         while True:
             try:
                 # Get player input
-                if self.mode == "exploration":
-                    player_input = Prompt.ask("\n[bold green]>[/bold green]")
-                elif self.mode == "conversation":
-                    player_input = Prompt.ask("\n[bold cyan]Say[/bold cyan]")
-                else:
-                    player_input = Prompt.ask("\n[bold yellow]Action[/bold yellow]")
+                player_input = Prompt.ask("\n[bold green]>[/bold green]")
 
                 # Handle special commands
                 if player_input.lower() in ["quit", "exit", "q"]:
@@ -203,15 +193,10 @@ class GameSession:
                 elif player_input.lower() in ["look", "l"]:
                     self.dm.describe_scene()
                     continue
-                elif player_input.lower() in ["leave", "bye", "goodbye"] and self.mode == "conversation":
-                    self._end_conversation()
-                    continue
 
-                # Process input based on mode
-                if self.mode == "exploration":
-                    self._handle_exploration(player_input)
-                elif self.mode == "conversation":
-                    self._handle_conversation(player_input)
+                # Process input through DM
+                response = self.dm.process_input(player_input)
+                # Response is already printed by tools (narrate, describe_location, etc.)
 
             except KeyboardInterrupt:
                 self.console.print("\n\nFarewell, adventurer!")
@@ -222,62 +207,6 @@ class GameSession:
                     import traceback
                     traceback.print_exc()
 
-    def _handle_exploration(self, player_input: str) -> None:
-        """Handle input during exploration mode.
-
-        Args:
-            player_input: The player's input.
-        """
-        result = self.dm.process_input(player_input)
-
-        # Check if we need to switch modes
-        if result.get("action") == "npc_conversation":
-            self._start_conversation(result["npc"], result["relationship"])
-
-    def _start_conversation(self, npc: dict[str, Any], relationship: dict[str, Any]) -> None:
-        """Start a conversation with an NPC.
-
-        Args:
-            npc: NPC data dictionary.
-            relationship: Relationship data.
-        """
-        self.mode = "conversation"
-        self.current_npc_agent = NPCAgent(self.player_id, npc["id"])
-
-        self.console.print()
-        self.console.print(f"[dim]--- Conversation with {npc['name']} ---[/dim]")
-        self.console.print()
-
-        # Get NPC greeting
-        self.current_npc_agent.start_conversation(npc, relationship)
-
-    def _handle_conversation(self, player_input: str) -> None:
-        """Handle input during conversation mode.
-
-        Args:
-            player_input: What the player says.
-        """
-        if not self.current_npc_agent:
-            self.mode = "exploration"
-            return
-
-        result = self.current_npc_agent.respond(player_input)
-
-        if result.get("conversation_ended"):
-            self._end_conversation()
-
-    def _end_conversation(self) -> None:
-        """End the current conversation."""
-        if self.current_npc_agent:
-            self.current_npc_agent.end_conversation()
-            npc_name = self.current_npc_agent.npc.get("name", "them")
-            self.console.print()
-            self.console.print(f"[dim]--- End conversation with {npc_name} ---[/dim]")
-            self.current_npc_agent = None
-
-        self.mode = "exploration"
-        self.console.print()
-
     def _show_help(self) -> None:
         """Show help information."""
         help_text = """
@@ -287,13 +216,10 @@ class GameSession:
 - `help` - Show this help
 - `quit` or `exit` - Leave the game
 
-**During exploration:**
+**Gameplay:**
 - Type what you want to do in natural language
-- e.g., "go to the tavern", "talk to the bartender"
-
-**During conversation:**
-- Type what you want to say
-- `leave`, `bye`, or `goodbye` to end the conversation
+- e.g., "go to the tavern", "talk to the bartender", "ask about rumors"
+- The DM will respond to your actions and narrate the world
 """
         self.console.print(Panel(help_text, title="Help", border_style="blue"))
 

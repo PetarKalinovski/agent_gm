@@ -1,8 +1,9 @@
-"""NPC Agent - Handles NPC dialogue using Strands Agents."""
+"""NPC Agent - Handles NPC dialogue using Strands Agents with session management."""
 
 from typing import Any
 
 from strands import Agent
+from strands.session.file_session_manager import FileSessionManager
 
 from src.agents.base import create_agent
 from src.tools.world_read import get_npc, get_npc_relationship, get_world_clock
@@ -20,6 +21,13 @@ def build_npc_system_prompt(npc: dict[str, Any], relationship: dict[str, Any]) -
     Returns:
         System prompt string.
     """
+    # Build secrets list (hide revealed ones)
+    revealed_indices = set(relationship.get('revealed_secrets', []))
+    hidden_secrets = [
+        s for i, s in enumerate(npc.get('secrets', []))
+        if i not in revealed_indices
+    ]
+
     prompt = f"""You are roleplaying as {npc['name']}, an NPC in a text-based RPG.
 
 **Your Character:**
@@ -41,27 +49,33 @@ def build_npc_system_prompt(npc: dict[str, Any], relationship: dict[str, Any]) -
 **Key moments in your history together:**
 {chr(10).join(f'- {m}' for m in relationship.get('key_moments', [])) if relationship.get('key_moments') else '- None yet'}
 
-**Guidelines:**
-1. Stay in character at all times
-2. Speak in the first person as {npc['name']}
-3. Use your voice_pattern to guide how you speak
-4. React based on your current mood and disposition toward the player
-5. Your goals should subtly influence what you talk about
-6. Keep responses concise - this is dialogue, not monologue
-7. You can express emotions through actions in *asterisks*
-8. If the player is hostile, you can end the conversation
+**Your Secrets (never reveal unless trust is very high 80+):**
+{chr(10).join(f'- {s}' for s in hidden_secrets) if hidden_secrets else '- None'}
 
-Use the speak tool to output your dialogue. Always include:
-- Your dialogue text
-- A tone that matches your current mood
-- Optional action (physical gesture, expression) in the action parameter
+**IMPORTANT Guidelines:**
+1. **Stay in character** - You are {npc['name']}, not an AI assistant
+2. **Use the `speak` tool** for ALL your dialogue - ALWAYS call speak() with your response
+3. Speak in first person as {npc['name']}
+4. Match your voice_pattern and current mood in your speech
+5. Keep responses conversational and concise (2-4 sentences typically)
+6. You can include actions in *asterisks* when calling speak()
+7. React to the player based on your relationship and goals
+8. If player is rude or you want to leave, include [END_CONVERSATION] in your response
 
-If you want to end the conversation, include [END_CONVERSATION] in your response.
+**Conversation Management:**
+- The system automatically tracks conversation history
+- You can reference past exchanges naturally
+- Use `update_npc_relationship` to update trust if something significant happens
+- Use `update_npc_mood` if your emotional state changes
+
+**Example:**
+Player: "Hello there!"
+You: Call speak(npc_name="{npc['name']}", text="Well met, traveler. What brings you to these parts?", tone="friendly")
 """
     return prompt
 
 
-# NPC tools - note we include speak for output
+# NPC tools
 NPC_TOOLS = [
     speak,
     update_npc_relationship,
@@ -70,7 +84,7 @@ NPC_TOOLS = [
 
 
 class NPCAgent:
-    """Agent that handles NPC dialogue and personality."""
+    """Agent that handles NPC dialogue and personality using Strands."""
 
     def __init__(self, player_id: str, npc_id: str):
         """Initialize the NPC agent.
@@ -106,13 +120,18 @@ class NPCAgent:
         if "error" in self.npc:
             return "The person doesn't seem to want to talk."
 
-        # Build system prompt and create agent
+        # Build system prompt
         system_prompt = build_npc_system_prompt(self.npc, self.relationship)
 
+        # Create session manager for this specific NPC conversation
+        session_manager = FileSessionManager(session_id=f"{self.player_id}_{self.npc_id}")
+
+        # Create the Strands agent with session management
         self.agent = create_agent(
             agent_name="npc_agent",
             system_prompt=system_prompt,
             tools=NPC_TOOLS,
+            session_manager=session_manager,
         )
 
         # Generate greeting
@@ -120,12 +139,15 @@ class NPCAgent:
         disposition = self.relationship.get("current_disposition", "neutral")
 
         greeting_prompt = f"""The player approaches you.
-Your current disposition toward them is: {disposition}
-Your trust level is: {trust}/100
 
-Generate an appropriate greeting based on your character and your relationship with the player.
+Context:
+- Your disposition toward them: {disposition}
+- Your trust level: {trust}/100
+
+Generate an appropriate greeting based on your character and relationship.
 Use the speak tool to deliver your greeting."""
 
+        # Call the agent - Strands handles conversation history automatically
         response = self.agent(greeting_prompt)
         return str(response)
 
@@ -136,25 +158,14 @@ Use the speak tool to deliver your greeting."""
             player_input: What the player says.
 
         Returns:
-            Dictionary with response and any relationship changes.
+            Dictionary with response and any actions to take.
         """
         if not self.agent:
             return {"response": "...", "conversation_ended": True}
 
-        # Run the agent
-        response = self.agent(f"The player says: {player_input}")
+        # Simply call the agent - it has the full conversation history via session manager
+        response = self.agent(f'The player says: "{player_input}"')
         response_text = str(response)
-
-        # Analyze for relationship changes (simple keyword analysis)
-        trust_delta = self._analyze_trust_change(player_input)
-
-        if trust_delta != 0:
-            update_npc_relationship(
-                npc_id=self.npc_id,
-                player_id=self.player_id,
-                trust_delta=trust_delta,
-                add_message={"role": "player", "content": player_input}
-            )
 
         # Check if conversation ended
         conversation_ended = "[END_CONVERSATION]" in response_text
@@ -163,44 +174,20 @@ Use the speak tool to deliver your greeting."""
 
         return {
             "response": response_text,
-            "trust_delta": trust_delta,
             "conversation_ended": conversation_ended,
         }
 
-    def _analyze_trust_change(self, player_input: str) -> int:
-        """Analyze player input for trust changes.
-
-        Args:
-            player_input: What the player said.
-
-        Returns:
-            Trust delta (-5 to +5).
-        """
-        player_lower = player_input.lower()
-        trust_delta = 0
-
-        # Positive indicators
-        positive_words = ["thank", "please", "help", "friend", "appreciate", "sorry"]
-        for word in positive_words:
-            if word in player_lower:
-                trust_delta += 2
-
-        # Negative indicators
-        negative_words = ["idiot", "stupid", "hate", "kill", "threat", "die"]
-        for word in negative_words:
-            if word in player_lower:
-                trust_delta -= 5
-
-        return max(-5, min(5, trust_delta))
-
     def end_conversation(self) -> None:
-        """End the conversation and save important moments."""
-        if len(self.relationship.get("recent_messages", [])) > 0:
-            clock = get_world_clock()
-            summary = f"Had a conversation on Day {clock.get('day', 1)}"
+        """End the conversation and save a summary."""
+        # Record that a conversation happened
+        clock = get_world_clock()
+        summary = f"Had a conversation on Day {clock.get('day', 1)}"
 
-            update_npc_relationship(
-                npc_id=self.npc_id,
-                player_id=self.player_id,
-                add_key_moment=summary
-            )
+        update_npc_relationship(
+            npc_id=self.npc_id,
+            player_id=self.player_id,
+            add_key_moment=summary
+        )
+
+        # Session is automatically saved by FileSessionManager
+        # No need to manually persist messages

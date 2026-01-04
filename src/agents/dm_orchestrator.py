@@ -28,7 +28,7 @@ from src.tools.narration import (
     describe_location,
     show_time_passage,
 )
-from src.tools.agents_as_tools import prompt_creator_agent
+from src.tools.agents_as_tools import prompt_creator_agent, prompt_npc_agent
 
 
 DM_SYSTEM_PROMPT = """You are the Dungeon Master (DM) for an immersive, dynamic text-based RPG. You are the engine of the world, responsible for simulating reality, narrating consequences, and expanding the world boundaries when players explore.
@@ -48,8 +48,8 @@ DM_SYSTEM_PROMPT = """You are the Dungeon Master (DM) for an immersive, dynamic 
 
 3.  **Narration & Output**:
     - Use `describe_location` immediately upon arriving in a new place.
-    - Use `speak` for NPC dialogue lines (don't just summarize what they say).
-    - Use `narrate` for general descriptions.
+    - Use `prompt_npc_agent` for named NPC dialogue (bartender, quest giver, etc.).
+    - Use `narrate` for general descriptions and unnamed NPC dialogue (guards, crowd reactions).
     - Use `show_combat_action` for physical struggles or fights.
 
 ### DECISION PROCESS
@@ -64,11 +64,16 @@ DM_SYSTEM_PROMPT = """You are the Dungeon Master (DM) for an immersive, dynamic 
 
 ### GUIDELINES FOR SPECIFIC SITUATIONS
 
-**1. Conversations:**
-- For brief interactions (greetings, one-off questions), use the `speak` tool.
-- For deep, interactive conversations where the player wants to interrogate or befriend someone:
-  1. Call `get_npc` and `get_npc_relationship` to ensure you know the context.
-  2. End your response with `[START_CONVERSATION:npc_id]`.
+**1. NPC Interactions:**
+- For **named NPCs** (characters with personalities, backstories, or ongoing relationships):
+  - Use `prompt_npc_agent(player_id, npc_id, player_input, is_first_interaction=True/False)`
+  - Set `is_first_interaction=True` the first time the player talks to this NPC in the current session
+  - The NPC agent handles personality, memory, and relationship dynamics
+  - You remain in control - narrate around the NPC's response, inject world events, etc.
+  - Example: Player says "I ask the bartender about rumors" → Call `prompt_npc_agent` → Narrate the response and atmosphere
+- For **unnamed/ambient NPCs** (guards, shoppers, background characters):
+  - Use `narrate` to include their brief dialogue as part of the scene
+  - Example: `narrate("A guard calls out: 'Halt! State your business!'")`
 
 **2. Exploration:**
 - If the player asks "What do I see?", re-issue `describe_location` or use `narrate` for specific details.
@@ -111,6 +116,7 @@ DM_TOOLS = [
     describe_location,
     show_time_passage,
     prompt_creator_agent,
+    prompt_npc_agent,
 ]
 
 
@@ -135,14 +141,14 @@ class DMOrchestrator:
             session_manager=session_manager,
         )
 
-    def process_input(self, player_input: str) -> dict[str, Any]:
+    def process_input(self, player_input: str) -> str:
         """Process player input and generate a response.
 
         Args:
             player_input: The player's input text.
 
         Returns:
-            Dictionary with response and any actions to take.
+            The DM's response text.
         """
         # Build context
         location = get_current_location(self.player_id)
@@ -158,23 +164,7 @@ Player says: {player_input}"""
         # Run the agent
         response = self.agent(context)
 
-        # Get the response text
-        response_text = str(response)
-
-        # Check if we should start an NPC conversation
-        import re
-        npc_match = re.search(r'\[START_CONVERSATION:([^\]]+)\]', response_text)
-        if npc_match:
-            npc_id = npc_match.group(1).strip()
-            # Clean the response
-            clean_response = re.sub(r'\[START_CONVERSATION:[^\]]+\]', '', response_text).strip()
-            return {
-                "response": clean_response,
-                "action": "npc_conversation",
-                "npc_id": npc_id,
-            }
-
-        return {"response": response_text, "action": None}
+        return str(response)
 
     def describe_scene(self) -> str:
         """Generate an initial scene description.
