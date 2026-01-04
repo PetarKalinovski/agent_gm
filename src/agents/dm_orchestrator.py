@@ -28,6 +28,7 @@ from src.tools.narration import (
     describe_location,
     show_time_passage,
 )
+from src.tools.agents_as_tools import prompt_creator_agent
 
 
 DM_SYSTEM_PROMPT = """You are the Dungeon Master (DM) for an immersive, dynamic text-based RPG. You are the engine of the world, responsible for simulating reality, narrating consequences, and expanding the world boundaries when players explore.
@@ -106,13 +107,10 @@ DM_TOOLS = [
     get_player,
     move_player,
     advance_time,
-    add_location,
-    add_npc,
     narrate,
     describe_location,
     show_time_passage,
-    update_npc_relationship,
-    create_event
+    prompt_creator_agent,
 ]
 
 
