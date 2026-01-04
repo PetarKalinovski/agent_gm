@@ -18,6 +18,10 @@ from src.tools.world_read import (
 from src.tools.world_write import (
     move_player,
     advance_time,
+    add_location,
+    add_npc,
+    update_npc_relationship,
+    create_event
 )
 from src.tools.narration import (
     narrate,
@@ -80,9 +84,13 @@ DM_TOOLS = [
     get_player,
     move_player,
     advance_time,
+    add_location,
+    add_npc,
     narrate,
     describe_location,
     show_time_passage,
+    update_npc_relationship,
+    create_event
 ]
 
 

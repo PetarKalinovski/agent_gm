@@ -13,8 +13,127 @@ from src.models import (
     Player,
     WorldClock,
     get_session,
+    LocationType,
+    NPCTier,
 )
 
+@tool
+def add_location(
+    name: str,
+    description: str,
+    location_type: LocationType,
+    parent_id: str | None = None,
+    travel_time_to_parent: float | None = None,
+) -> dict[str, Any]:
+    """Add a new location to the world.
+
+    Args:
+        name: Name of the location.
+        description: Description of the location.
+        location_type: Type of location (e.g., city, building, room).
+        parent_id: ID of the parent location (if any).
+        travel_time_to_parent: Travel time to parent location in hours (if applicable) (float accepted).
+
+    Returns:
+        Dictionary with the created location's details.
+    """
+    with get_session() as session:
+        location = Location(
+            name=name,
+            description=description,
+            type=location_type,
+            parent_id=parent_id,
+            visited=False,
+            discovered=False,
+        )
+        session.add(location)
+        session.commit()
+
+        # Add Connection to parent if applicable
+        if parent_id:
+            parent = session.get(Location, parent_id)
+            if parent:
+                conn = Connection(
+                    from_location_id=parent_id,
+                    to_location_id=location.id,
+                    travel_time_hours=travel_time_to_parent,
+                    bidirectional=True,
+                )
+                session.add(conn)
+                session.commit()
+
+        return {
+            "id": location.id,
+            "name": location.name,
+            "type": location.type,
+            "parent_id": location.parent_id,
+        }
+
+@tool
+def add_npc(
+    name: str,
+    tier: NPCTier,
+    species: str | None,
+    age: int | None,
+    profession: str | None,
+    faction_id: str | None,
+    current_location_id: str | None,
+    home_location_id: str | None,
+    description_physical: str | None,
+    description_personality: str | None,
+    voice_pattern: str | None,
+    goals: list[str] | None,
+    secrets: list[str] | None,
+    current_mood: str | None,
+
+) -> dict[str, Any]:
+    """Add a new NPC to the world.
+
+    Args:
+        name: Name of the NPC.
+        tier: Tier of the NPC (e.g., main, secondary, minor).
+        species: Species of the NPC.
+        age: Age of the NPC.
+        profession: Profession of the NPC.
+        faction_id: ID of the faction the NPC belongs to.
+        current_location_id: Current location ID of the NPC.
+        home_location_id: Home location ID of the NPC.
+        description_physical: Physical description of the NPC.
+        description_personality: Personality description of the NPC.
+        voice_pattern: Description of the NPC's voice pattern.
+        goals: List of the NPC's goals.
+        secrets: List of secrets the NPC holds.
+        current_mood: Current mood of the NPC.
+
+    Returns:
+        Dictionary with the created NPC's details.
+    """
+    with get_session() as session:
+        npc = NPC(
+            name=name,
+            tier=tier,
+            species=species,
+            age=age,
+            profession=profession,
+            faction_id=faction_id,
+            current_location_id=current_location_id,
+            home_location_id=home_location_id,
+            description_physical=description_physical,
+            description_personality=description_personality,
+            voice_pattern=voice_pattern,
+            goals=goals,
+            secrets=secrets,
+            current_mood=current_mood,
+        )
+        session.add(npc)
+        session.commit()
+
+        return {
+            "id": npc.id,
+            "name": npc.name,
+            "profession": npc.profession,
+            "current_location_id": npc.current_location_id,
+        }
 
 @tool
 def move_player(player_id: str, destination_id: str) -> dict[str, Any]:
