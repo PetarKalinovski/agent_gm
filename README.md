@@ -6,7 +6,7 @@ A multi-agent text game dungeon master powered by LLMs.
 
 1. Install dependencies:
 ```bash
-pip install -e .
+uv sync
 ```
 
 2. Set your OpenRouter API key:
@@ -16,14 +16,14 @@ export OPENROUTER_API_KEY=your_key_here
 
 3. Run the game:
 ```bash
-python main.py
+uv run main.py
 ```
 
 ## Commands
 
-- `python main.py` or `python main.py play` - Start the game
-- `python main.py seed` - Create a test world
-- `python main.py clear` - Reset the world
+- `uv run main.py` or `uv run main.py play` - Start the game
+- `uv run main.py seed` - Create a test world
+- `uv run main.py clear` - Reset the world
 
 ## In-Game Commands
 
@@ -47,5 +47,3 @@ The game uses a multi-agent architecture:
 - **DM Orchestrator** - Main dungeon master that narrates the world
 - **NPC Agent** - Handles NPC dialogue with persistent memory
 - **World State** - SQLite database tracking locations, NPCs, and player
-
-See the implementation plan at `.claude/plans/` for more details.
