@@ -1,5 +1,6 @@
 from src.agents.creation_agent import CREATORAgent
 from src.agents.npc_agent import NPCAgent
+from src.agents.economy_agent import EconomyAgent
 from strands import tool
 
 # Global cache for NPC agents to maintain conversation history
@@ -66,3 +67,30 @@ def prompt_npc_agent(player_id: str, npc_id: str, player_input: str, is_first_in
         del _npc_agent_cache[cache_key]
 
     return {"npc_response": result["response"]}
+
+
+@tool
+def prompt_economy_agent(player_id: str, instruction: str) -> dict[str, str]:
+    """Handle economy, inventory, items, and transactions.
+
+    Use this for:
+    - Player buying/selling items from merchants
+    - Giving items as loot or quest rewards
+    - Using consumable items (potions, food, etc.)
+    - Checking inventory contents
+    - Managing currency
+
+    Args:
+        player_id: The player's ID in the database.
+        instruction: Instruction for the Economy agent (e.g., "Player wants to buy health potion from merchant_abc").
+
+    Returns:
+        Dictionary with the agent's response.
+    """
+    agent = EconomyAgent(player_id)
+
+    result = agent.process_input(instruction)
+
+    agent_response = result.messages[-1]["content"][0]["text"]
+
+    return {"text_response": agent_response}

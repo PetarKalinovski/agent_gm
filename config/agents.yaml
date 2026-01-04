@@ -19,6 +19,12 @@ agents:
     max_tokens: 1024
     description: "Handles NPC dialogue and personality"
 
+  economy_agent:
+    model: "openrouter/z-ai/glm-4.7"
+    temperature: 0.5
+    max_tokens: 1024
+    description: "Manages inventory, items, shops, and transactions"
+
   combat_agent:
     model: "openrouter/z-ai/glm-4.7"
     temperature: 0.5

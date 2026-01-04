@@ -21,7 +21,8 @@ from src.tools.world_write import (
     add_npc,
     update_npc_relationship,
     update_npc,
-    create_event
+    create_event,
+    create_item_template,
 )
 
 
@@ -32,6 +33,7 @@ DM_SYSTEM_PROMPT = """ You are a world creator and manager for a text-based RPG.
     3. Updating existing NPCs when they evolve - changing their goals, physical appearance, or gaining new secrets.
     4. Managing relationships between NPCs and the player, including trust levels and key moments.
     5. Creating world events that can impact the game environment and NPC behaviors.
+    6. Defining item templates for the game world (weapons, armor, quest items, consumables).
     When you receive a request, use the appropriate tools to perform the task and return the results to the DM Orchestrator.
 """
 
@@ -49,7 +51,8 @@ CREATOR_AGENT_TOOLS = [
     add_npc,
     update_npc_relationship,
     update_npc,
-    create_event
+    create_event,
+    create_item_template,
 ]
 
 

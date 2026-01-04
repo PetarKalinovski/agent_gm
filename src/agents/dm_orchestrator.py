@@ -29,7 +29,7 @@ from src.tools.narration import (
     describe_location,
     show_time_passage,
 )
-from src.tools.agents_as_tools import prompt_creator_agent, prompt_npc_agent
+from src.tools.agents_as_tools import prompt_creator_agent, prompt_npc_agent, prompt_economy_agent
 
 
 DM_SYSTEM_PROMPT = """You are the Dungeon Master (DM) for an immersive, dynamic text-based RPG. You are the engine of the world, responsible for simulating reality, narrating consequences, and expanding the world boundaries when players explore.
@@ -59,9 +59,11 @@ DM_SYSTEM_PROMPT = """You are the Dungeon Master (DM) for an immersive, dynamic 
 1.  **Analyze Context**: Check `get_current_location`, `get_world_clock`, and `get_player` first.
 2.  **Analyze Intent**: What is the player trying to do?
     - *Movement?* Check `get_available_destinations`. If valid, `move_player`. If implied but missing, `add_location` then `move_player`.
-    - *Social?* If they want a deep chat, retrieve NPC details via `get_npc`. If it's a passing remark, handle it via `speak`.
-    - *Action?* Determine success/failure. Apply consequences (Time, Health, Inventory).
-3.  **Execute Tools**: Call the necessary write tools to update the database.
+    - *Social?* Use `prompt_npc_agent` for named NPC interactions.
+    - *Economic?* Use `prompt_economy_agent` for buying, selling, using items, or checking inventory.
+    - *World Creation?* Use `prompt_creator_agent` for creating new locations, NPCs, events, or items.
+    - *Action?* Determine success/failure. Apply consequences (Time, Health).
+3.  **Execute Tools**: Call the necessary tools or delegate to sub-agents.
 4.  **Narrate**: Describe the result using the appropriate output tool.
 
 ### GUIDELINES FOR SPECIFIC SITUATIONS
@@ -119,6 +121,7 @@ DM_TOOLS = [
     show_time_passage,
     prompt_creator_agent,
     prompt_npc_agent,
+    prompt_economy_agent,
     update_npc,
 ]
 

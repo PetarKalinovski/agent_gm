@@ -6,6 +6,7 @@ from src.models.npc import NPC, NPCTier
 from src.models.faction import Faction, FactionRelationship
 from src.models.player import Player
 from src.models.world_state import WorldClock, NPCRelationship, Event, Message
+from src.models.item import Item
 
 __all__ = [
     "Base",
@@ -24,4 +25,5 @@ __all__ = [
     "NPCRelationship",
     "Event",
     "Message",
+    "Item",
 ]
