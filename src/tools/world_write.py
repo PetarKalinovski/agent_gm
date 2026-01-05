@@ -7,10 +7,14 @@ from strands import tool
 from src.models import (
     Connection,
     Event,
+    Faction,
+    FactionRelationship,
+    HistoricalEvent,
     Location,
     NPC,
     NPCRelationship,
     Player,
+    WorldBible,
     WorldClock,
     get_session,
     LocationType,
@@ -59,6 +63,8 @@ def add_location(
                     to_location_id=location.id,
                     travel_time_hours=travel_time_to_parent,
                     bidirectional=True,
+                    travel_type="walk",
+                    discovered=True,
                 )
                 session.add(conn)
                 session.commit()
@@ -136,6 +142,227 @@ def add_npc(
             "current_location_id": npc.current_location_id,
         }
 
+
+@tool
+def create_faction(
+    name: str,
+    ideology: str,
+    methods: list[str] | None = None,
+    aesthetic: str | None = None,
+    power_level: int = 50,
+    resources: dict[str, int] | None = None,
+    goals_short: list[str] | None = None,
+    goals_long: list[str] | None = None,
+    leadership: dict[str, str] | None = None,
+    secrets: list[str] | None = None,
+    history_notes: list[str] | None = None,
+) -> dict[str, Any]:
+    """Create a new faction in the world.
+
+    Args:
+        name: Name of the faction.
+        ideology: Core beliefs and values of the faction.
+        methods: List of methods the faction uses (e.g., ["trade", "diplomacy", "espionage"]).
+        aesthetic: Visual style description for the faction.
+        power_level: Power level from 1-100 (default 50).
+        resources: Resource dictionary (e.g., {"military": 50, "economic": 70, "influence": 60}).
+        goals_short: List of short-term goals.
+        goals_long: List of long-term goals.
+        leadership: Leadership info (e.g., {"leader_name": "Emperor Palpatine", "structure_type": "autocracy"}).
+        secrets: List of hidden faction truths.
+        history_notes: List of historical notes about the faction.
+
+    Returns:
+        Dictionary with the created faction's details.
+    """
+    with get_session() as session:
+        faction = Faction(
+            name=name,
+            ideology=ideology,
+            methods=methods or [],
+            aesthetic=aesthetic or "",
+            power_level=max(1, min(100, power_level)),
+            resources=resources or {"military": 50, "economic": 50, "influence": 50},
+            goals_short=goals_short or [],
+            goals_long=goals_long or [],
+            leadership=leadership or {},
+            secrets=secrets or [],
+            history_notes=history_notes or [],
+        )
+        session.add(faction)
+        session.commit()
+
+        return {
+            "id": faction.id,
+            "name": faction.name,
+            "power_level": faction.power_level,
+            "ideology": faction.ideology,
+        }
+
+
+@tool
+def create_faction_relationship(
+    faction_a_id: str,
+    faction_b_id: str,
+    relationship_type: str = "neutral",
+    public_reason: str = "",
+    secret_reason: str = "",
+    stability: int = 50,
+) -> dict[str, Any]:
+    """Create a relationship between two factions.
+
+    Args:
+        faction_a_id: First faction's ID.
+        faction_b_id: Second faction's ID.
+        relationship_type: Type of relationship (allied, neutral, rival, war, vassal).
+        public_reason: What everyone knows about this relationship.
+        secret_reason: Hidden motivation behind the relationship.
+        stability: How stable this relationship is (1-100, higher = more stable).
+
+    Returns:
+        Dictionary with the relationship details.
+    """
+    valid_types = ["allied", "neutral", "rival", "war", "vassal"]
+    if relationship_type not in valid_types:
+        return {"error": f"Invalid relationship type. Must be one of: {valid_types}"}
+
+    with get_session() as session:
+        # Check if relationship already exists
+        existing = session.query(FactionRelationship).filter(
+            ((FactionRelationship.faction_a_id == faction_a_id) & (FactionRelationship.faction_b_id == faction_b_id)) |
+            ((FactionRelationship.faction_a_id == faction_b_id) & (FactionRelationship.faction_b_id == faction_a_id))
+        ).first()
+
+        if existing:
+            # Update existing
+            existing.relationship_type = relationship_type
+            existing.public_reason = public_reason
+            existing.secret_reason = secret_reason
+            existing.stability = max(1, min(100, stability))
+            session.commit()
+            return {
+                "id": existing.id,
+                "updated": True,
+                "relationship_type": existing.relationship_type,
+            }
+
+        # Create new
+        rel = FactionRelationship(
+            faction_a_id=faction_a_id,
+            faction_b_id=faction_b_id,
+            relationship_type=relationship_type,
+            public_reason=public_reason,
+            secret_reason=secret_reason,
+            stability=max(1, min(100, stability)),
+        )
+        session.add(rel)
+        session.commit()
+
+        return {
+            "id": rel.id,
+            "faction_a_id": faction_a_id,
+            "faction_b_id": faction_b_id,
+            "relationship_type": relationship_type,
+        }
+
+
+@tool
+def update_faction(
+    faction_id: str,
+    power_level_delta: int | None = None,
+    resources_delta: dict[str, int] | None = None,
+    add_goal_short: str | None = None,
+    remove_goal_short: str | None = None,
+    add_goal_long: str | None = None,
+    remove_goal_long: str | None = None,
+    add_secret: str | None = None,
+    add_history_note: str | None = None,
+    new_leader: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Update a faction's state.
+
+    Args:
+        faction_id: The faction's ID.
+        power_level_delta: Change in power level (can be negative).
+        resources_delta: Changes to resources (e.g., {"military": -10, "economic": 5}).
+        add_goal_short: Add a short-term goal.
+        remove_goal_short: Remove a short-term goal.
+        add_goal_long: Add a long-term goal.
+        remove_goal_long: Remove a long-term goal.
+        add_secret: Add a new secret.
+        add_history_note: Add a historical note.
+        new_leader: New leadership info.
+
+    Returns:
+        Dictionary with updated faction state.
+    """
+    with get_session() as session:
+        faction = session.get(Faction, faction_id)
+        if not faction:
+            return {"error": "Faction not found"}
+
+        # Update power level
+        if power_level_delta is not None:
+            faction.power_level = max(1, min(100, faction.power_level + power_level_delta))
+
+        # Update resources
+        if resources_delta:
+            resources = faction.resources.copy() if faction.resources else {}
+            for key, delta in resources_delta.items():
+                resources[key] = max(0, resources.get(key, 50) + delta)
+            faction.resources = resources
+
+        # Update short-term goals
+        if add_goal_short:
+            goals = faction.goals_short.copy() if faction.goals_short else []
+            if add_goal_short not in goals:
+                goals.append(add_goal_short)
+                faction.goals_short = goals
+        if remove_goal_short:
+            goals = faction.goals_short.copy() if faction.goals_short else []
+            if remove_goal_short in goals:
+                goals.remove(remove_goal_short)
+                faction.goals_short = goals
+
+        # Update long-term goals
+        if add_goal_long:
+            goals = faction.goals_long.copy() if faction.goals_long else []
+            if add_goal_long not in goals:
+                goals.append(add_goal_long)
+                faction.goals_long = goals
+        if remove_goal_long:
+            goals = faction.goals_long.copy() if faction.goals_long else []
+            if remove_goal_long in goals:
+                goals.remove(remove_goal_long)
+                faction.goals_long = goals
+
+        # Add secret
+        if add_secret:
+            secrets = faction.secrets.copy() if faction.secrets else []
+            if add_secret not in secrets:
+                secrets.append(add_secret)
+                faction.secrets = secrets
+
+        # Add history note
+        if add_history_note:
+            notes = faction.history_notes.copy() if faction.history_notes else []
+            notes.append(add_history_note)
+            faction.history_notes = notes
+
+        # Update leadership
+        if new_leader:
+            faction.leadership = new_leader
+
+        session.commit()
+
+        return {
+            "id": faction.id,
+            "name": faction.name,
+            "power_level": faction.power_level,
+            "resources": faction.resources,
+        }
+
+
 @tool
 def move_player(player_id: str, destination_id: str) -> dict[str, Any]:
     """Move the player to a new location.
@@ -185,6 +412,41 @@ def move_player(player_id: str, destination_id: str) -> dict[str, Any]:
             "success": True,
             "destination": destination.name,
             "travel_time_hours": travel_time,
+        }
+
+
+@tool
+def move_npc(npc_id: str, destination_id: str) -> dict[str, Any]:
+    """Move an NPC to a new location.
+
+    Use this when an NPC travels with the player or moves on their own.
+
+    Args:
+        npc_id: The NPC's ID.
+        destination_id: The destination location ID.
+
+    Returns:
+        Dictionary with result.
+    """
+    with get_session() as session:
+        npc = session.get(NPC, npc_id)
+        if not npc:
+            return {"error": "NPC not found"}
+
+        destination = session.get(Location, destination_id)
+        if not destination:
+            return {"error": "Destination not found"}
+
+        # Update NPC location
+        old_location = npc.current_location_id
+        npc.current_location_id = destination_id
+        session.commit()
+
+        return {
+            "success": True,
+            "npc_name": npc.name,
+            "from_location": old_location,
+            "to_location": destination.name,
         }
 
 
@@ -934,4 +1196,169 @@ def create_event(
             "id": event.id,
             "name": event.name,
             "description": event.description,
+        }
+
+
+@tool
+def create_world_bible(
+    name: str,
+    genre: str,
+    tone: str,
+    setting_description: str,
+    current_situation: str,
+    sub_genres: list[str] | None = None,
+    themes: list[str] | None = None,
+    time_period: str = "",
+    technology_level: str = "",
+    magic_system: str = "",
+    rules: list[str] | None = None,
+    major_events_history: list[str] | None = None,
+    major_conflicts: list[str] | None = None,
+    faction_overview: str = "",
+    narration_style: str = "",
+    dialogue_style: str = "",
+    violence_level: str = "moderate",
+    mature_themes: list[str] | None = None,
+    excluded_elements: list[str] | None = None,
+    naming_conventions: dict[str, str] | None = None,
+    visual_style: str = "",
+    color_palette: list[str] | None = None,
+    pc_guidelines: str = "",
+    pc_starting_situation: str = "",
+) -> dict[str, Any]:
+    """Create the World Bible - the static configuration for the game world.
+
+    This should be created ONCE when setting up a new world.
+    It defines the tone, rules, and style that guide all content generation.
+
+    Args:
+        name: Name of the world (e.g., "The Star Wars Galaxy").
+        genre: Primary genre (scifi, fantasy, modern, post-apocalyptic).
+        tone: Tone description (e.g., "Dark and gritty with moments of hope").
+        setting_description: Long description of the world setting.
+        current_situation: What's happening right now in the world.
+        sub_genres: List of sub-genres (e.g., ["space opera", "military"]).
+        themes: Major themes (e.g., ["redemption", "power corrupts"]).
+        time_period: When the story takes place (e.g., "19 years after the fall").
+        technology_level: Description of technology available.
+        magic_system: Description of magic/powers if any.
+        rules: List of world rules to follow (e.g., ["Jedi are hunted"]).
+        major_events_history: List of major past events (brief summaries).
+        major_conflicts: Ongoing big-picture conflicts.
+        faction_overview: High-level overview of factions.
+        narration_style: Style for narration (e.g., "Third person, cinematic").
+        dialogue_style: Style for dialogue.
+        violence_level: Level of violence (none, mild, moderate, graphic).
+        mature_themes: Themes to handle carefully.
+        excluded_elements: Things to NOT include.
+        naming_conventions: Dict of naming rules by category.
+        visual_style: Visual aesthetic for image generation.
+        color_palette: List of colors for the world.
+        pc_guidelines: Guidelines for player character.
+        pc_starting_situation: Where/how the PC starts.
+
+    Returns:
+        Dictionary with the created World Bible's details.
+    """
+    with get_session() as session:
+        # Check if one already exists
+        existing = session.query(WorldBible).first()
+        if existing:
+            return {"error": "World Bible already exists. Use update_world_bible to modify."}
+
+        bible = WorldBible(
+            name=name,
+            genre=genre,
+            tone=tone,
+            setting_description=setting_description,
+            current_situation=current_situation,
+            sub_genres=sub_genres or [],
+            themes=themes or [],
+            time_period=time_period,
+            technology_level=technology_level,
+            magic_system=magic_system,
+            rules=rules or [],
+            major_events_history=major_events_history or [],
+            major_conflicts=major_conflicts or [],
+            faction_overview=faction_overview,
+            narration_style=narration_style,
+            dialogue_style=dialogue_style,
+            violence_level=violence_level,
+            mature_themes=mature_themes or [],
+            excluded_elements=excluded_elements or [],
+            naming_conventions=naming_conventions or {},
+            visual_style=visual_style,
+            color_palette=color_palette or [],
+            pc_guidelines=pc_guidelines,
+            pc_starting_situation=pc_starting_situation,
+        )
+        session.add(bible)
+        session.commit()
+
+        return {
+            "id": bible.id,
+            "name": bible.name,
+            "genre": bible.genre,
+            "created": True,
+        }
+
+
+@tool
+def create_historical_event(
+    name: str,
+    description: str,
+    time_ago: str,
+    event_type: str,
+    involved_parties: list[str] | None = None,
+    key_figures: list[str] | None = None,
+    locations_affected: list[str] | None = None,
+    consequences: list[str] | None = None,
+    common_knowledge: bool = True,
+    artifacts_left: list[str] | None = None,
+) -> dict[str, Any]:
+    """Create a historical event that shaped the world.
+
+    Historical events are lore - they happened before the game started.
+    Different from runtime Events which track what happens during play.
+
+    Args:
+        name: Name of the event (e.g., "The Fall of the Republic").
+        description: Full description of what happened.
+        time_ago: When it happened relative to now (e.g., "200 years ago", "last month").
+        event_type: Type of event (war, disaster, discovery, political, cultural).
+        involved_parties: Groups/factions involved (names, not IDs).
+        key_figures: Important people in the event (names).
+        locations_affected: Places affected (names).
+        consequences: How it changed things.
+        common_knowledge: Do regular people know about this?
+        artifacts_left: Physical remnants (ruins, monuments, etc.).
+
+    Returns:
+        Dictionary with the created historical event.
+    """
+    valid_types = ["war", "disaster", "discovery", "political", "cultural", "religious", "economic"]
+    if event_type not in valid_types:
+        event_type = "political"  # Default
+
+    with get_session() as session:
+        event = HistoricalEvent(
+            name=name,
+            description=description,
+            time_ago=time_ago,
+            event_type=event_type,
+            involved_parties=involved_parties or [],
+            key_figures=key_figures or [],
+            locations_affected=locations_affected or [],
+            consequences=consequences or [],
+            common_knowledge=common_knowledge,
+            artifacts_left=artifacts_left or [],
+        )
+        session.add(event)
+        session.commit()
+
+        return {
+            "id": event.id,
+            "name": event.name,
+            "time_ago": event.time_ago,
+            "event_type": event.event_type,
         }

@@ -31,7 +31,13 @@ agents:
     max_tokens: 1024
     description: "Manages combat encounters and narration"
 
-  # World Forge agents (Phase 2)
+  # World Forge agents
+  world_forge:
+    model: "openrouter/z-ai/glm-4.7"
+    temperature: 0.8
+    max_tokens: 4096
+    description: "Master agent that generates entire game worlds from a premise"
+
   faction_generator:
     model: "openrouter/z-ai/glm-4.7"
     temperature: 0.8

@@ -86,6 +86,8 @@ NPC_TOOLS = [
     update_npc_relationship,
     update_npc_mood,
     update_npc,
+    get_npc_relationship,
+    get_npc
 ]
 
 

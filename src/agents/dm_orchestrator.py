@@ -14,9 +14,11 @@ from src.tools.world_read import (
     get_npc_relationship,
     get_world_clock,
     get_player,
+    get_world_state_summary
 )
 from src.tools.world_write import (
     move_player,
+    move_npc,
     advance_time,
     add_location,
     add_npc,
@@ -82,6 +84,8 @@ DM_SYSTEM_PROMPT = """You are the Dungeon Master (DM) for an immersive, dynamic 
 **2. Exploration:**
 - If the player asks "What do I see?", re-issue `describe_location` or use `narrate` for specific details.
 - If the player travels, ALWAYS calculate travel time. Use `move_player` -> `advance_time` -> `describe_location`.
+- If NPCs are traveling with the player (party members, companions), use `move_npc` to move them to the same destination.
+- NPCs can also move independently for world simulation purposes.
 
 **3. Combat & Danger:**
 - This is not a turn-based tactical game, but a narrative one.
@@ -115,6 +119,7 @@ DM_TOOLS = [
     get_world_clock,
     get_player,
     move_player,
+    move_npc,
     advance_time,
     narrate,
     describe_location,
@@ -122,7 +127,7 @@ DM_TOOLS = [
     prompt_creator_agent,
     prompt_npc_agent,
     prompt_economy_agent,
-    update_npc,
+    get_world_state_summary
 ]
 
 
