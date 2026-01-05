@@ -251,7 +251,15 @@ elif page == "Locations":
             result.extend(build_tree(child.id, depth + 1))
         return result
 
+
+    # Get root locations and orphaned locations
     tree = build_tree()
+    displayed_ids = {loc.id for loc, _ in tree}
+    orphaned = [loc for loc in locations if loc.id not in displayed_ids]
+
+    # Add orphaned locations at root level
+    for orphan in orphaned:
+        tree.append((orphan, 0))
 
     # Tree view
     st.header("Location Hierarchy")

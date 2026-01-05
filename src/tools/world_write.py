@@ -77,6 +77,104 @@ def add_location(
         }
 
 @tool
+def update_location(
+    location_id: str,
+    name: str | None = None,
+    description: str | None = None,
+    location_type: LocationType | None = None,
+) -> dict[str, Any]:
+    """Update an existing location's details.
+
+    Args:
+        location_id: ID of the location to update.
+        name: New name of the location (if any).
+        description: New description of the location (if any).
+        location_type: New type of location (if any).
+
+    Returns:
+        Dictionary with the updated location's details.
+    """
+    with get_session() as session:
+        location = session.get(Location, location_id)
+        if not location:
+            return {"error": "Location not found"}
+
+        if name is not None:
+            location.name = name
+        if description is not None:
+            location.description = description
+        if location_type is not None:
+            location.type = location_type
+
+        session.commit()
+
+        return {
+            "id": location.id,
+            "name": location.name,
+            "type": location.type,
+            "description": location.description,
+        }
+
+def delete_location(location_id: str) -> dict[str, Any]:
+    """Delete a location from the world.
+
+    Args:
+        location_id: ID of the location to delete.
+
+    Returns:
+        Dictionary with result.
+    """
+    with get_session() as session:
+        location = session.get(Location, location_id)
+        if not location:
+            return {"error": "Location not found"}
+
+        session.delete(location)
+        session.commit()
+
+        return {"success": True, "deleted_location_id": location_id}
+
+@tool
+def add_location_connection(
+    from_location_id: str,
+    to_location_id: str,
+    travel_type: str,
+    travel_time_hours: float,
+    bidirectional: bool = True,
+) -> dict[str, Any]:
+    """Add a connection between two locations.
+
+    Args:
+        from_location_id: ID of the starting location.
+        to_location_id: ID of the destination location.
+        travel_type: Type of travel (e.g., road, stairs).
+        travel_time_hours: Travel time in hours.
+        bidirectional: Whether the connection is bidirectional.
+
+    Returns:
+        Dictionary with the created connection's details.
+    """
+    with get_session() as session:
+        conn = Connection(
+            from_location_id=from_location_id,
+            to_location_id=to_location_id,
+            travel_type=travel_type,
+            travel_time_hours=travel_time_hours,
+            bidirectional=bidirectional,
+            discovered=True,
+        )
+        session.add(conn)
+        session.commit()
+
+        return {
+            "id": conn.id,
+            "from_location_id": conn.from_location_id,
+            "to_location_id": conn.to_location_id,
+            "travel_type": conn.travel_type,
+            "travel_time_hours": conn.travel_time_hours,
+        }
+
+@tool
 def add_npc(
     name: str,
     tier: NPCTier,

@@ -39,6 +39,9 @@ from src.tools.world_write import (
     create_faction_relationship,
     create_historical_event,
     create_world_bible,
+    update_npc,
+    add_location_connection,
+    update_location,
 )
 
 
@@ -121,6 +124,10 @@ WORLD_FORGE_TOOLS = [
     create_historical_event,
     add_location,
     add_npc,
+    update_npc,
+    add_location_connection,
+    update_location,
+
 ]
 
 
