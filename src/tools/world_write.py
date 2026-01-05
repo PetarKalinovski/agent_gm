@@ -37,7 +37,7 @@ def add_location(
         description: Description of the location.
         location_type: Type of location (e.g., city, building, room).
         parent_id: ID of the parent location (if any).
-        travel_time_to_parent: Travel time to parent location in hours (if applicable) (float accepted).
+        travel_time_to_parent: Travel time to parent location in hours (if applicable) (float accepted). If a parent_id is provided, this should also be provided otherwise it defaults to 0.1 hours.
 
     Returns:
         Dictionary with the created location's details.
@@ -58,6 +58,9 @@ def add_location(
         if parent_id:
             parent = session.get(Location, parent_id)
             if parent:
+                if travel_time_to_parent is None:
+                    travel_time_to_parent = 0.1
+
                 conn = Connection(
                     from_location_id=parent_id,
                     to_location_id=location.id,
