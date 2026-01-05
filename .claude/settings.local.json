@@ -2,7 +2,12 @@
   "permissions": {
     "allow": [
       "WebSearch",
-      "WebFetch(domain:strandsagents.com)"
+      "WebFetch(domain:strandsagents.com)",
+      "Bash(if not exist \"data\" mkdir data)",
+      "Bash(if not exist \"scripts\" mkdir scripts)",
+      "Bash(dir:*)",
+      "Bash(python:*)",
+      "Bash(uv run python:*)"
     ]
   }
 }

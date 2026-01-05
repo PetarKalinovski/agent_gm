@@ -1,12 +1,17 @@
 """Base agent setup using Strands Agents SDK with LiteLLM."""
 
 import os
+import logging
 from typing import Any
 
 from strands import Agent
 from strands.models.litellm import LiteLLMModel
 
 from src.config import get_agent_config, get_api_key, load_agents_config
+
+# Suppress verbose LiteLLM warnings
+logging.getLogger("LiteLLM").setLevel(logging.ERROR)
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
 def setup_api_keys() -> None:
@@ -49,6 +54,7 @@ def create_model(agent_name: str) -> LiteLLMModel:
         params={
             "temperature": config.temperature,
             "max_tokens": config.max_tokens,
+            "drop_params": True,  # Drop unsupported params like reasoningContent
         }
     )
 

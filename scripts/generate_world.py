@@ -19,13 +19,14 @@ sys.path.insert(0, str(project_root))
 from src.agents.base import setup_api_keys
 from src.agents.world_forge import WorldForge
 from src.models import init_db, get_session, WorldBible
-from src.tools.world_read import (
-    get_all_factions,
-    get_all_locations,
-    get_all_npcs,
-    get_historical_events,
-    get_world_bible,
-)
+from src.tools import world_read
+
+# Import needed tools
+get_all_factions = world_read.get_all_factions
+get_all_locations = world_read.get_all_locations
+get_all_npcs = world_read.get_all_npcs
+get_historical_events = world_read.get_historical_events
+get_world_bible = world_read.get_world_bible
 
 
 def clear_existing_world(db_path: str) -> None:

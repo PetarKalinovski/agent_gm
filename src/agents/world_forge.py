@@ -23,26 +23,27 @@ from strands import Agent
 from strands.agent import AgentResult
 
 from src.agents.base import create_agent
-from src.tools.world_read import (
-    get_all_factions,
-    get_all_locations,
-    get_all_npcs,
-    get_faction_relationships,
-    get_historical_events,
-    get_world_bible,
-    get_world_bible_for_generation,
-)
-from src.tools.world_write import (
-    add_location,
-    add_npc,
-    create_faction,
-    create_faction_relationship,
-    create_historical_event,
-    create_world_bible,
-    update_npc,
-    add_location_connection,
-    update_location,
-)
+from src.tools import world_read
+from src.tools import world_write
+
+# Import all needed tools
+get_all_factions = world_read.get_all_factions
+get_all_locations = world_read.get_all_locations
+get_all_npcs = world_read.get_all_npcs
+get_faction_relationships = world_read.get_faction_relationships
+get_historical_events = world_read.get_historical_events
+get_world_bible = world_read.get_world_bible
+get_world_bible_for_generation = world_read.get_world_bible_for_generation
+
+add_location = world_write.add_location
+add_npc = world_write.add_npc
+create_faction = world_write.create_faction
+create_faction_relationship = world_write.create_faction_relationship
+create_historical_event = world_write.create_historical_event
+create_world_bible = world_write.create_world_bible
+update_npc = world_write.update_npc
+add_location_connection = world_write.add_location_connection
+update_location = world_write.update_location
 
 
 WORLD_FORGE_SYSTEM_PROMPT = """You are the World Forge - a specialized agent for creating rich, detailed game worlds for text-based RPGs.

@@ -86,6 +86,16 @@ class Location(Base):
     # Generation metadata
     genre_type: Mapped[str] = mapped_column(String(50), default="fantasy")  # fantasy, scifi, modern
 
+    # Map display settings
+    display_type: Mapped[str] = mapped_column(String(20), default="pin")  # "pin" (marker) or "area" (zone/region)
+    is_map_container: Mapped[bool] = mapped_column(Boolean, default=False)  # Shows a map when entered (has navigable children)
+    map_image_path: Mapped[str | None] = mapped_column(String(500), nullable=True)  # Path to map background image
+    map_width: Mapped[int] = mapped_column(Integer, default=1000)  # Map image width in pixels
+    map_height: Mapped[int] = mapped_column(Integer, default=1000)  # Map image height in pixels
+    pin_icon: Mapped[str] = mapped_column(String(100), default="circle")  # Icon type: circle, star, square, custom path
+    pin_color: Mapped[str] = mapped_column(String(20), default="#3388ff")  # Hex color for the pin
+    pin_size: Mapped[float] = mapped_column(Float, default=15.0)  # Size of the pin marker
+
     # Relationships
     parent: Mapped["Location | None"] = relationship(
         "Location",
@@ -122,6 +132,8 @@ class Connection(Base):
 
     travel_type: Mapped[str] = mapped_column(String(50), nullable=False)  # road, hyperspace, stairs, etc.
     travel_time_hours: Mapped[float] = mapped_column(Float, nullable=False)
+    difficulty: Mapped[int] = mapped_column(Integer, default=0)  # 0-100, how hard to traverse
+    description: Mapped[str] = mapped_column(Text, default="")  # Description of the route
     requirements: Mapped[list] = mapped_column(JSON, default=list)  # Items/abilities needed
     bidirectional: Mapped[bool] = mapped_column(Boolean, default=True)
     hidden: Mapped[bool] = mapped_column(Boolean, default=False)  # Must be discovered

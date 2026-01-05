@@ -1,5 +1,10 @@
 """Tools for agents to interact with the world."""
 
+# Import world_read and world_write modules
+from src.tools import world_read
+from src.tools import world_write
+
+# Import specific tools from world_read for backward compatibility
 from src.tools.world_read import (
     get_current_location,
     get_location,
@@ -14,6 +19,7 @@ from src.tools.world_read import (
     get_recent_events,
 )
 
+# Import specific tools from world_write for backward compatibility
 from src.tools.world_write import (
     move_player,
     advance_time,
@@ -27,6 +33,7 @@ from src.tools.world_write import (
     create_event,
 )
 
+# Import narration tools
 from src.tools.narration import (
     get_console,
     set_console,
@@ -40,7 +47,10 @@ from src.tools.narration import (
 )
 
 __all__ = [
-    # world_read
+    # Modules
+    "world_read",
+    "world_write",
+    # world_read tools
     "get_current_location",
     "get_location",
     "get_npcs_at_location",
@@ -52,7 +62,7 @@ __all__ = [
     "get_world_clock",
     "get_player",
     "get_recent_events",
-    # world_write
+    # world_write tools
     "move_player",
     "advance_time",
     "update_npc_relationship",
