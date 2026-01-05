@@ -118,6 +118,7 @@ def update_location(
             "description": location.description,
         }
 
+@tool
 def delete_location(location_id: str) -> dict[str, Any]:
     """Delete a location from the world.
 
@@ -136,6 +137,69 @@ def delete_location(location_id: str) -> dict[str, Any]:
         session.commit()
 
         return {"success": True, "deleted_location_id": location_id}
+
+
+@tool
+def delete_npc(npc_id: str) -> dict[str, Any]:
+    """Delete an NPC from the world.
+
+    Args:
+        npc_id: ID of the NPC to delete.
+
+    Returns:
+        Dictionary with result.
+    """
+    with get_session() as session:
+        npc = session.get(NPC, npc_id)
+        if not npc:
+            return {"error": "NPC not found"}
+
+        session.delete(npc)
+        session.commit()
+
+        return {"success": True, "deleted_npc_id": npc_id}
+
+
+@tool
+def delete_connection(connection_id: str) -> dict[str, Any]:
+    """Delete a connection between locations.
+
+    Args:
+        connection_id: ID of the connection to delete.
+
+    Returns:
+        Dictionary with result.
+    """
+    with get_session() as session:
+        conn = session.get(Connection, connection_id)
+        if not conn:
+            return {"error": "Connection not found"}
+
+        session.delete(conn)
+        session.commit()
+
+        return {"success": True, "deleted_connection_id": connection_id}
+
+
+@tool
+def delete_faction(faction_id: str) -> dict[str, Any]:
+    """Delete a faction from the world.
+
+    Args:
+        faction_id: ID of the faction to delete.
+
+    Returns:
+        Dictionary with result.
+    """
+    with get_session() as session:
+        faction = session.get(Faction, faction_id)
+        if not faction:
+            return {"error": "Faction not found"}
+
+        session.delete(faction)
+        session.commit()
+
+        return {"success": True, "deleted_faction_id": faction_id}
 
 @tool
 def add_location_connection(

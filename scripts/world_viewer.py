@@ -28,7 +28,7 @@ st.set_page_config(
 from src.models import init_db, get_session
 from src.models import (
     Faction, FactionRelationship, Location, NPC, WorldBible,
-    HistoricalEvent, WorldClock, Event
+    HistoricalEvent, WorldClock, Event, Connection
 )
 
 
@@ -79,6 +79,32 @@ def get_world_clock():
         return session.query(WorldClock).first()
 
 
+def get_connections():
+    with get_session() as session:
+        return session.query(Connection).all()
+
+
+def delete_entity(entity_type, entity_id):
+    """Delete an entity from the database."""
+    with get_session() as session:
+        if entity_type == "location":
+            entity = session.get(Location, entity_id)
+        elif entity_type == "npc":
+            entity = session.get(NPC, entity_id)
+        elif entity_type == "faction":
+            entity = session.get(Faction, entity_id)
+        elif entity_type == "connection":
+            entity = session.get(Connection, entity_id)
+        else:
+            return False
+
+        if entity:
+            session.delete(entity)
+            session.commit()
+            return True
+    return False
+
+
 # Initialize
 init_database()
 
@@ -86,7 +112,7 @@ init_database()
 st.sidebar.title("🌍 World Viewer")
 page = st.sidebar.radio(
     "Navigate",
-    ["Overview", "Factions", "Locations", "NPCs", "History", "Events", "Raw Data"]
+    ["Overview", "Factions", "Locations", "Connections", "NPCs", "History", "Events", "Raw Data"]
 )
 
 # Main content
@@ -210,6 +236,33 @@ elif page == "Factions":
             emoji = {"allied": "🤝", "neutral": "😐", "rival": "😠", "war": "⚔️", "vassal": "👑"}.get(rel.relationship_type, "❓")
             st.markdown(f"{emoji} **{other_name}**: {rel.relationship_type} (stability: {rel.stability})")
 
+        # Edit form
+        st.markdown("---")
+        with st.form(key=f"edit_faction_{selected.id}"):
+            st.markdown("**Edit Faction**")
+            new_power = st.slider("Power Level", min_value=0, max_value=100, value=selected.power_level)
+
+            if st.form_submit_button("Save Changes"):
+                with get_session() as session:
+                    faction_obj = session.get(Faction, selected.id)
+                    if faction_obj:
+                        faction_obj.power_level = new_power
+                        session.commit()
+                        st.success(f"{selected.name} updated!")
+                        st.rerun()
+
+        # Delete button
+        if st.button(f"🗑️ Delete {selected.name}", key=f"delete_faction_{selected.id}"):
+            if st.session_state.get(f"confirm_delete_faction_{selected.id}", False):
+                if delete_entity("faction", selected.id):
+                    st.success(f"Deleted {selected.name}")
+                    st.rerun()
+                else:
+                    st.error("Failed to delete faction")
+            else:
+                st.session_state[f"confirm_delete_faction_{selected.id}"] = True
+                st.warning("Click again to confirm deletion")
+
     # Relationship Matrix
     st.header("Faction Relationship Matrix")
     if len(factions) > 1:
@@ -312,6 +365,121 @@ elif page == "Locations":
                     for npc in npcs_here:
                         st.markdown(f"- {npc.name} ({npc.profession})")
 
+            # Edit form
+            st.markdown("---")
+            with st.form(key=f"edit_loc_{loc.id}"):
+                st.markdown("**Edit Location**")
+                new_state = st.selectbox("State", ["peaceful", "under_siege", "destroyed", "abandoned", "occupied"], index=["peaceful", "under_siege", "destroyed", "abandoned", "occupied"].index(loc.current_state) if loc.current_state in ["peaceful", "under_siege", "destroyed", "abandoned", "occupied"] else 0)
+                new_discovered = st.checkbox("Discovered", value=loc.discovered)
+                new_visited = st.checkbox("Visited", value=loc.visited)
+                new_controlling_faction = st.selectbox("Controlling Faction", options=[None] + [f.id for f in factions], format_func=lambda x: faction_names.get(x, "None") if x else "None", index=([None] + [f.id for f in factions]).index(loc.controlling_faction_id) if loc.controlling_faction_id in [f.id for f in factions] else 0)
+
+                if st.form_submit_button("Save Changes"):
+                    with get_session() as session:
+                        loc_obj = session.get(Location, loc.id)
+                        if loc_obj:
+                            loc_obj.current_state = new_state
+                            loc_obj.discovered = new_discovered
+                            loc_obj.visited = new_visited
+                            loc_obj.controlling_faction_id = new_controlling_faction
+                            session.commit()
+                            st.success(f"{loc.name} updated!")
+                            st.rerun()
+
+            # Delete button
+            if st.button(f"🗑️ Delete {loc.name}", key=f"delete_loc_{loc.id}"):
+                if st.session_state.get(f"confirm_delete_loc_{loc.id}", False):
+                    if delete_entity("location", loc.id):
+                        st.success(f"Deleted {loc.name}")
+                        st.rerun()
+                    else:
+                        st.error("Failed to delete location")
+                else:
+                    st.session_state[f"confirm_delete_loc_{loc.id}"] = True
+                    st.warning("Click again to confirm deletion")
+
+elif page == "Connections":
+    st.title("🔗 Location Connections")
+
+    connections = get_connections()
+    locations = get_locations()
+    location_names = {l.id: l.name for l in locations}
+
+    if not connections:
+        st.warning("No connections found. Connections are created during world generation.")
+        st.stop()
+
+    st.markdown(f"**Total Connections:** {len(connections)}")
+
+    # Connections table
+    import pandas as pd
+    conn_data = []
+    for conn in connections:
+        from_name = location_names.get(conn.from_location_id, "Unknown")
+        to_name = location_names.get(conn.to_location_id, "Unknown")
+        conn_data.append({
+            "From": from_name,
+            "To": to_name,
+            "Type": conn.travel_type,
+            "Time (hrs)": conn.travel_time_hours,
+            "Bidirectional": "Yes" if conn.bidirectional else "No",
+            "Discovered": "Yes" if conn.discovered else "No",
+        })
+
+    if conn_data:
+        df = pd.DataFrame(conn_data)
+        st.dataframe(df, use_container_width=True)
+
+    # Detailed view
+    st.header("Connection Details")
+    for conn in connections:
+        from_name = location_names.get(conn.from_location_id, "Unknown")
+        to_name = location_names.get(conn.to_location_id, "Unknown")
+        direction = "↔" if conn.bidirectional else "→"
+
+        with st.expander(f"{from_name} {direction} {to_name} ({conn.travel_type})"):
+            col1, col2 = st.columns([2, 1])
+
+            with col1:
+                st.markdown(f"**Travel Type:** {conn.travel_type}")
+                st.markdown(f"**Travel Time:** {conn.travel_time_hours} hours")
+                st.markdown(f"**Bidirectional:** {'Yes' if conn.bidirectional else 'No'}")
+                st.markdown(f"**Discovered:** {'Yes' if conn.discovered else 'No'}")
+
+                if conn.requirements:
+                    st.markdown("**Requirements:**")
+                    for req in conn.requirements:
+                        st.markdown(f"- {req}")
+
+            with col2:
+                # Edit form
+                with st.form(key=f"edit_conn_{conn.id}"):
+                    st.markdown("**Edit Connection**")
+                    new_travel_time = st.number_input("Travel Time (hours)", value=conn.travel_time_hours, min_value=0.0, step=0.1)
+                    new_discovered = st.checkbox("Discovered", value=conn.discovered)
+
+                    if st.form_submit_button("Save Changes"):
+                        with get_session() as session:
+                            conn_obj = session.get(Connection, conn.id)
+                            if conn_obj:
+                                conn_obj.travel_time_hours = new_travel_time
+                                conn_obj.discovered = new_discovered
+                                session.commit()
+                                st.success("Connection updated!")
+                                st.rerun()
+
+                # Delete button
+                if st.button(f"🗑️ Delete Connection", key=f"delete_conn_{conn.id}"):
+                    if st.session_state.get(f"confirm_delete_conn_{conn.id}", False):
+                        if delete_entity("connection", conn.id):
+                            st.success("Connection deleted!")
+                            st.rerun()
+                        else:
+                            st.error("Failed to delete connection")
+                    else:
+                        st.session_state[f"confirm_delete_conn_{conn.id}"] = True
+                        st.warning("Click again to confirm deletion")
+
 elif page == "NPCs":
     st.title("👥 NPCs")
 
@@ -380,6 +548,36 @@ elif page == "NPCs":
                     st.markdown("**🔒 Secrets:**")
                     for s in npc.secrets:
                         st.markdown(f"- {s}")
+
+            # Edit form
+            with st.form(key=f"edit_npc_{npc.id}"):
+                st.markdown("**Edit NPC**")
+                new_mood = st.text_input("Current Mood", value=npc.current_mood or "neutral")
+                new_status = st.selectbox("Status", ["alive", "dead", "missing", "imprisoned"], index=["alive", "dead", "missing", "imprisoned"].index(npc.status) if npc.status in ["alive", "dead", "missing", "imprisoned"] else 0)
+                new_location = st.selectbox("Location", options=[None] + [l.id for l in locations], format_func=lambda x: location_names.get(x, "Unknown") if x else "Unknown", index=([None] + [l.id for l in locations]).index(npc.current_location_id) if npc.current_location_id in [l.id for l in locations] else 0)
+
+                if st.form_submit_button("Save Changes"):
+                    with get_session() as session:
+                        npc_obj = session.get(NPC, npc.id)
+                        if npc_obj:
+                            npc_obj.current_mood = new_mood
+                            npc_obj.status = new_status
+                            npc_obj.current_location_id = new_location
+                            session.commit()
+                            st.success(f"{npc.name} updated!")
+                            st.rerun()
+
+            # Delete button
+            if st.button(f"🗑️ Delete {npc.name}", key=f"delete_npc_{npc.id}"):
+                if st.session_state.get(f"confirm_delete_npc_{npc.id}", False):
+                    if delete_entity("npc", npc.id):
+                        st.success(f"Deleted {npc.name}")
+                        st.rerun()
+                    else:
+                        st.error("Failed to delete NPC")
+                else:
+                    st.session_state[f"confirm_delete_npc_{npc.id}"] = True
+                    st.warning("Click again to confirm deletion")
 
 elif page == "History":
     st.title("📜 Historical Events")

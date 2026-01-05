@@ -16,16 +16,17 @@ def main() -> None:
     world_forge = WorldForge()
     world_bible = session.query(WorldBible).first()
 
+    if not world_bible:
+        print("No existing world found in the database.")
+        return
+
+    print(f"Loaded existing world: {world_bible.name}")
+
+
     while True:
         query = input("\nEnter your world query (or 'exit' to quit): ")
         if query.lower() == 'exit':
             break
-
-        if not world_bible:
-            print("No existing world found in the database.")
-            return
-
-        print(f"Loaded existing world: {world_bible.name}")
 
         world_forge.agent(query)
 
