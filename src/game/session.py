@@ -25,7 +25,7 @@ from src.tools.narration import set_console
 class GameSession:
     """Manages a game session."""
 
-    def __init__(self, player_id: str | None = None):
+    def __init__(self, player_id: str | None = None, starting_location_id: str | None = None) -> None:
         """Initialize a game session.
 
         Args:
@@ -44,9 +44,10 @@ class GameSession:
         # Get or create player
         self.player_id = self.create_player() if player_id == "new" else self._get_or_create_player()
 
+        self.starting_location_id = starting_location_id
+
         # Initialize DM
         self.dm = DMOrchestrator(self.player_id)
-
     def create_player(self) -> str:
         """Create a new player character.
 
@@ -61,11 +62,13 @@ class GameSession:
             ))
 
             name = Prompt.ask("What is your name?", default="Adventurer")
+            description = Prompt.ask("Describe yourself briefly", default="A mysterious traveler")
+            traits = Prompt.ask("List some traits (comma separated)", default="curious, brave")
 
             player = Player(
                 name=name,
-                description="A mysterious traveler",
-                traits=["curious", "brave"],
+                description=description,
+                traits=[trait.strip() for trait in traits.split(",") if trait.strip()]
             )
             session.add(player)
 
