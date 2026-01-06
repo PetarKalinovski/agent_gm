@@ -9,6 +9,7 @@ Usage:
 import argparse
 import sqlite3
 from pathlib import Path
+from random import randint
 
 
 def migrate(db_path: str = "data/sw.db"):
@@ -71,6 +72,28 @@ def migrate(db_path: str = "data/sw.db"):
                 print(f"  Error adding {col_name}: {e}")
         else:
             print(f"  Column already exists: connections.{col_name}")
+
+    # Get existing columns in npcs table
+    cursor.execute("PRAGMA table_info(npcs)")
+    existing_npc_columns = {row[1] for row in cursor.fetchall()}
+
+    # New columns to add to npcs (position within location for map display)
+    npc_columns = [
+        ("position_x", "FLOAT DEFAULT 50.0"),
+        ("position_y", "FLOAT DEFAULT 50.0"),
+    ]
+    for col_name, col_def in npc_columns:
+        if col_name not in existing_npc_columns:
+            x = randint(0, 100)
+            col_def = f"FLOAT DEFAULT {x}.0"
+            try:
+                sql = f"ALTER TABLE npcs ADD COLUMN {col_name} {col_def}"
+                cursor.execute(sql)
+                print(f"  Added column: npcs.{col_name}")
+            except sqlite3.OperationalError as e:
+                print(f"  Error adding {col_name}: {e}")
+        else:
+            print(f"  Column already exists: npcs.{col_name}")
 
     conn.commit()
     conn.close()
