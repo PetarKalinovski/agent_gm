@@ -30,7 +30,7 @@ st.set_page_config(
     layout="wide",
 )
 
-from src.models import init_db, get_session, Location, Player, Connection
+from src.models import init_db, get_session, Location, Player, Connection, NPC
 
 
 # Initialize database
@@ -98,12 +98,38 @@ def move_player_to(player_id: str, destination_id: str) -> bool:
         return True
 
 
+def update_location_position(location_id: str, x: float, y: float) -> bool:
+    """Update a location's position on the map."""
+    with get_session() as session:
+        location = session.get(Location, location_id)
+        if not location:
+            return False
+        location.position_x = x
+        location.position_y = y
+        session.commit()
+        return True
+
+
+def update_npc_position(npc_id: str, x: float, y: float) -> bool:
+    """Update an NPC's position on the map."""
+    with get_session() as session:
+        npc = session.get(NPC, npc_id)
+        if not npc:
+            return False
+        npc.position_x = x
+        npc.position_y = y
+        session.commit()
+        return True
+
+
 def create_map_figure(
     map_location: Location,
     child_locations: list[Location],
+    npcs_here: list[NPC],
     player_location_id: str | None,
     map_width: int = 1000,
     map_height: int = 800,
+    editable: bool = False,
 ) -> go.Figure:
     """Create a Plotly figure for the map.
 
@@ -113,71 +139,12 @@ def create_map_figure(
         player_location_id: Current player location ID
         map_width: Width of the map canvas
         map_height: Height of the map canvas
+        editable: If True, pins can be dragged to new positions
 
     Returns:
         Plotly Figure object
     """
     fig = go.Figure()
-
-    # Set up the layout
-    fig.update_layout(
-        title=f"Map: {map_location.name}" if map_location else "World Map",
-        xaxis=dict(
-            range=[0, 100],
-            showgrid=True,
-            gridcolor='rgba(128,128,128,0.2)',
-            zeroline=False,
-            showticklabels=False,
-        ),
-        yaxis=dict(
-            range=[0, 100],
-            showgrid=True,
-            gridcolor='rgba(128,128,128,0.2)',
-            zeroline=False,
-            showticklabels=False,
-            scaleanchor="x",
-            scaleratio=1,
-        ),
-        width=map_width,
-        height=map_height,
-        showlegend=True,
-        legend=dict(
-            yanchor="top",
-            y=0.99,
-            xanchor="right",
-            x=0.99
-        ),
-        plot_bgcolor='rgba(20,20,40,0.9)',  # Dark space-like background
-        paper_bgcolor='rgba(10,10,20,1)',
-        hovermode='closest',
-        dragmode='pan',
-    )
-
-    # Add background image if available
-    if map_location and map_location.map_image_path:
-        try:
-            img = Image.open(map_location.map_image_path)
-            # Convert to base64 for Plotly
-            buffered = BytesIO()
-            img.save(buffered, format="PNG")
-            img_str = base64.b64encode(buffered.getvalue()).decode()
-
-            fig.add_layout_image(
-                dict(
-                    source=f"data:image/png;base64,{img_str}",
-                    xref="x",
-                    yref="y",
-                    x=0,
-                    y=100,
-                    sizex=100,
-                    sizey=100,
-                    sizing="stretch",
-                    opacity=0.8,
-                    layer="below"
-                )
-            )
-        except Exception as e:
-            st.warning(f"Could not load map image: {e}")
 
     # Group locations by type for coloring
     type_colors = {
@@ -200,69 +167,176 @@ def create_map_figure(
         "interior": "#BC8F8F",
     }
 
-    # Add location pins
+    shapes = []
+    annotations = []
+
+    # Add location pins as draggable shapes
     for loc in child_locations:
         color = loc.pin_color if loc.pin_color != "#3388ff" else type_colors.get(loc.type.value, "#3388ff")
-        size = loc.pin_size if loc.pin_size else 15
+        size = (loc.pin_size if loc.pin_size else 15) / 10  # Scale for shape size
 
         # Check if player is here
         is_player_here = loc.id == player_location_id
 
-        # Determine marker symbol
         if is_player_here:
-            symbol = "star"
             color = "#FFD700"  # Gold for player
-            size = 25
-        elif loc.display_type == "area":
-            symbol = "square"
-        else:
-            symbol = "circle"
+            size = 2.5
 
-        # Hover text
-        hover_text = f"<b>{loc.name}</b><br>"
-        hover_text += f"Type: {loc.type.value}<br>"
-        if loc.controlling_faction_id:
-            hover_text += f"Controlled by faction<br>"
-        if loc.visited:
-            hover_text += "✓ Visited<br>"
-        if loc.discovered:
-            hover_text += "✓ Discovered<br>"
-        hover_text += f"<br><i>Click to travel here</i>"
+        # Create draggable circle shape for each location
+        shapes.append(dict(
+            type="circle",
+            xref="x",
+            yref="y",
+            x0=loc.position_x - size,
+            y0=loc.position_y - size,
+            x1=loc.position_x + size,
+            y1=loc.position_y + size,
+            fillcolor=color,
+            opacity=0.8,
+            line=dict(color="white", width=2 if is_player_here else 1),
+            editable=editable,
+            name=loc.id,  # Store location ID in shape name
+        ))
 
+        # Add label annotation
+        annotations.append(dict(
+            x=loc.position_x,
+            y=loc.position_y + size + 1.5,
+            text=f"{'⭐ ' if is_player_here else ''}{loc.name}",
+            showarrow=False,
+            font=dict(size=10, color="white"),
+            bgcolor="rgba(0,0,0,0.5)",
+            borderpad=2,
+        ))
+
+    # Set up the layout
+    fig.update_layout(
+        title=f"Map: {map_location.name}" if map_location else "World Map",
+        xaxis=dict(
+            range=[0, 100],
+            showgrid=True,
+            gridcolor='rgba(128,128,128,0.2)',
+            zeroline=False,
+            showticklabels=True,
+            dtick=10,
+        ),
+        yaxis=dict(
+            range=[0, 100],
+            showgrid=True,
+            gridcolor='rgba(128,128,128,0.2)',
+            zeroline=False,
+            showticklabels=True,
+            dtick=10,
+            scaleanchor="x",
+            scaleratio=1,
+        ),
+        width=map_width,
+        height=map_height,
+        showlegend=False,
+        plot_bgcolor='rgba(20,20,40,0.9)',
+        paper_bgcolor='rgba(10,10,20,1)',
+        hovermode='closest',
+        dragmode='pan' if not editable else 'select',
+        shapes=shapes,
+        annotations=annotations,
+    )
+
+    # Add background image if available
+    if map_location and map_location.map_image_path:
+        try:
+            img = Image.open(map_location.map_image_path)
+            buffered = BytesIO()
+            img.save(buffered, format="PNG")
+            img_str = base64.b64encode(buffered.getvalue()).decode()
+
+            fig.add_layout_image(
+                dict(
+                    source=f"data:image/png;base64,{img_str}",
+                    xref="x",
+                    yref="y",
+                    x=0,
+                    y=100,
+                    sizex=100,
+                    sizey=100,
+                    sizing="stretch",
+                    opacity=0.8,
+                    layer="below"
+                )
+            )
+        except Exception as e:
+            st.warning(f"Could not load map image: {e}")
+
+    # Also add scatter traces for click detection (invisible, just for selection)
+    for loc in child_locations:
+        is_player_here = loc.id == player_location_id
         fig.add_trace(go.Scatter(
             x=[loc.position_x],
             y=[loc.position_y],
-            mode='markers+text',
-            marker=dict(
-                size=size,
-                color=color,
-                symbol=symbol,
-                line=dict(width=2, color='white') if is_player_here else dict(width=1, color='rgba(255,255,255,0.5)'),
-            ),
-            text=[loc.name],
-            textposition="top center",
-            textfont=dict(
-                size=10,
-                color='white',
-            ),
-            hovertemplate=hover_text + "<extra></extra>",
-            name=loc.type.value.title(),
-            customdata=[loc.id],  # Store location ID for click handling
+            mode='markers',
+            marker=dict(size=30, opacity=0),  # Invisible but clickable
+            customdata=[f"loc:{loc.id}"],
+            hovertemplate=f"<b>{loc.name}</b><br>{'⭐ You are here<br>' if is_player_here else ''}Click to select<extra></extra>",
             showlegend=False,
         ))
 
-    # Add player marker if they're at this map level but not at a child location
+    # Add NPC markers as visible shapes with different style
+    npc_status_colors = {
+        "alive": "#00FF7F",      # Spring Green
+        "dead": "#808080",       # Gray
+        "missing": "#FFD700",    # Gold
+        "imprisoned": "#FF4500", # Orange Red
+    }
+
+    for npc in npcs_here:
+        color = npc_status_colors.get(npc.status, "#00FF7F")
+        size = 1.2  # Smaller than location pins
+
+        # NPC shape (diamond)
+        shapes.append(dict(
+            type="circle",
+            xref="x",
+            yref="y",
+            x0=npc.position_x - size,
+            y0=npc.position_y - size,
+            x1=npc.position_x + size,
+            y1=npc.position_y + size,
+            fillcolor=color,
+            opacity=0.9,
+            line=dict(color="black", width=2),
+            name=f"npc:{npc.id}",
+        ))
+
+        # NPC label
+        annotations.append(dict(
+            x=npc.position_x,
+            y=npc.position_y - size - 1.5,
+            text=f"👤 {npc.name}",
+            showarrow=False,
+            font=dict(size=9, color="white"),
+            bgcolor="rgba(0,100,0,0.7)",
+            borderpad=2,
+        ))
+
+        # Invisible scatter for click detection
+        fig.add_trace(go.Scatter(
+            x=[npc.position_x],
+            y=[npc.position_y],
+            mode='markers',
+            marker=dict(size=25, opacity=0),
+            customdata=[f"npc:{npc.id}"],
+            hovertemplate=f"<b>👤 {npc.name}</b><br>{npc.profession}<br>Status: {npc.status}<extra></extra>",
+            showlegend=False,
+        ))
+
+    # Update layout with new shapes/annotations
+    fig.update_layout(shapes=shapes, annotations=annotations)
+
+    # Add player marker if at map level
     if player_location_id and map_location and player_location_id == map_location.id:
         fig.add_trace(go.Scatter(
-            x=[50],  # Center of map
-            y=[50],
+            x=[50], y=[50],
             mode='markers+text',
-            marker=dict(
-                size=30,
-                color='#FFD700',
-                symbol='star',
-                line=dict(width=3, color='white'),
-            ),
+            marker=dict(size=30, color='#FFD700', symbol='star', line=dict(width=3, color='white')),
             text=["YOU ARE HERE"],
             textposition="top center",
             textfont=dict(size=12, color='#FFD700'),
@@ -300,6 +374,13 @@ if 'current_map_location_id' not in st.session_state:
     st.session_state.current_map_location_id = None
 if 'selected_destination' not in st.session_state:
     st.session_state.selected_destination = None
+if 'selected_npc' not in st.session_state:
+    st.session_state.selected_npc = None
+
+# Clean up old session state from previous version
+for key in ['edit_mode', 'moving_location_id']:
+    if key in st.session_state:
+        del st.session_state[key]
 
 # Get player info
 player = get_player()
@@ -363,40 +444,34 @@ if breadcrumb_data:
 
 st.divider()
 
-# Get child locations for the current map
+# Get child locations and NPCs for the current map
 if current_map_location:
     with get_session() as session:
         child_locations = session.query(Location).filter(
             Location.parent_id == current_map_location.id
         ).all()
 
-        # Create the map figure
+        # Get NPCs at this location
+        npcs_at_location = session.query(NPC).filter(
+            NPC.current_location_id == current_map_location.id
+        ).all()
+
+        # Create the map figure (fast, no edit mode complexity)
         fig = create_map_figure(
             map_location=current_map_location,
             child_locations=child_locations,
+            npcs_here=npcs_at_location,
             player_location_id=player_location_id,
             map_width=900,
             map_height=700,
+            editable=False,
         )
 
-        # Display the map
-        selected_point = st.plotly_chart(
-            fig,
-            use_container_width=True,
-            on_select="rerun",
-            selection_mode="points",
-            key="map_chart"
-        )
-
-        # Handle point selection (click on pin)
-        if selected_point and selected_point.selection and selected_point.selection.points:
-            point = selected_point.selection.points[0]
-            if 'customdata' in point and point['customdata']:
-                selected_location_id = point['customdata']
-                st.session_state.selected_destination = selected_location_id
+        # Display map with standard plotly_chart (fast)
+        st.plotly_chart(fig, use_container_width=True, key="map_chart")
 
         # Show location list sidebar
-        st.sidebar.subheader(f"Locations in {current_map_location.name}")
+        st.sidebar.subheader(f"📍 Locations ({len(child_locations)})")
         for loc in child_locations:
             icon = "⭐" if loc.id == player_location_id else "📍"
             visited_marker = "✓" if loc.visited else ""
@@ -405,14 +480,21 @@ if current_map_location:
             with col1:
                 if st.button(f"{icon} {loc.name} {visited_marker}", key=f"sidebar_{loc.id}"):
                     st.session_state.selected_destination = loc.id
+                    st.session_state.selected_npc = None  # Deselect NPC
             with col2:
-                # Zoom into this location
-                with get_session() as session:
-                    has_children = session.query(Location).filter(Location.parent_id == loc.id).count() > 0
-                if has_children:
-                    if st.button("🔍", key=f"zoom_{loc.id}", help="Zoom into this location"):
-                        st.session_state.current_map_location_id = loc.id
-                        st.rerun()
+                # Always allow zooming into any location
+                if st.button("🔍", key=f"zoom_{loc.id}", help="View this location's map"):
+                    st.session_state.current_map_location_id = loc.id
+                    st.rerun()
+
+        # Show NPCs at this location
+        if npcs_at_location:
+            st.sidebar.subheader(f"👤 Characters ({len(npcs_at_location)})")
+            for npc in npcs_at_location:
+                status_icon = {"alive": "🟢", "dead": "💀", "missing": "❓", "imprisoned": "⛓️"}.get(npc.status, "🟢")
+                if st.sidebar.button(f"{status_icon} {npc.name} - {npc.profession}", key=f"npc_{npc.id}"):
+                    st.session_state.selected_npc = npc.id
+                    st.session_state.selected_destination = None  # Deselect location
 
 # Selected destination panel
 if st.session_state.selected_destination:
@@ -423,30 +505,109 @@ if st.session_state.selected_destination:
             st.sidebar.subheader("📌 Selected Location")
             st.sidebar.write(f"**{dest.name}**")
             st.sidebar.write(f"Type: {dest.type.value}")
-            st.sidebar.write(f"Position: ({dest.position_x:.1f}, {dest.position_y:.1f})")
 
             if dest.description:
-                st.sidebar.write(dest.description[:200] + "..." if len(dest.description) > 200 else dest.description)
+                st.sidebar.write(dest.description[:150] + "..." if len(dest.description) > 150 else dest.description)
+
+            # NPCs at this location
+            from src.models import NPC
+            npcs_here = session.query(NPC).filter(NPC.current_location_id == dest.id).all()
+            if npcs_here:
+                st.sidebar.markdown("**NPCs Here:**")
+                for npc in npcs_here:
+                    status_icon = {"alive": "🟢", "dead": "💀", "missing": "❓", "imprisoned": "⛓️"}.get(npc.status, "")
+                    st.sidebar.write(f"{status_icon} {npc.name} - {npc.profession}")
+
+            # Position editing with sliders
+            st.sidebar.markdown("**Move Pin Position:**")
+            new_x = st.sidebar.slider(
+                "X Position",
+                min_value=0,
+                max_value=100,
+                value=int(dest.position_x),
+                key=f"slider_x_{dest.id}"
+            )
+            new_y = st.sidebar.slider(
+                "Y Position",
+                min_value=0,
+                max_value=100,
+                value=int(dest.position_y),
+                key=f"slider_y_{dest.id}"
+            )
+
+            # Auto-save when sliders change
+            if int(new_x) != int(dest.position_x) or int(new_y) != int(dest.position_y):
+                if update_location_position(dest.id, float(new_x), float(new_y)):
+                    st.sidebar.success(f"Moved to ({new_x}, {new_y})")
+                    st.rerun()
+
+            # Action buttons
+            col_btn1, col_btn2 = st.sidebar.columns(2)
 
             # Travel button
-            if player and dest.id != player_location_id:
-                if st.sidebar.button("🚀 Travel Here", type="primary"):
-                    if move_player_to(player.id, dest.id):
-                        st.success(f"Traveled to {dest.name}!")
-                        st.session_state.selected_destination = None
-                        st.rerun()
-                    else:
-                        st.error("Could not travel to this location.")
-            elif player and dest.id == player_location_id:
-                st.sidebar.info("You are already here!")
+            with col_btn1:
+                if player and dest.id != player_location_id:
+                    if st.button("🚀 Travel", type="primary", key="travel_btn"):
+                        if move_player_to(player.id, dest.id):
+                            st.session_state.selected_destination = None
+                            st.rerun()
+                elif player and dest.id == player_location_id:
+                    st.write("📍 Here")
 
-            # Zoom in button
-            has_children = session.query(Location).filter(Location.parent_id == dest.id).count() > 0
-            if has_children:
-                if st.sidebar.button("🔍 View Map", type="secondary"):
+            # Zoom in button - always available
+            with col_btn2:
+                if st.button("🔍 Zoom", key="zoom_btn"):
                     st.session_state.current_map_location_id = dest.id
                     st.session_state.selected_destination = None
                     st.rerun()
+
+            # Deselect button
+            if st.sidebar.button("✖ Deselect", key="deselect_btn"):
+                st.session_state.selected_destination = None
+                st.rerun()
+
+# Selected NPC panel
+if st.session_state.selected_npc:
+    with get_session() as session:
+        npc = session.get(NPC, st.session_state.selected_npc)
+        if npc:
+            st.sidebar.divider()
+            st.sidebar.subheader("👤 Selected Character")
+            status_icon = {"alive": "🟢", "dead": "💀", "missing": "❓", "imprisoned": "⛓️"}.get(npc.status, "🟢")
+            st.sidebar.write(f"**{status_icon} {npc.name}**")
+            st.sidebar.write(f"Profession: {npc.profession}")
+            st.sidebar.write(f"Status: {npc.status} | Mood: {npc.current_mood}")
+
+            if npc.description_physical:
+                st.sidebar.write(npc.description_physical[:100] + "..." if len(npc.description_physical) > 100 else npc.description_physical)
+
+            # Position editing with sliders
+            st.sidebar.markdown("**Move Character Position:**")
+            new_x = st.sidebar.slider(
+                "X Position",
+                min_value=0,
+                max_value=100,
+                value=int(npc.position_x),
+                key=f"npc_slider_x_{npc.id}"
+            )
+            new_y = st.sidebar.slider(
+                "Y Position",
+                min_value=0,
+                max_value=100,
+                value=int(npc.position_y),
+                key=f"npc_slider_y_{npc.id}"
+            )
+
+            # Auto-save when sliders change
+            if int(new_x) != int(npc.position_x) or int(new_y) != int(npc.position_y):
+                if update_npc_position(npc.id, float(new_x), float(new_y)):
+                    st.sidebar.success(f"Moved to ({new_x}, {new_y})")
+                    st.rerun()
+
+            # Deselect button
+            if st.sidebar.button("✖ Deselect", key="deselect_npc_btn"):
+                st.session_state.selected_npc = None
+                st.rerun()
 
 # Player info
 st.sidebar.divider()
