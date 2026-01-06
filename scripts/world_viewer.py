@@ -295,6 +295,16 @@ elif page == "Locations":
         st.warning("No locations found.")
         st.stop()
 
+    # Check for multiple root locations
+    root_locations = [l for l in locations if l.parent_id is None]
+    if len(root_locations) > 1:
+        st.warning(f"⚠️ Found {len(root_locations)} root-level locations. Typically there should be only 1 (the galaxy/world).")
+        st.markdown("**Root locations:**")
+        for root in root_locations:
+            st.markdown(f"- {root.name} ({root.type.value})")
+        st.info("💡 To fix: Select a location below, then change its 'Parent Location' in the edit form.")
+        st.divider()
+
     # Build hierarchy
     def build_tree(parent_id=None, depth=0):
         children = [l for l in locations if l.parent_id == parent_id]
@@ -365,23 +375,81 @@ elif page == "Locations":
                     for npc in npcs_here:
                         st.markdown(f"- {npc.name} ({npc.profession})")
 
+            # Connections for this location
+            connections = get_connections()
+            location_names_map = {l.id: l.name for l in locations}
+            outgoing = [c for c in connections if c.from_location_id == loc.id]
+            incoming = [c for c in connections if c.to_location_id == loc.id and not c.bidirectional]
+            bidirectional_incoming = [c for c in connections if c.to_location_id == loc.id and c.bidirectional and c.from_location_id != loc.id]
+
+            if outgoing or incoming or bidirectional_incoming:
+                st.markdown("---")
+                st.subheader("🔗 Connections")
+
+                if outgoing:
+                    for conn in outgoing:
+                        dest_name = location_names_map.get(conn.to_location_id, "Unknown")
+                        direction = "↔" if conn.bidirectional else "→"
+                        discovered_icon = "✓" if conn.discovered else "?"
+                        st.markdown(f"{direction} **{dest_name}** ({conn.travel_type}, {conn.travel_time_hours}h) {discovered_icon}")
+
+                if incoming:
+                    st.markdown("**Incoming (one-way):**")
+                    for conn in incoming:
+                        source_name = location_names_map.get(conn.from_location_id, "Unknown")
+                        discovered_icon = "✓" if conn.discovered else "?"
+                        st.markdown(f"← **{source_name}** ({conn.travel_type}, {conn.travel_time_hours}h) {discovered_icon}")
+
+                if bidirectional_incoming:
+                    for conn in bidirectional_incoming:
+                        source_name = location_names_map.get(conn.from_location_id, "Unknown")
+                        discovered_icon = "✓" if conn.discovered else "?"
+                        st.markdown(f"↔ **{source_name}** ({conn.travel_type}, {conn.travel_time_hours}h) {discovered_icon}")
+            else:
+                st.markdown("---")
+                st.info("No connections to other locations.")
+
             # Edit form
             st.markdown("---")
             with st.form(key=f"edit_loc_{loc.id}"):
                 st.markdown("**Edit Location**")
+
+                # Parent location selector (for fixing hierarchy)
+                parent_options = [None] + [l.id for l in locations if l.id != loc.id]
+                current_parent_index = 0
+                if loc.parent_id in parent_options:
+                    current_parent_index = parent_options.index(loc.parent_id)
+                new_parent = st.selectbox(
+                    "Parent Location",
+                    options=parent_options,
+                    format_func=lambda x: f"{next((l.name for l in locations if l.id == x), 'Unknown')}" if x else "(Root - No Parent)",
+                    index=current_parent_index,
+                    help="Set to (Root) to make this a top-level location"
+                )
+
                 new_state = st.selectbox("State", ["peaceful", "under_siege", "destroyed", "abandoned", "occupied"], index=["peaceful", "under_siege", "destroyed", "abandoned", "occupied"].index(loc.current_state) if loc.current_state in ["peaceful", "under_siege", "destroyed", "abandoned", "occupied"] else 0)
                 new_discovered = st.checkbox("Discovered", value=loc.discovered)
                 new_visited = st.checkbox("Visited", value=loc.visited)
                 new_controlling_faction = st.selectbox("Controlling Faction", options=[None] + [f.id for f in factions], format_func=lambda x: faction_names.get(x, "None") if x else "None", index=([None] + [f.id for f in factions]).index(loc.controlling_faction_id) if loc.controlling_faction_id in [f.id for f in factions] else 0)
 
+                # Position editing
+                col_pos1, col_pos2 = st.columns(2)
+                with col_pos1:
+                    new_pos_x = st.number_input("Position X", min_value=0.0, max_value=100.0, value=float(loc.position_x), step=1.0)
+                with col_pos2:
+                    new_pos_y = st.number_input("Position Y", min_value=0.0, max_value=100.0, value=float(loc.position_y), step=1.0)
+
                 if st.form_submit_button("Save Changes"):
                     with get_session() as session:
                         loc_obj = session.get(Location, loc.id)
                         if loc_obj:
+                            loc_obj.parent_id = new_parent
                             loc_obj.current_state = new_state
                             loc_obj.discovered = new_discovered
                             loc_obj.visited = new_visited
                             loc_obj.controlling_faction_id = new_controlling_faction
+                            loc_obj.position_x = new_pos_x
+                            loc_obj.position_y = new_pos_y
                             session.commit()
                             st.success(f"{loc.name} updated!")
                             st.rerun()
@@ -405,11 +473,85 @@ elif page == "Connections":
     locations = get_locations()
     location_names = {l.id: l.name for l in locations}
 
-    if not connections:
-        st.warning("No connections found. Connections are created during world generation.")
-        st.stop()
-
     st.markdown(f"**Total Connections:** {len(connections)}")
+
+    # Add new connection form
+    st.header("Add New Connection")
+    with st.form(key="add_connection_form"):
+        col1, col2 = st.columns(2)
+        with col1:
+            from_location = st.selectbox(
+                "From Location",
+                options=[l.id for l in locations],
+                format_func=lambda x: location_names.get(x, "Unknown"),
+                key="new_conn_from"
+            )
+        with col2:
+            to_location = st.selectbox(
+                "To Location",
+                options=[l.id for l in locations],
+                format_func=lambda x: location_names.get(x, "Unknown"),
+                key="new_conn_to"
+            )
+
+        col3, col4, col5 = st.columns(3)
+        with col3:
+            travel_type = st.selectbox(
+                "Travel Type",
+                options=["walk", "vehicle", "ship", "hyperspace", "teleport", "flight", "swim", "climb"],
+                key="new_conn_type"
+            )
+        with col4:
+            travel_time = st.number_input(
+                "Travel Time (hours)",
+                min_value=0.0,
+                value=1.0,
+                step=0.5,
+                key="new_conn_time"
+            )
+        with col5:
+            bidirectional = st.checkbox("Bidirectional", value=True, key="new_conn_bidir")
+
+        discovered = st.checkbox("Already Discovered", value=True, key="new_conn_discovered")
+        description = st.text_input("Description (optional)", key="new_conn_desc")
+
+        if st.form_submit_button("Add Connection", type="primary"):
+            if from_location == to_location:
+                st.error("Cannot create connection from a location to itself!")
+            else:
+                # Check if connection already exists
+                existing = None
+                for conn in connections:
+                    if (conn.from_location_id == from_location and conn.to_location_id == to_location) or \
+                       (bidirectional and conn.from_location_id == to_location and conn.to_location_id == from_location):
+                        existing = conn
+                        break
+
+                if existing:
+                    st.error("A connection between these locations already exists!")
+                else:
+                    import uuid
+                    with get_session() as session:
+                        new_conn = Connection(
+                            id=str(uuid.uuid4()),
+                            from_location_id=from_location,
+                            to_location_id=to_location,
+                            travel_type=travel_type,
+                            travel_time_hours=travel_time,
+                            bidirectional=bidirectional,
+                            discovered=discovered,
+                            description=description if description else None,
+                        )
+                        session.add(new_conn)
+                        session.commit()
+                        st.success(f"Connection added: {location_names[from_location]} -> {location_names[to_location]}")
+                        st.rerun()
+
+    st.divider()
+
+    if not connections:
+        st.warning("No connections found. Use the form above to add connections.")
+        st.stop()
 
     # Connections table
     import pandas as pd
