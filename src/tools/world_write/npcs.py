@@ -93,6 +93,7 @@ def update_npc(
     remove_secret: str | None = None,
     add_skill: str | None = None,
     add_notable_item: str | None = None,
+
 ) -> dict[str, Any]:
     """Update an NPC's attributes, goals, or secrets.
 
@@ -112,7 +113,6 @@ def update_npc(
         remove_secret: Remove a secret from the NPC's secrets list (exact match).
         add_skill: Add a new skill to the NPC's skills list.
         add_notable_item: Add a notable item to the NPC's inventory.
-
     Returns:
         Dictionary with updated NPC details.
     """
