@@ -278,3 +278,49 @@ def prompt_player(prompt: str, choices: list[str] | None = None) -> dict[str, An
         console.print(Text(f"➤ {prompt}", style="bold green"))
 
     return {"success": True, "has_choices": bool(choices)}
+
+
+@tool
+def show_quest_update(
+    title: str,
+    update_type: str,
+    description: str | None = None,
+    objectives: list[str] | None = None,
+) -> dict[str, Any]:
+    """Display a quest update notification to the player.
+
+    Args:
+        title: Quest title.
+        update_type: Type of update (started, updated, completed, failed).
+        description: Optional quest description (shown for new quests).
+        objectives: Optional list of objectives to display.
+
+    Returns:
+        Dictionary confirming the display.
+    """
+    console = get_console()
+
+    type_styles = {
+        "started": ("bold green", "📜 NEW QUEST"),
+        "updated": ("yellow", "📝 QUEST UPDATED"),
+        "completed": ("bold cyan", "✅ QUEST COMPLETED"),
+        "failed": ("bold red", "❌ QUEST FAILED"),
+    }
+
+    style, header = type_styles.get(update_type, ("white", "📜 QUEST"))
+
+    content = f"**{title}**"
+    if description:
+        content += f"\n\n{description}"
+    if objectives:
+        content += "\n\n**Objectives:**"
+        for obj in objectives:
+            content += f"\n• {obj}"
+
+    console.print(Panel(
+        Markdown(content),
+        title=f"[{style}]{header}[/{style}]",
+        border_style=style.replace("bold ", ""),
+    ))
+
+    return {"success": True, "quest": title, "type": update_type}

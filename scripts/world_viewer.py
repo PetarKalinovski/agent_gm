@@ -30,6 +30,7 @@ from src.models import (
     Faction, FactionRelationship, Location, NPC, WorldBible,
     HistoricalEvent, WorldClock, Event, Connection
 )
+from src.models.quests import Quest, QuestStatus
 
 
 # Initialize DB
@@ -84,6 +85,11 @@ def get_connections():
         return session.query(Connection).all()
 
 
+def get_quests():
+    with get_session() as session:
+        return session.query(Quest).all()
+
+
 def delete_entity(entity_type, entity_id):
     """Delete an entity from the database."""
     with get_session() as session:
@@ -95,6 +101,8 @@ def delete_entity(entity_type, entity_id):
             entity = session.get(Faction, entity_id)
         elif entity_type == "connection":
             entity = session.get(Connection, entity_id)
+        elif entity_type == "quest":
+            entity = session.get(Quest, entity_id)
         else:
             return False
 
@@ -112,7 +120,7 @@ init_database()
 st.sidebar.title("🌍 World Viewer")
 page = st.sidebar.radio(
     "Navigate",
-    ["Overview", "Factions", "Locations", "Connections", "NPCs", "History", "Events", "Raw Data"]
+    ["Overview", "Factions", "Locations", "Connections", "NPCs", "Quests", "History", "Events", "Raw Data"]
 )
 
 # Main content
@@ -720,6 +728,140 @@ elif page == "NPCs":
                 else:
                     st.session_state[f"confirm_delete_npc_{npc.id}"] = True
                     st.warning("Click again to confirm deletion")
+
+elif page == "Quests":
+    st.title("📜 Quests")
+
+    quests = get_quests()
+    npcs = get_npcs()
+    npc_names = {n.id: n.name for n in npcs}
+    npc_names[None] = "Unknown"
+
+    if not quests:
+        st.warning("No quests found. Create quests during world generation or gameplay.")
+        st.stop()
+
+    # Summary stats
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Total", len(quests))
+    with col2:
+        st.metric("Active", len([q for q in quests if q.status == QuestStatus.ACTIVE]))
+    with col3:
+        st.metric("Not Started", len([q for q in quests if q.status == QuestStatus.NOT_STARTED]))
+    with col4:
+        st.metric("Completed", len([q for q in quests if q.status == QuestStatus.COMPLETED]))
+
+    st.divider()
+
+    # Filter by status
+    status_filter = st.selectbox(
+        "Filter by Status",
+        ["All", QuestStatus.NOT_STARTED, QuestStatus.ACTIVE, QuestStatus.COMPLETED, QuestStatus.FAILED]
+    )
+
+    filtered = quests
+    if status_filter != "All":
+        filtered = [q for q in quests if q.status == status_filter]
+
+    st.markdown(f"**Showing {len(filtered)} quests**")
+
+    # Quest list
+    for quest in filtered:
+        status_emoji = {
+            QuestStatus.NOT_STARTED: "⏳",
+            QuestStatus.ACTIVE: "🔥",
+            QuestStatus.COMPLETED: "✅",
+            QuestStatus.FAILED: "❌"
+        }.get(quest.status, "❓")
+
+        with st.expander(f"{status_emoji} {quest.title} ({quest.status})"):
+            st.markdown(f"**Description:** {quest.description}")
+
+            if quest.assigned_by_npc_id:
+                st.markdown(f"**Quest Giver:** {npc_names.get(quest.assigned_by_npc_id, 'Unknown')}")
+
+            if quest.objectives:
+                st.markdown("**Objectives:**")
+                for obj in quest.objectives:
+                    st.markdown(f"- {obj}")
+
+            if quest.rewards:
+                st.markdown("**Rewards:**")
+                for key, value in quest.rewards.items():
+                    st.markdown(f"- {key}: {value}")
+
+            # Edit form
+            with st.form(key=f"edit_quest_{quest.id}"):
+                st.markdown("**Edit Quest**")
+                new_status = st.selectbox(
+                    "Status",
+                    [QuestStatus.NOT_STARTED, QuestStatus.ACTIVE, QuestStatus.COMPLETED, QuestStatus.FAILED],
+                    index=[QuestStatus.NOT_STARTED, QuestStatus.ACTIVE, QuestStatus.COMPLETED, QuestStatus.FAILED].index(quest.status)
+                )
+                new_title = st.text_input("Title", value=quest.title)
+                new_description = st.text_area("Description", value=quest.description)
+
+                if st.form_submit_button("Save Changes"):
+                    with get_session() as session:
+                        quest_obj = session.get(Quest, quest.id)
+                        if quest_obj:
+                            quest_obj.status = new_status
+                            quest_obj.title = new_title
+                            quest_obj.description = new_description
+                            session.commit()
+                            st.success(f"Quest '{new_title}' updated!")
+                            st.rerun()
+
+            # Delete button
+            if st.button(f"🗑️ Delete Quest", key=f"delete_quest_{quest.id}"):
+                if st.session_state.get(f"confirm_delete_quest_{quest.id}", False):
+                    if delete_entity("quest", quest.id):
+                        st.success(f"Deleted quest: {quest.title}")
+                        st.rerun()
+                    else:
+                        st.error("Failed to delete quest")
+                else:
+                    st.session_state[f"confirm_delete_quest_{quest.id}"] = True
+                    st.warning("Click again to confirm deletion")
+
+    # Add new quest form
+    st.divider()
+    st.header("Add New Quest")
+    with st.form(key="add_quest_form"):
+        new_quest_title = st.text_input("Title")
+        new_quest_description = st.text_area("Description")
+        new_quest_objectives = st.text_area("Objectives (one per line)")
+        new_quest_npc = st.selectbox(
+            "Quest Giver",
+            options=[None] + [n.id for n in npcs],
+            format_func=lambda x: npc_names.get(x, "None") if x else "None"
+        )
+        new_quest_status = st.selectbox(
+            "Initial Status",
+            [QuestStatus.NOT_STARTED, QuestStatus.ACTIVE]
+        )
+
+        if st.form_submit_button("Create Quest", type="primary"):
+            if new_quest_title:
+                import uuid
+                objectives = [obj.strip() for obj in new_quest_objectives.split("\n") if obj.strip()]
+                with get_session() as session:
+                    new_quest = Quest(
+                        id=str(uuid.uuid4()),
+                        title=new_quest_title,
+                        description=new_quest_description,
+                        objectives=objectives,
+                        rewards={},
+                        assigned_by_npc_id=new_quest_npc,
+                        status=new_quest_status,
+                    )
+                    session.add(new_quest)
+                    session.commit()
+                    st.success(f"Quest '{new_quest_title}' created!")
+                    st.rerun()
+            else:
+                st.error("Quest title is required")
 
 elif page == "History":
     st.title("📜 Historical Events")
