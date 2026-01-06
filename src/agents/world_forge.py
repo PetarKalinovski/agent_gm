@@ -21,10 +21,11 @@ from typing import Any
 
 from strands import Agent
 from strands.agent import AgentResult
-
+from strands.session import FileSessionManager
 from src.agents.base import create_agent
 from src.tools import world_read
 from src.tools import world_write
+from src.tools.world_write import move_npc
 
 # Import all needed tools
 get_all_factions = world_read.get_all_factions
@@ -44,6 +45,8 @@ create_world_bible = world_write.create_world_bible
 update_npc = world_write.update_npc
 add_location_connection = world_write.add_location_connection
 update_location = world_write.update_location
+delete_location = world_write.delete_location
+move_npc = world_write.move_npc
 
 
 WORLD_FORGE_SYSTEM_PROMPT = """You are the World Forge - a specialized agent for creating rich, detailed game worlds for text-based RPGs.
@@ -128,6 +131,8 @@ WORLD_FORGE_TOOLS = [
     update_npc,
     add_location_connection,
     update_location,
+    move_npc,
+    delete_location
 
 ]
 
@@ -135,13 +140,15 @@ WORLD_FORGE_TOOLS = [
 class WorldForge:
     """Agent that generates entire game worlds from a premise."""
 
-    def __init__(self):
+    def __init__(self, player_id: str | None = None):
         """Initialize the WorldForge agent."""
         # Create the Strands agent
+        session = FileSessionManager(session_id=player_id or "world_forge_session")
         self.agent = create_agent(
             agent_name="world_forge",
             system_prompt=WORLD_FORGE_SYSTEM_PROMPT,
             tools=WORLD_FORGE_TOOLS,
+            session_manager=session,
         )
 
     def generate_world(
