@@ -1,6 +1,7 @@
 from src.agents.creation_agent import CREATORAgent
 from src.agents.npc_agent import NPCAgent
 from src.agents.economy_agent import EconomyAgent
+from src.agents.world_forge import WorldForge
 from strands import tool
 
 # Global cache for NPC agents to maintain conversation history
@@ -18,7 +19,7 @@ def prompt_creator_agent(player_id: str, instruction: str) -> dict[str, str]:
     Returns:
         Dictionary with the agent's response.
     """
-    agent = CREATORAgent(player_id)
+    agent = WorldForge(player_id)
 
     result = agent.process_input(instruction)
 
