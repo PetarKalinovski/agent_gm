@@ -3,8 +3,13 @@
 from typing import Any
 
 from strands import Agent
-from strands.session.file_session_manager import FileSessionManager
+from strands_semantic_memory import (
+    SemanticSummarizingConversationManager,
+    SemanticMemoryHook,
+)
 
+from strands.session.file_session_manager import FileSessionManager
+from strands_tools import journal
 from src.agents.base import create_agent
 from src.tools.world_read import (
     get_current_location,
@@ -14,7 +19,9 @@ from src.tools.world_read import (
     get_npc_relationship,
     get_world_clock,
     get_player,
-    get_world_state_summary
+    get_world_state_summary,
+    get_active_quests,
+    get_world_bible_for_dm,
 )
 from src.tools.world_write import (
     move_player,
@@ -24,12 +31,15 @@ from src.tools.world_write import (
     add_npc,
     update_npc_relationship,
     update_npc,
-    create_event
+    create_event,
+    update_quest_status,
+    update_quest_objectives,
 )
 from src.tools.narration import (
     narrate,
     describe_location,
     show_time_passage,
+    show_quest_update,
 )
 from src.tools.agents_as_tools import prompt_creator_agent, prompt_npc_agent, prompt_economy_agent
 
@@ -106,11 +116,21 @@ DM_SYSTEM_PROMPT = """You are the Dungeon Master (DM) for an immersive, dynamic 
 - **Always** check the current location first.
 
 Your goal is to weave the player's inputs into a seamless story using the database as your source of truth.
+
+### JOURNAL USAGE
+Use the `journal` tool to log important narrative developments, world changes, and player progress. Track significant events, NPC relationship shifts, new locations discovered, and major plot developments. Keep journal entries concise but meaningful for future reference and continuity.
+
+### QUEST TRACKING
+- When NPCs offer tasks or the player takes on objectives, create quests.
+- Track quest progress naturally through play - update objectives as they're completed.
+- Remind the player of relevant active quests when appropriate (e.g., when they encounter a quest-related NPC or location).
+- Don't spam quest updates - weave them into narration.
 """
 
 
 # Collect DM tools
 DM_TOOLS = [
+    # Read tools
     get_current_location,
     get_npcs_at_location,
     get_available_destinations,
@@ -118,16 +138,23 @@ DM_TOOLS = [
     get_npc_relationship,
     get_world_clock,
     get_player,
+    get_active_quests,
+    get_world_state_summary,
+    # Write tools
     move_player,
     move_npc,
     advance_time,
+    update_quest_status,
+    update_quest_objectives,
+    # Narration tools
     narrate,
     describe_location,
     show_time_passage,
+    show_quest_update,
+    # Sub-agent delegation
     prompt_creator_agent,
     prompt_npc_agent,
     prompt_economy_agent,
-    get_world_state_summary
 ]
 
 
@@ -144,12 +171,26 @@ class DMOrchestrator:
 
         session_manager = FileSessionManager(session_id=player_id)
 
+        # Get world context for the system prompt
+        world_context = get_world_bible_for_dm()
+        if not world_context or "No World Bible" in world_context:
+            world_context = ""
+        else:
+            world_context = f"\n\n### WORLD CONTEXT\n{world_context}"
+
         # Create the Strands agent
+        conv_manager = SemanticSummarizingConversationManager(
+            embedding_model="all-MiniLM-L12-v2"
+        )
+        semantic_memory_hook = SemanticMemoryHook()
+
         self.agent = create_agent(
             agent_name="dm_orchestrator",
-            system_prompt=DM_SYSTEM_PROMPT + f"\n\nThe current player_id is: {player_id}",
+            system_prompt=DM_SYSTEM_PROMPT + world_context + f"\n\nThe current player_id is: {player_id}",
             tools=DM_TOOLS,
             session_manager=session_manager,
+            conversation_manager=conv_manager,
+            hooks=[semantic_memory_hook]
         )
 
     def process_input(self, player_input: str) -> str:

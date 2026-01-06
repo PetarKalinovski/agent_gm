@@ -18,6 +18,12 @@ Usage:
 """
 
 from typing import Any
+from strands import Agent
+
+from strands_semantic_memory import (
+    SemanticSummarizingConversationManager,
+    SemanticMemoryHook,
+)
 
 from strands import Agent
 from strands.agent import AgentResult
@@ -47,6 +53,7 @@ add_location_connection = world_write.add_location_connection
 update_location = world_write.update_location
 delete_location = world_write.delete_location
 move_npc = world_write.move_npc
+create_quest = world_write.create_quest
 
 
 WORLD_FORGE_SYSTEM_PROMPT = """You are the World Forge - a specialized agent for creating rich, detailed game worlds for text-based RPGs.
@@ -57,6 +64,7 @@ Your job is to take a premise and generate a complete, coherent world with:
 3. Historical events that shaped the current situation
 4. A location hierarchy (from galaxy/world down to cities and buildings)
 5. NPCs distributed across the world
+6. Pre-seeded quests ready to be offered by NPCs
 
 ## GENERATION PRINCIPLES
 
@@ -87,6 +95,10 @@ You MUST generate in this order:
    - Major NPCs (10-15): Leaders, quest givers, antagonists
    - Minor NPCs (30-50): Shopkeepers, guards, contacts
    - Note: Ambient NPCs are generated on-demand during play
+7. **Quests** - Create 5-10 pre-seeded quests:
+   - Main story quests (2-3): Epic storyline
+   - Side quests (3-5): Smaller tasks from NPCs
+   - Each quest needs an assigned_by_npc_id (the NPC who will offer it)
 
 ## TOOL USAGE
 
@@ -96,6 +108,7 @@ You MUST generate in this order:
 - Use `create_historical_event` for lore events
 - Use `add_location` for places (set parent_id for hierarchy)
 - Use `add_npc` for characters (set faction_id and current_location_id)
+- Use `create_quest` for pre-seeded quests (set assigned_by_npc_id, status is "not_started" by default)
 - Use `get_all_factions`, `get_all_locations`, etc. to check what you've created
 
 ## IMPORTANT RULES
@@ -132,8 +145,8 @@ WORLD_FORGE_TOOLS = [
     add_location_connection,
     update_location,
     move_npc,
-    delete_location
-
+    delete_location,
+    create_quest,
 ]
 
 
@@ -143,12 +156,19 @@ class WorldForge:
     def __init__(self, player_id: str | None = None):
         """Initialize the WorldForge agent."""
         # Create the Strands agent
+        conv_manager = SemanticSummarizingConversationManager(
+            embedding_model="all-MiniLM-L12-v2"
+        )
+
+        semantic_memory_hook = SemanticMemoryHook()
         session = FileSessionManager(session_id=player_id or "world_forge_session")
         self.agent = create_agent(
             agent_name="world_forge",
             system_prompt=WORLD_FORGE_SYSTEM_PROMPT,
             tools=WORLD_FORGE_TOOLS,
             session_manager=session,
+            conversation_manager=conv_manager,
+            hooks=[semantic_memory_hook]
         )
 
     def generate_world(
@@ -201,7 +221,8 @@ class WorldForge:
 3. Then create faction relationships with `create_faction_relationship`
 4. Then create historical events with `create_historical_event`
 5. Then create locations with `add_location` (start with root, then children)
-6. Finally create NPCs with `add_npc`
+6. Then create NPCs with `add_npc`
+7. Finally create quests with `create_quest` (assign to NPCs who will offer them)
 
 Start now. Work through each step, creating entities one by one.
 Report your progress as you go.

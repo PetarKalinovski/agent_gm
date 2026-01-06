@@ -13,7 +13,7 @@ def main() -> None:
     db_path = "data/sw.db"  # Path to your existing world database
     init_db(db_path)
     session = get_session()
-    world_forge = WorldForge()
+    world_forge = WorldForge("existing_world_agent")
     world_bible = session.query(WorldBible).first()
 
     if not world_bible:

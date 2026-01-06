@@ -4,11 +4,14 @@ from typing import Any
 
 from strands import Agent
 from strands.session.file_session_manager import FileSessionManager
-
+from strands_semantic_memory import (
+    SemanticSummarizingConversationManager,
+    SemanticMemoryHook,
+)
 from src.agents.base import create_agent
-from src.tools.world_read import get_npc, get_npc_relationship, get_world_clock
-from src.tools.world_write import update_npc_relationship, update_npc_mood, update_npc
-from src.tools.narration import speak
+from src.tools.world_read import get_npc, get_npc_relationship, get_world_clock, get_available_quests_for_npc
+from src.tools.world_write import update_npc_relationship, update_npc_mood, update_npc, activate_quest
+from src.tools.narration import speak, show_quest_update
 
 
 def build_npc_system_prompt(npc: dict[str, Any], relationship: dict[str, Any]) -> str:
@@ -73,6 +76,12 @@ def build_npc_system_prompt(npc: dict[str, Any], relationship: dict[str, Any]) -
   - Update your physical description if you're injured or changed
   - Change your profession if your role evolves
 
+**Quest Offering:**
+- At the START of a conversation, check `get_available_quests_for_npc` to see if you have tasks to offer
+- If you have quests and the conversation feels right, naturally work the task into dialogue
+- When the player accepts a task, call `activate_quest` then `show_quest_update` to notify them
+- Don't force quests - weave them naturally into conversation based on your character's goals
+
 **Example:**
 Player: "Hello there!"
 You: Call speak(npc_name="{npc['name']}", text="Well met, traveler. What brings you to these parts?", tone="friendly")
@@ -80,14 +89,17 @@ You: Call speak(npc_name="{npc['name']}", text="Well met, traveler. What brings 
     return prompt
 
 
-# NPC tools
+# NPC tools - quest offering only, DM handles quest progress
 NPC_TOOLS = [
     speak,
     update_npc_relationship,
     update_npc_mood,
     update_npc,
     get_npc_relationship,
-    get_npc
+    get_npc,
+    get_available_quests_for_npc,
+    activate_quest,
+    show_quest_update,
 ]
 
 
@@ -135,12 +147,21 @@ class NPCAgent:
         session_manager = FileSessionManager(session_id=f"{self.player_id}_{self.npc_id}")
 
         # Create the Strands agent with session management
+        conv_manager = SemanticSummarizingConversationManager(
+            embedding_model="all-MiniLM-L12-v2"
+        )
+
+        semantic_memory_hook = SemanticMemoryHook()
+
         self.agent = create_agent(
             agent_name="npc_agent",
             system_prompt=system_prompt,
             tools=NPC_TOOLS,
             session_manager=session_manager,
+            conversation_manager=conv_manager,
+            hooks=[semantic_memory_hook]
         )
+
 
         # Generate greeting
         trust = self.relationship.get("trust_level", 50)

@@ -64,6 +64,8 @@ def create_agent(
     system_prompt: str,
     tools: list | None = None,
     session_manager: Any = None,
+    conversation_manager: Any = None,
+    hooks: list | None = None,
 ) -> Agent:
     """Create a Strands Agent with configuration from agents.yaml.
 
@@ -83,6 +85,8 @@ def create_agent(
         system_prompt=system_prompt,
         tools=tools or [],
         session_manager=session_manager,
+        conversation_manager=conversation_manager,
+        hooks=hooks or []
     )
 
 
