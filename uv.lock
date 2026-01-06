@@ -20,6 +20,7 @@ dependencies = [
     { name = "strands-agents", extra = ["litellm"] },
     { name = "strands-agents-tools" },
     { name = "streamlit" },
+    { name = "streamlit-plotly-events" },
 ]
 
 [package.metadata]
@@ -33,6 +34,7 @@ requires-dist = [
     { name = "strands-agents", extras = ["litellm"], specifier = ">=0.1.0" },
     { name = "strands-agents-tools", specifier = ">=0.1.0" },
     { name = "streamlit", specifier = ">=1.30.0" },
+    { name = "streamlit-plotly-events", specifier = ">=0.0.6" },
 ]
 
 [[package]]
@@ -2300,6 +2302,19 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/43/20/434aaceccc6e1912671d869926103051330437adba72d538d787a07727ef/streamlit-1.52.2.tar.gz", hash = "sha256:64a4dda8bc5cdd37bfd490e93bb53da35aaef946fcfc283a7980dacdf165108b", size = 8584178, upload-time = "2025-12-17T17:07:59.642Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c0/95/6b7873f0267973ebd55ba9cd33a690b35a116f2779901ef6185a0e21864d/streamlit-1.52.2-py3-none-any.whl", hash = "sha256:a16bb4fbc9781e173ce9dfbd8ffb189c174f148f9ca4fb8fa56423e84e193fc8", size = 9025937, upload-time = "2025-12-17T17:07:57.67Z" },
+]
+
+[[package]]
+name = "streamlit-plotly-events"
+version = "0.0.6"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "plotly" },
+    { name = "streamlit" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/61/8c/e51c4867cc4d819f8452811199241d0edbcec73621768270ada66153f874/streamlit-plotly-events-0.0.6.tar.gz", hash = "sha256:1fe25dbf0e5d803aeb90253be04d7b395f5bcfdf3c654f96ff3c19424e7f9582", size = 4874598, upload-time = "2021-04-26T23:36:16.973Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a9/08/51dd5c822e27410f6452c3cfe61f7163fdeb40f4d285f2da6c2b9f88584d/streamlit_plotly_events-0.0.6-py3-none-any.whl", hash = "sha256:e63fbe3c6a0746fdfce20060fc45ba5cd97805505c332b27372dcbd02c2ede29", size = 14802161, upload-time = "2021-04-26T23:36:09.194Z" },
 ]
 
 [[package]]

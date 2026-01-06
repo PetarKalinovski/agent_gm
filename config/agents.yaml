@@ -39,31 +39,31 @@ agents:
     description: "Master agent that generates entire game worlds from a premise"
 
   faction_generator:
-    model: "openrouter/z-ai/glm-4.7"
+    model: "openrouter/deepseek/deepseek-v3.2" # recommend: openrouter/z-ai/glm-4.7
     temperature: 0.8
     max_tokens: 4096
     description: "Generates factions for world building"
 
   location_generator:
-    model: "openrouter/z-ai/glm-4.7"
+    model: "openrouter/deepseek/deepseek-v3.2"
     temperature: 0.8
     max_tokens: 4096
     description: "Generates locations and world geography"
 
   npc_generator:
-    model: "openrouter/z-ai/glm-4.7"
+    model: "openrouter/deepseek/deepseek-v3.2"
     temperature: 0.9
     max_tokens: 4096
     description: "Generates NPCs with personalities and backstories"
 
   history_generator:
-    model: "openrouter/z-ai/glm-4.7"
+    model: "openrouter/deepseek/deepseek-v3.2"
     temperature: 0.7
     max_tokens: 4096
     description: "Generates world history and lore"
 
   plot_seeder:
-    model: "openrouter/z-ai/glm-4.7"
+    model: "openrouter/deepseek/deepseek-v3.2"
     temperature: 0.7
     max_tokens: 2048
     description: "Creates initial plot threads based on PC and world"
