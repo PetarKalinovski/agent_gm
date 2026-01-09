@@ -1,0 +1,775 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Agent GM - Visual RPG</title>
+    <!-- PixiJS -->
+    <script src="https://pixijs.download/v8.x/pixi.min.js"></script>
+    <style>
+        :root {
+            --bg-primary: #0a0a0f;
+            --bg-secondary: #12121a;
+            --bg-tertiary: #1a1a25;
+            --text-primary: #e8e8f0;
+            --text-secondary: #9090a0;
+            --accent: #6366f1;
+            --accent-dim: #4f46e5;
+            --success: #22c55e;
+            --warning: #f59e0b;
+            --error: #ef4444;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            height: 100vh;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* Header */
+        .header {
+            padding: 0.5rem 1rem;
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--bg-tertiary);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-shrink: 0;
+            z-index: 100;
+        }
+
+        .header h1 {
+            font-size: 1rem;
+            font-weight: 600;
+            background: linear-gradient(135deg, var(--accent), #a78bfa);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .player-select select {
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+            border: 1px solid var(--bg-tertiary);
+            padding: 0.4rem 0.8rem;
+            border-radius: 6px;
+            font-size: 0.85rem;
+        }
+
+        /* Game Container */
+        #game-container {
+            flex: 1;
+            min-height: 0;
+            position: relative;
+            transition: flex 0.3s ease;
+        }
+
+        #game-container canvas {
+            display: block;
+        }
+
+        /* Chat Toggle Button */
+        #toggle-chat {
+            position: absolute;
+            bottom: 0;
+            left: 50%;
+            transform: translateX(-50%);
+            background: var(--bg-secondary);
+            border: 1px solid var(--accent-dim);
+            color: var(--accent);
+            padding: 0.3rem 1.5rem;
+            border-radius: 8px 8px 0 0;
+            cursor: pointer;
+            font-size: 1rem;
+            z-index: 50;
+            transition: all 0.2s;
+        }
+
+        #toggle-chat:hover {
+            background: var(--accent-dim);
+            color: white;
+        }
+
+        /* Chat Panel */
+        #chat-panel {
+            height: 40vh;
+            background: var(--bg-secondary);
+            border-top: 1px solid var(--bg-tertiary);
+            display: flex;
+            flex-direction: column;
+            transition: height 0.3s ease;
+            flex-shrink: 0;
+        }
+
+        #chat-panel.collapsed {
+            height: 0;
+            overflow: hidden;
+            border: none;
+        }
+
+        .chat-header {
+            padding: 0.5rem 1rem;
+            background: var(--bg-tertiary);
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            flex-shrink: 0;
+        }
+
+        .location-info {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+        }
+
+        .location-info strong {
+            color: var(--accent);
+        }
+
+        /* NPC Portrait */
+        .npc-portrait-container {
+            display: none;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .npc-portrait-container.visible {
+            display: flex;
+        }
+
+        .npc-portrait {
+            width: 48px;
+            height: 48px;
+            border-radius: 50%;
+            border: 2px solid var(--accent);
+            object-fit: cover;
+            background: var(--bg-tertiary);
+        }
+
+        .npc-name {
+            font-weight: 600;
+            color: var(--accent);
+            font-size: 0.9rem;
+        }
+
+        /* Chat Messages */
+        .chat-messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 1rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+        }
+
+        .message {
+            max-width: 85%;
+            animation: fadeIn 0.3s ease;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .message.user {
+            align-self: flex-end;
+        }
+
+        .message.assistant {
+            align-self: flex-start;
+        }
+
+        .message-content {
+            padding: 0.75rem 1rem;
+            border-radius: 12px;
+            line-height: 1.5;
+            font-size: 0.95rem;
+        }
+
+        .message.user .message-content {
+            background: var(--accent);
+            color: white;
+            border-bottom-right-radius: 4px;
+        }
+
+        .message.assistant .message-content {
+            background: var(--bg-tertiary);
+            border: 1px solid rgba(99, 102, 241, 0.2);
+            border-bottom-left-radius: 4px;
+        }
+
+        /* Tool Pills */
+        .tools-container {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.4rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .tool-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.3rem;
+            padding: 0.25rem 0.5rem;
+            background: rgba(99, 102, 241, 0.1);
+            border: 1px solid rgba(99, 102, 241, 0.3);
+            border-radius: 15px;
+            font-size: 0.7rem;
+            font-weight: 500;
+        }
+
+        .tool-pill.running {
+            border-color: var(--warning);
+            background: rgba(245, 158, 11, 0.1);
+        }
+
+        .tool-pill.success {
+            border-color: var(--success);
+            background: rgba(34, 197, 94, 0.1);
+        }
+
+        /* Thinking indicator */
+        .thinking {
+            display: flex;
+            gap: 0.2rem;
+            padding: 0.4rem 0.8rem;
+            background: var(--bg-tertiary);
+            border-radius: 8px;
+            width: fit-content;
+        }
+
+        .thinking span {
+            width: 6px;
+            height: 6px;
+            background: var(--accent);
+            border-radius: 50%;
+            animation: bounce 1.4s infinite ease-in-out;
+        }
+
+        .thinking span:nth-child(1) { animation-delay: -0.32s; }
+        .thinking span:nth-child(2) { animation-delay: -0.16s; }
+
+        @keyframes bounce {
+            0%, 80%, 100% { transform: scale(0); }
+            40% { transform: scale(1); }
+        }
+
+        /* Input Area */
+        .chat-input {
+            padding: 0.75rem 1rem;
+            background: var(--bg-primary);
+            border-top: 1px solid var(--bg-tertiary);
+            display: flex;
+            gap: 0.5rem;
+            flex-shrink: 0;
+        }
+
+        .chat-input input {
+            flex: 1;
+            background: var(--bg-tertiary);
+            border: 1px solid transparent;
+            border-radius: 8px;
+            padding: 0.6rem 0.8rem;
+            color: var(--text-primary);
+            font-size: 0.95rem;
+            transition: border-color 0.2s;
+        }
+
+        .chat-input input:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+
+        .chat-input button {
+            background: var(--accent);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            padding: 0.6rem 1.2rem;
+            font-size: 0.9rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .chat-input button:hover:not(:disabled) {
+            background: var(--accent-dim);
+        }
+
+        .chat-input button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: var(--bg-secondary);
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: var(--bg-tertiary);
+            border-radius: 3px;
+        }
+
+        /* Game overlay info */
+        .game-overlay {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            padding: 0.5rem 0.75rem;
+            background: rgba(0, 0, 0, 0.7);
+            border-radius: 8px;
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            z-index: 10;
+        }
+
+        .game-overlay .location {
+            color: var(--accent);
+            font-weight: 600;
+        }
+
+        /* Controls hint */
+        .controls-hint {
+            position: absolute;
+            bottom: 50px;
+            right: 10px;
+            padding: 0.4rem 0.6rem;
+            background: rgba(0, 0, 0, 0.6);
+            border-radius: 6px;
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+            z-index: 10;
+        }
+    </style>
+</head>
+<body>
+    <!-- Header -->
+    <header class="header">
+        <h1>Agent GM</h1>
+        <div class="player-select">
+            <select id="player-select">
+                <option value="">Select Player...</option>
+            </select>
+        </div>
+    </header>
+
+    <!-- Game View -->
+    <div id="game-container">
+        <div class="game-overlay">
+            <span class="location" id="game-location">No location</span>
+            <span id="game-time"></span>
+        </div>
+        <div class="controls-hint">WASD to move | Click NPCs to talk</div>
+    </div>
+
+    <!-- Chat Toggle -->
+    <button id="toggle-chat">Chat</button>
+
+    <!-- Chat Panel -->
+    <div id="chat-panel">
+        <div class="chat-header">
+            <div class="location-info">
+                <strong id="chat-location">Unknown</strong>
+                <span id="chat-time"></span>
+            </div>
+            <div class="npc-portrait-container" id="npc-portrait-container">
+                <img class="npc-portrait" id="npc-portrait" src="" alt="">
+                <span class="npc-name" id="npc-name"></span>
+            </div>
+        </div>
+        <div class="chat-messages" id="chat-messages">
+            <div class="message assistant">
+                <div class="message-content">
+                    Welcome! Select a player to begin your adventure. Use WASD to move around, and click on NPCs to interact with them.
+                </div>
+            </div>
+        </div>
+        <div class="chat-input">
+            <input type="text" id="user-input" placeholder="What do you do?" disabled>
+            <button id="send-btn" disabled>Send</button>
+        </div>
+    </div>
+
+    <!-- Game Renderer -->
+    <script src="/static/js/game.js"></script>
+
+    <script>
+        // State
+        let game = null;
+        let currentPlayerId = null;
+        let currentLocationId = null;
+        let isProcessing = false;
+        let currentNpcId = null;
+
+        // DOM elements
+        const playerSelect = document.getElementById('player-select');
+        const gameContainer = document.getElementById('game-container');
+        const chatPanel = document.getElementById('chat-panel');
+        const toggleBtn = document.getElementById('toggle-chat');
+        const chatMessages = document.getElementById('chat-messages');
+        const userInput = document.getElementById('user-input');
+        const sendBtn = document.getElementById('send-btn');
+        const gameLocation = document.getElementById('game-location');
+        const gameTime = document.getElementById('game-time');
+        const chatLocation = document.getElementById('chat-location');
+        const chatTime = document.getElementById('chat-time');
+        const npcPortraitContainer = document.getElementById('npc-portrait-container');
+        const npcPortrait = document.getElementById('npc-portrait');
+        const npcName = document.getElementById('npc-name');
+
+        // Initialize game renderer
+        async function initGame() {
+            game = new GameRenderer('game-container');
+        }
+
+        // Load players
+        async function loadPlayers() {
+            try {
+                const response = await fetch('/api/players');
+                const players = await response.json();
+
+                playerSelect.innerHTML = '<option value="">Select Player...</option>';
+                players.forEach(player => {
+                    const option = document.createElement('option');
+                    option.value = player.id;
+                    option.textContent = player.name;
+                    playerSelect.appendChild(option);
+                });
+            } catch (error) {
+                console.error('Failed to load players:', error);
+            }
+        }
+
+        // Update session info
+        async function getSessionData(playerId) {
+            const response = await fetch(`/api/session/${playerId}`);
+            const session = await response.json();
+
+            // Update UI Labels
+            gameLocation.textContent = session.location;
+            gameTime.textContent = ` - ${session.time}`;
+            chatLocation.textContent = session.location;
+            chatTime.textContent = ` (${session.time_of_day})`;
+
+            return session;
+        }
+
+        // SINGLE PLAYER SELECT LISTENER: Uses the ID directly
+        playerSelect.addEventListener('change', async (e) => {
+            const playerId = e.target.value;
+            if (!playerId) return;
+
+            currentPlayerId = playerId;
+            userInput.disabled = false;
+            sendBtn.disabled = false;
+            chatMessages.innerHTML = '';
+
+            // 1. Get session info (which now includes the crucial location_id)
+            const session = await getSessionData(playerId);
+
+            // 2. Load game assets using the ID from the backend
+            if (session.location_id) {
+                currentLocationId = session.location_id;
+                console.log("SUCCESS: Triggering PixiJS load for ID:", currentLocationId);
+                if (game) {
+                    await game.loadLocation(currentLocationId, playerId);
+                }
+            } else {
+                console.error("ERROR: No location_id returned from session!");
+            }
+
+            addMessage('assistant', `Welcome, ${session.player_name}! You are at ${session.location}.`);
+        });
+
+
+        // Toggle chat panel
+        toggleBtn.addEventListener('click', () => {
+            chatPanel.classList.toggle('collapsed');
+            toggleBtn.textContent = chatPanel.classList.contains('collapsed') ? 'Chat' : 'Chat';
+
+            // Resize game
+            setTimeout(() => {
+                if (game && game.app) {
+                    game.app.resize();
+                    game.onResize();
+                }
+            }, 300);
+        });
+
+        // NPC interaction from game
+        window.addEventListener('npc-interact', async (e) => {
+            const { npcId, npcName: name } = e.detail;
+            currentNpcId = npcId;
+
+            // Show NPC portrait
+            npcPortraitContainer.classList.add('visible');
+            npcPortrait.src = `/api/assets/portrait/${npcId}`;
+            document.getElementById('npc-name').textContent = name;
+
+            // Expand chat if collapsed
+            if (chatPanel.classList.contains('collapsed')) {
+                chatPanel.classList.remove('collapsed');
+                setTimeout(() => {
+                    if (game && game.app) {
+                        game.app.resize();
+                        game.onResize();
+                    }
+                }, 300);
+            }
+
+            // Send talk command
+            await sendMessage(`Talk to ${name}`);
+        });
+
+        // Clear NPC portrait when conversation ends (detect via message content)
+        function clearNpcPortrait() {
+            currentNpcId = null;
+            npcPortraitContainer.classList.remove('visible');
+        }
+
+        // Add message to chat
+        function addMessage(role, content) {
+            const messageEl = document.createElement('div');
+            messageEl.className = `message ${role}`;
+            messageEl.innerHTML = `<div class="message-content">${formatText(content)}</div>`;
+            chatMessages.appendChild(messageEl);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+            return messageEl;
+        }
+
+        // Create streaming message
+        function createStreamingMessage() {
+            const messageEl = document.createElement('div');
+            messageEl.className = 'message assistant';
+            messageEl.innerHTML = `
+                <div class="tools-container"></div>
+                <div class="message-content"></div>
+            `;
+            chatMessages.appendChild(messageEl);
+            return messageEl;
+        }
+
+        // Format text (simple markdown)
+        function formatText(text) {
+            if (!text) return '';
+            let formatted = escapeHtml(text);
+            formatted = formatted.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+            formatted = formatted.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+            formatted = formatted.replace(/\n/g, '<br>');
+            return formatted;
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // Show thinking indicator
+        function showThinking() {
+            const el = document.createElement('div');
+            el.className = 'message assistant thinking-message';
+            el.innerHTML = '<div class="thinking"><span></span><span></span><span></span></div>';
+            chatMessages.appendChild(el);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+            return el;
+        }
+
+        // Add tool pill
+        function addToolPill(container, tool) {
+            if (!container) return;
+            const existing = container.querySelector(`[data-tool-id="${tool.id}"]`);
+            if (existing) return;
+
+            const pill = document.createElement('span');
+            pill.className = `tool-pill ${tool.status || 'running'}`;
+            pill.dataset.toolId = tool.id;
+            pill.textContent = tool.name || 'tool';
+            container.appendChild(pill);
+        }
+
+        // Update tool pill
+        function updateToolPill(container, toolId, status) {
+            if (!container) return;
+            const pill = container.querySelector(`[data-tool-id="${toolId}"]`);
+            if (pill) {
+                pill.className = `tool-pill ${status}`;
+            }
+        }
+
+        // Send message
+        async function sendMessage(inputText = null) {
+            const input = inputText || userInput.value.trim();
+            if (!input || !currentPlayerId || isProcessing) return;
+
+            isProcessing = true;
+            if (!inputText) userInput.value = '';
+            userInput.disabled = true;
+            sendBtn.disabled = true;
+
+            // Add user message
+            addMessage('user', input);
+
+            // Show thinking
+            const thinkingEl = showThinking();
+
+            // Create streaming message
+            const messageEl = createStreamingMessage();
+            const toolsContainer = messageEl.querySelector('.tools-container');
+            const contentEl = messageEl.querySelector('.message-content');
+            let textBuffer = '';
+            let activeTools = {};
+
+            try {
+                const response = await fetch('/api/play', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        player_id: currentPlayerId,
+                        player_input: input
+                    })
+                });
+
+                // Remove thinking indicator
+                thinkingEl.remove();
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error: ${response.status}`);
+                }
+
+                // Process SSE stream
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    const chunk = decoder.decode(value, { stream: true });
+                    buffer += chunk;
+
+                    let boundary;
+                    while ((boundary = buffer.indexOf('\n\n')) !== -1) {
+                        const rawEvent = buffer.slice(0, boundary);
+                        buffer = buffer.slice(boundary + 2);
+
+                        if (!rawEvent.trim()) continue;
+
+                        const lines = rawEvent.split('\n');
+                        for (const line of lines) {
+                            if (line.startsWith('data:')) {
+                                const dataStr = line.slice(5).trim();
+                                if (!dataStr) continue;
+
+                                try {
+                                    const payload = JSON.parse(dataStr);
+                                    handleStreamEvent(payload, contentEl, toolsContainer, textBuffer, activeTools, (newBuffer) => { textBuffer = newBuffer; });
+                                } catch (e) {
+                                    console.error('Failed to parse SSE:', e);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Update session info (location might have changed)
+                await updateSessionInfo(currentPlayerId);
+
+                // Refresh game if location changed
+                if (game && currentLocationId) {
+                    await game.loadLocation(currentLocationId, currentPlayerId);
+                }
+
+            } catch (error) {
+                console.error('Error:', error);
+                if (thinkingEl.parentNode) thinkingEl.remove();
+                contentEl.innerHTML = `<span style="color: var(--error);">Error: ${escapeHtml(error.message)}</span>`;
+            } finally {
+                isProcessing = false;
+                userInput.disabled = false;
+                sendBtn.disabled = false;
+                userInput.focus();
+            }
+        }
+
+        // Handle stream event
+        function handleStreamEvent(payload, contentEl, toolsContainer, textBuffer, activeTools, setBuffer) {
+            if (!payload || typeof payload !== 'object') return;
+
+            switch (payload.type) {
+                case 'token':
+                    if (payload.data) {
+                        textBuffer += payload.data;
+                        setBuffer(textBuffer);
+                        contentEl.innerHTML = formatText(textBuffer);
+                        chatMessages.scrollTop = chatMessages.scrollHeight;
+                    }
+                    break;
+
+                case 'narration':
+                    if (payload.content) {
+                        textBuffer += payload.content;
+                        setBuffer(textBuffer);
+                        contentEl.innerHTML = formatText(textBuffer);
+                        chatMessages.scrollTop = chatMessages.scrollHeight;
+                    }
+                    break;
+
+                case 'tool_update':
+                    if (payload.tool) {
+                        const tool = payload.tool;
+                        if (!activeTools[tool.id]) {
+                            activeTools[tool.id] = tool;
+                            addToolPill(toolsContainer, tool);
+                        }
+                        updateToolPill(toolsContainer, tool.id, tool.status);
+                    }
+                    break;
+
+                case 'tool_summary':
+                    if (payload.payload && payload.payload.tools) {
+                        payload.payload.tools.forEach(tool => {
+                            updateToolPill(toolsContainer, tool.id, tool.status || 'success');
+                        });
+                    }
+                    break;
+
+                case 'error':
+                    const errorMsg = payload.message || payload.error || 'Unknown error';
+                    textBuffer += `\n\nError: ${errorMsg}`;
+                    setBuffer(textBuffer);
+                    contentEl.innerHTML = formatText(textBuffer);
+                    break;
+            }
+        }
+
+        // Event listeners
+        sendBtn.addEventListener('click', () => sendMessage());
+        userInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage();
+            }
+        });
+
+        // Initialize
+        initGame();
+        loadPlayers();
+    </script>
+</body>
+</html>
