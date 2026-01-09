@@ -72,8 +72,8 @@ class GameSession:
             )
             session.add(player)
 
-            # Set starting location (first location in DB)
-            starting_location = session.query(Location).first()
+            # Let player choose starting location
+            starting_location = self._choose_starting_location(session)
             if starting_location:
                 player.current_location_id = starting_location.id
                 starting_location.visited = True
@@ -82,6 +82,72 @@ class GameSession:
             session.commit()
 
             return player.id
+
+    def _choose_starting_location(self, session) -> Location | None:
+        """Let the player choose their starting location.
+
+        Args:
+            session: Database session.
+
+        Returns:
+            The chosen Location or None.
+        """
+        # Get suitable starting locations (settlements, cities, stations, POIs)
+        starting_types = ["settlement", "city", "town", "station", "poi", "district"]
+        locations = session.query(Location).all()
+
+        # Filter to good starting points
+        starting_locations = [
+            loc for loc in locations
+            if loc.type.value in starting_types
+        ]
+
+        # Fallback to all locations if no settlements
+        if not starting_locations:
+            starting_locations = locations
+
+        if not starting_locations:
+            return None
+
+        # Show available locations
+        self.console.print("\n[bold]Choose your starting location:[/bold]")
+        self.console.print("[dim]Type the name of a location to begin there.[/dim]\n")
+
+        for loc in starting_locations[:15]:  # Show up to 15
+            loc_type = loc.type.value if hasattr(loc.type, 'value') else str(loc.type)
+            self.console.print(f"  • [cyan]{loc.name}[/cyan] ({loc_type})")
+
+        if len(starting_locations) > 15:
+            self.console.print(f"  [dim]...and {len(starting_locations) - 15} more[/dim]")
+
+        self.console.print()
+
+        # Get player's choice
+        while True:
+            choice = Prompt.ask("Starting location", default=starting_locations[0].name)
+
+            # Fuzzy match - find location by name (case insensitive, partial match)
+            choice_lower = choice.lower().strip()
+            matched = None
+
+            # Exact match first
+            for loc in starting_locations:
+                if loc.name.lower() == choice_lower:
+                    matched = loc
+                    break
+
+            # Partial match if no exact
+            if not matched:
+                for loc in starting_locations:
+                    if choice_lower in loc.name.lower():
+                        matched = loc
+                        break
+
+            if matched:
+                self.console.print(f"\n[green]Starting in: {matched.name}[/green]\n")
+                return matched
+            else:
+                self.console.print(f"[yellow]Location '{choice}' not found. Try again.[/yellow]")
 
     def _get_or_create_player(self) -> str:
         """Get existing player or create a new one.
@@ -92,7 +158,6 @@ class GameSession:
         with get_session() as session:
             # Check for existing player
             players = session.query(Player).all()
-
             if len(players) > 0:
                 self.console.print(Panel(
                     "Welcome back, adventurer! Select which character to continue.",
@@ -128,8 +193,8 @@ class GameSession:
             )
             session.add(player)
 
-            # Set starting location (first location in DB)
-            starting_location = session.query(Location).first()
+            # Let player choose starting location
+            starting_location = self._choose_starting_location(session)
             if starting_location:
                 player.current_location_id = starting_location.id
                 starting_location.visited = True

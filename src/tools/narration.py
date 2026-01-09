@@ -1,6 +1,7 @@
 """Tools for narration and output to the player."""
 
-from typing import Any
+import contextvars
+from typing import Any, Callable
 
 from rich.console import Console
 from rich.markdown import Markdown
@@ -10,6 +11,14 @@ from strands import tool
 
 # Global console for rich output
 _console: Console | None = None
+
+# Context variable for web output capture (works across async/thread boundaries)
+_web_callback_var: contextvars.ContextVar[Callable[[str], None] | None] = contextvars.ContextVar(
+    'web_callback', default=None
+)
+
+# Also keep a simple global as fallback (for when context doesn't propagate)
+_global_web_callback: Callable[[str], None] | None = None
 
 
 def get_console() -> Console:
@@ -26,6 +35,46 @@ def set_console(console: Console) -> None:
     _console = console
 
 
+def set_web_output_callback(callback: Callable[[str], None] | None) -> None:
+    """Set a callback for web output capture.
+
+    Args:
+        callback: Function that receives narration text, or None to disable.
+    """
+    global _global_web_callback
+    _global_web_callback = callback
+    _web_callback_var.set(callback)
+
+
+def get_web_output_callback() -> Callable[[str], None] | None:
+    """Get the current web output callback."""
+    # Try context var first, fall back to global
+    callback = _web_callback_var.get(None)
+    if callback is None:
+        callback = _global_web_callback
+    return callback
+
+
+def _output_text(text: str, console_func: Callable[[], None]) -> None:
+    """Output text either to web callback or console.
+
+    Args:
+        text: Plain text to send to web.
+        console_func: Function to call for console output.
+    """
+    callback = get_web_output_callback()
+    if callback:
+        # Web mode: send plain text to callback
+        try:
+            callback(text)
+        except Exception as e:
+            # If callback fails, fall back to console
+            console_func()
+    else:
+        # Console mode: use rich formatting
+        console_func()
+
+
 @tool
 def narrate(text: str, style: str = "narrative") -> dict[str, Any]:
     """Output narrative text to the player.
@@ -39,16 +88,19 @@ def narrate(text: str, style: str = "narrative") -> dict[str, Any]:
     """
     console = get_console()
 
-    if style == "narrative":
-        console.print(Markdown(text))
-    elif style == "action":
-        console.print(Text(text, style="bold yellow"))
-    elif style == "system":
-        console.print(Panel(text, title="System", border_style="dim"))
-    elif style == "whisper":
-        console.print(Text(text, style="dim italic"))
-    else:
-        console.print(text)
+    def console_output():
+        if style == "narrative":
+            console.print(Markdown(text))
+        elif style == "action":
+            console.print(Text(text, style="bold yellow"))
+        elif style == "system":
+            console.print(Panel(text, title="System", border_style="dim"))
+        elif style == "whisper":
+            console.print(Text(text, style="dim italic"))
+        else:
+            console.print(text)
+
+    _output_text(text + "\n\n", console_output)
 
     return {"success": True, "style": style, "length": len(text)}
 
@@ -86,15 +138,23 @@ def speak(
 
     style = tone_styles.get(tone, "white")
 
-    # Build the output
+    def console_output():
+        # Build the output
+        if action:
+            console.print(Text(f"*{action}*", style="dim italic"))
+
+        # Create speaker label with dialogue
+        speaker = Text(f"{npc_name}: ", style="bold cyan")
+        dialogue = Text(f'"{text}"', style=style)
+        console.print(speaker + dialogue)
+
+    # Plain text for web
+    plain_text = ""
     if action:
-        console.print(Text(f"*{action}*", style="dim italic"))
+        plain_text += f"*{action}*\n"
+    plain_text += f'{npc_name}: "{text}"\n\n'
 
-    # Create speaker label with dialogue
-    speaker = Text(f"{npc_name}: ", style="bold cyan")
-    dialogue = Text(f'"{text}"', style=style)
-
-    console.print(speaker + dialogue)
+    _output_text(plain_text, console_output)
 
     return {"success": True, "npc": npc_name, "tone": tone}
 
@@ -136,12 +196,18 @@ def describe_location(
     if npcs_visible:
         content += f"\n\n*You see: {', '.join(npcs_visible)}*"
 
-    console.print(Panel(
-        Markdown(content),
-        title=f"[bold]{name}[/bold]",
-        subtitle=f"[dim]{time_of_day}[/dim]",
-        border_style=border_style,
-    ))
+    def console_output():
+        console.print(Panel(
+            Markdown(content),
+            title=f"[bold]{name}[/bold]",
+            subtitle=f"[dim]{time_of_day}[/dim]",
+            border_style=border_style,
+        ))
+
+    # Plain text for web
+    plain_text = f"**{name}** ({time_of_day})\n\n{content}\n\n"
+
+    _output_text(plain_text, console_output)
 
     return {"success": True, "location": name}
 
@@ -183,13 +249,16 @@ def show_combat_action(
     else:
         text = f"{actor} {action}!"
 
-    if dramatic:
-        console.print(Panel(
-            Text(text, style=style, justify="center"),
-            border_style="red",
-        ))
-    else:
-        console.print(Text(f"  ⚔ {text}", style=style))
+    def console_output():
+        if dramatic:
+            console.print(Panel(
+                Text(text, style=style, justify="center"),
+                border_style="red",
+            ))
+        else:
+            console.print(Text(f"  ⚔ {text}", style=style))
+
+    _output_text(f"⚔ {text}\n\n", console_output)
 
     return {"success": True, "result": result}
 
@@ -251,7 +320,10 @@ def show_time_passage(hours: float, description: str = "") -> dict[str, Any]:
     if description:
         text += f" {description}"
 
-    console.print(Text(text, style="dim italic"))
+    def console_output():
+        console.print(Text(text, style="dim italic"))
+
+    _output_text(text + "\n\n", console_output)
 
     return {"success": True, "hours": hours}
 
@@ -317,10 +389,23 @@ def show_quest_update(
         for obj in objectives:
             content += f"\n• {obj}"
 
-    console.print(Panel(
-        Markdown(content),
-        title=f"[{style}]{header}[/{style}]",
-        border_style=style.replace("bold ", ""),
-    ))
+    def console_output():
+        console.print(Panel(
+            Markdown(content),
+            title=f"[{style}]{header}[/{style}]",
+            border_style=style.replace("bold ", ""),
+        ))
+
+    # Plain text for web
+    plain_text = f"{header}: {title}\n"
+    if description:
+        plain_text += f"{description}\n"
+    if objectives:
+        plain_text += "Objectives:\n"
+        for obj in objectives:
+            plain_text += f"• {obj}\n"
+    plain_text += "\n"
+
+    _output_text(plain_text, console_output)
 
     return {"success": True, "quest": title, "type": update_type}

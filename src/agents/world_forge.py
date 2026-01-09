@@ -95,10 +95,47 @@ You MUST generate in this order:
    - Major NPCs (10-15): Leaders, quest givers, antagonists
    - Minor NPCs (30-50): Shopkeepers, guards, contacts
    - Note: Ambient NPCs are generated on-demand during play
-7. **Quests** - Create 5-10 pre-seeded quests:
-   - Main story quests (2-3): Epic storyline
-   - Side quests (3-5): Smaller tasks from NPCs
-   - Each quest needs an assigned_by_npc_id (the NPC who will offer it)
+7. **Quests** - Create 8-15 pre-seeded quests
+
+## QUEST DESIGN
+
+Quests should be **varied** - mix combat, investigation, diplomacy, moral dilemmas, personal stakes. Don't make them all the same type.
+
+Each quest needs:
+- **Hook**: Why should the player care? (urgency, mystery, personal connection)
+- **Objectives**: Guideline steps, not rigid requirements. The DM adapts these based on player choices.
+- **Complication**: Something unexpected that raises the stakes mid-quest
+- **Connections**: Link to NPCs, factions, or other quests
+
+**Objectives are guidelines, not scripts.** The DM will adapt based on how the player approaches things. Write objectives that suggest a flow but leave room for creative solutions.
+
+**Example 1 - Political Intrigue:**
+```
+Title: "Whispers in the Senate"
+Giver: Senator Organa
+Hook: Strange voting patterns suggest corruption. He needs someone outside the inner circle.
+Objectives:
+  1. Investigate senatorial records
+  2. Meet an informant in the lower district
+  3. Discover evidence pointing to a larger conspiracy
+Complication: The informant is killed - evidence points to "friendly" forces
+Connection: Leads to questions about who's really in control
+```
+
+**Example 2 - Personal/Action:**
+```
+Title: "The Clone's Secret"
+Giver: Fives (a clone trooper)
+Hook: Some clones are having "dreams" they can't explain. Something's wrong.
+Objectives:
+  1. Interview affected clones
+  2. Access classified medical records
+  3. Confront someone who knows the truth
+Complication: The truth is far worse than expected - and heavily guarded
+Connection: Reveals a faction secret that changes everything
+```
+
+Notice how both have clear direction but don't dictate exactly how the player solves each step.
 
 ## TOOL USAGE
 

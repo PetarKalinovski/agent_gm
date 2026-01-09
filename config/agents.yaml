@@ -5,6 +5,8 @@
 #   - openrouter/openai/gpt-4o
 #   - anthropic/claude-3-sonnet-20240229
 #   - openai/gpt-4o
+#   openrouter/z-ai/glm-4.7
+#   openrouter/deepseek/deepseek-v3.2
 
 agents:
   dm_orchestrator:
@@ -33,7 +35,7 @@ agents:
 
   # World Forge agents
   world_forge:
-    model: "openrouter/z-ai/glm-4.7"
+    model: "openrouter/deepseek/deepseek-v3.2"
     temperature: 0.8
     max_tokens: 4096
     description: "Master agent that generates entire game worlds from a premise"

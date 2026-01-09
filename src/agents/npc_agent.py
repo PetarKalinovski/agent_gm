@@ -9,7 +9,7 @@ from strands_semantic_memory import (
     SemanticMemoryHook,
 )
 from src.agents.base import create_agent
-from src.tools.world_read import get_npc, get_npc_relationship, get_world_clock, get_available_quests_for_npc
+from src.tools.world_read import get_npc, get_npc_relationship, get_world_clock, get_available_quests_for_npc, get_world_bible, get_active_quests, get_player
 from src.tools.world_write import update_npc_relationship, update_npc_mood, update_npc, activate_quest
 from src.tools.narration import speak, show_quest_update
 
@@ -77,7 +77,9 @@ def build_npc_system_prompt(npc: dict[str, Any], relationship: dict[str, Any]) -
   - Change your profession if your role evolves
 
 **Quest Offering:**
-- At the START of a conversation, check `get_available_quests_for_npc` to see if you have tasks to offer
+- Always run get_player to understand who the player is, it should to some extent inform your decisions.
+- At the START of a conversation, check `get_available_quests_for_npc` to see if you have tasks to offer.
+- Consider the player's trust level and disposition before offering quests
 - If you have quests and the conversation feels right, naturally work the task into dialogue
 - When the player accepts a task, call `activate_quest` then `show_quest_update` to notify them
 - Don't force quests - weave them naturally into conversation based on your character's goals
@@ -98,8 +100,11 @@ NPC_TOOLS = [
     get_npc_relationship,
     get_npc,
     get_available_quests_for_npc,
+    get_active_quests,
+    get_world_bible,
     activate_quest,
     show_quest_update,
+    get_player,
 ]
 
 
@@ -122,13 +127,15 @@ class NPCAgent:
     def start_conversation(
         self,
         npc: dict[str, Any] | None = None,
-        relationship: dict[str, Any] | None = None
+        relationship: dict[str, Any] | None = None,
+        context: str = ""
     ) -> str:
         """Start a conversation with the NPC.
 
         Args:
             npc: Optional pre-fetched NPC data.
             relationship: Optional pre-fetched relationship data.
+            context: Narrative context from the DM about the current situation.
 
         Returns:
             The NPC's greeting.
@@ -155,7 +162,7 @@ class NPCAgent:
 
         self.agent = create_agent(
             agent_name="npc_agent",
-            system_prompt=system_prompt,
+            system_prompt=system_prompt + f"The Player's Name is: {get_player(self.player_id).get("name")}",
             tools=NPC_TOOLS,
             session_manager=session_manager,
             conversation_manager=conv_manager,
@@ -167,24 +174,29 @@ class NPCAgent:
         trust = self.relationship.get("trust_level", 50)
         disposition = self.relationship.get("current_disposition", "neutral")
 
-        greeting_prompt = f"""The player approaches you.
+        # Build context section
+        situation_context = f"Current situation: {context}" if context else "The player approaches you normally."
 
-Context:
-- Your disposition toward them: {disposition}
-- Your trust level: {trust}/100
+        greeting_prompt = f"""
 
-Generate an appropriate greeting based on your character and relationship.
+{situation_context}
+
+Your disposition toward them: {disposition}
+Your trust level: {trust}/100
+
+Generate an appropriate response based on your character, relationship, and the current situation.
 Use the speak tool to deliver your greeting."""
 
         # Call the agent - Strands handles conversation history automatically
         response = self.agent(greeting_prompt)
-        return str(response)
+        return response
 
-    def respond(self, player_input: str) -> dict[str, Any]:
+    def respond(self, player_input: str, context: str = "") -> dict[str, Any]:
         """Generate NPC response to player input.
 
         Args:
             player_input: What the player says.
+            context: Narrative context from the DM about the current situation.
 
         Returns:
             Dictionary with response and any actions to take.
@@ -192,8 +204,14 @@ Use the speak tool to deliver your greeting."""
         if not self.agent:
             return {"response": "...", "conversation_ended": True}
 
-        # Simply call the agent - it has the full conversation history via session manager
-        response = self.agent(f'The player says: "{player_input}"')
+        # Build the prompt with context if provided
+        if context:
+            prompt = f'Current situation: {context}\n\nThe player says: "{player_input}"'
+        else:
+            prompt = f'The player says: "{player_input}"'
+
+        # Call the agent - it has the full conversation history via session manager
+        response = self.agent(prompt)
         response_text = str(response)
 
         # Check if conversation ended

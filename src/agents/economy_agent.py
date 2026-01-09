@@ -7,16 +7,16 @@ from strands.agent import AgentResult
 from strands.session.file_session_manager import FileSessionManager
 
 from src.agents.base import create_agent
-from src.tools.world_read import (
-    get_npc,
-    get_player,
-)
-from src.tools.world_write import (
+from src.tools.world_read.npcs import get_npc
+from src.tools.world_read.player import get_player
+
+from src.tools.world_write.items import (
     create_item_template,
     get_inventory,
     adjust_currency,
     transfer_item,
     use_item,
+    spawn_item_to_user,
 )
 
 
@@ -52,6 +52,7 @@ All item operations are type-safe and validated.
   - Set `is_purchase=True` when player is buying from merchant
 - Use `use_item` to consume items and apply effects
 - Use `adjust_currency` to give/take gold
+- You can spawn items directly to users with `spawn_item_to_user` for rewards or loot.
 
 **Example Workflows:**
 
@@ -81,6 +82,7 @@ ECONOMY_TOOLS = [
     adjust_currency,
     transfer_item,
     use_item,
+    spawn_item_to_user,
 ]
 
 

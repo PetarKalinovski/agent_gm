@@ -3,6 +3,7 @@
 import argparse
 import sys
 from dotenv import load_dotenv
+from src.config import load_settings
 
 load_dotenv()
 
@@ -15,12 +16,12 @@ def main():
         "command",
         nargs="?",
         default="play",
-        choices=["play", "seed", "clear"],
-        help="Command to run: play (default), seed (create test world), clear (reset world)"
+        choices=["play", "seed", "clear", "web"],
+        help="Command to run: play (default), seed (create test world), clear (reset world), web (start web frontend)"
     )
     parser.add_argument(
         "--db",
-        default="data/game.db",
+        default=f"{load_settings().database.path}",
         help="Path to database file (default: data/game.db)"
     )
     parser.add_argument(
@@ -61,6 +62,12 @@ def main():
             session.create_player()
         else:
             session.run_game()
+    elif args.command == "web":
+        # Run the web frontend
+        from src.web import run_server
+        print("Starting Agent GM Web Frontend...")
+        print("Open http://localhost:8000 in your browser")
+        run_server(host="0.0.0.0", port=8000)
 
 
 if __name__ == "__main__":

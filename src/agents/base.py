@@ -66,6 +66,7 @@ def create_agent(
     session_manager: Any = None,
     conversation_manager: Any = None,
     hooks: list | None = None,
+    callback_handler: Any = None,
 ) -> Agent:
     """Create a Strands Agent with configuration from agents.yaml.
 
@@ -74,11 +75,30 @@ def create_agent(
         system_prompt: The system prompt for the agent.
         tools: List of tools the agent can use.
         session_manager: Optional session manager for conversation history.
+        conversation_manager: Optional conversation manager.
+        hooks: Optional list of hooks.
+        callback_handler: Optional callback handler for tool tracking.
+            If None, will try to use the context callback handler.
 
     Returns:
         Configured Strands Agent.
     """
+    from src.agents.callback_context import get_callback_handler
+
     model = create_model(agent_name)
+
+    # Use provided callback_handler, or fall back to context callback
+    handler = callback_handler
+    if handler is None:
+        # return Agent(
+        #     model=model,
+        #     system_prompt=system_prompt,
+        #     tools=tools or [],
+        #     session_manager=session_manager,
+        #     conversation_manager=conversation_manager,
+        #     hooks=hooks or [],
+        # )
+        handler = get_callback_handler()
 
     return Agent(
         model=model,
@@ -86,7 +106,8 @@ def create_agent(
         tools=tools or [],
         session_manager=session_manager,
         conversation_manager=conversation_manager,
-        hooks=hooks or []
+        hooks=hooks or [],
+        callback_handler=handler,
     )
 
 

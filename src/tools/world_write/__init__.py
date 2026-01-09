@@ -45,6 +45,7 @@ from src.tools.world_write.items import (
     get_inventory,
     transfer_item,
     use_item,
+    spawn_item_to_user,
 )
 
 # Event tools
@@ -58,6 +59,14 @@ from src.tools.world_write.world_bible import (
 
 # Time tools
 from src.tools.world_write.time import advance_time
+
+# Quest tools
+from src.tools.world_write.quests import (
+    activate_quest,
+    create_quest,
+    update_quest_objectives,
+    update_quest_status,
+)
 
 __all__ = [
     # Locations
@@ -91,6 +100,7 @@ __all__ = [
     "adjust_currency",
     "transfer_item",
     "use_item",
+    "spawn_item_to_user",
     # Events
     "create_event",
     # World Bible
@@ -98,4 +108,9 @@ __all__ = [
     "create_historical_event",
     # Time
     "advance_time",
+    # Quests
+    "create_quest",
+    "activate_quest",
+    "update_quest_status",
+    "update_quest_objectives",
 ]

@@ -22,6 +22,7 @@ from src.tools.world_read import (
     get_world_state_summary,
     get_active_quests,
     get_world_bible_for_dm,
+    get_all_quests,
 )
 from src.tools.world_write import (
     move_player,
@@ -82,11 +83,15 @@ DM_SYSTEM_PROMPT = """You are the Dungeon Master (DM) for an immersive, dynamic 
 
 **1. NPC Interactions:**
 - For **named NPCs** (characters with personalities, backstories, or ongoing relationships):
-  - Use `prompt_npc_agent(player_id, npc_id, player_input, is_first_interaction=True/False)`
+  - Use `prompt_npc_agent(player_id, npc_id, player_input, is_first_interaction, context)`
   - Set `is_first_interaction=True` the first time the player talks to this NPC in the current session
+  - **IMPORTANT**: Always pass `context` to sync the NPC with the current narrative situation:
+    - Include what you just narrated (events, atmosphere, things the NPC would see/know)
+    - Include relevant quest context if the NPC is involved in the player's active quests
+    - Include any world events or environmental details the NPC should react to
+  - Example: Player asks about the holocron you just described → Call `prompt_npc_agent(player_id, npc_id, "What is this?", False, "A glowing holocron has just appeared on the table. The NPC witnessed it materialize.")`
   - The NPC agent handles personality, memory, and relationship dynamics
   - You remain in control - narrate around the NPC's response, inject world events, etc.
-  - Example: Player says "I ask the bartender about rumors" → Call `prompt_npc_agent` → Narrate the response and atmosphere
 - For **unnamed/ambient NPCs** (guards, shoppers, background characters):
   - Use `narrate` to include their brief dialogue as part of the scene
   - Example: `narrate("A guard calls out: 'Halt! State your business!'")`
@@ -140,6 +145,7 @@ DM_TOOLS = [
     get_player,
     get_active_quests,
     get_world_state_summary,
+    get_all_quests,
     # Write tools
     move_player,
     move_npc,
@@ -155,19 +161,24 @@ DM_TOOLS = [
     prompt_creator_agent,
     prompt_npc_agent,
     prompt_economy_agent,
+
+    # Journal tool
+    journal,
 ]
 
 
 class DMOrchestrator:
     """The main Dungeon Master agent that orchestrates the game."""
 
-    def __init__(self, player_id: str):
+    def __init__(self, player_id: str, callback_handler: Any = None):
         """Initialize the DM.
 
         Args:
             player_id: The player's ID in the database.
+            callback_handler: Optional callback handler for tool tracking.
         """
         self.player_id = player_id
+        self.callback_handler = callback_handler
 
         session_manager = FileSessionManager(session_id=player_id)
 
@@ -184,13 +195,15 @@ class DMOrchestrator:
         )
         semantic_memory_hook = SemanticMemoryHook()
 
+
         self.agent = create_agent(
             agent_name="dm_orchestrator",
-            system_prompt=DM_SYSTEM_PROMPT + world_context + f"\n\nThe current player_id is: {player_id}",
+            system_prompt=DM_SYSTEM_PROMPT + world_context + f"\n\nThe current player_id is: {player_id}, with name: {get_player(player_id).get('name', 'Unknown')}.",
             tools=DM_TOOLS,
             session_manager=session_manager,
             conversation_manager=conv_manager,
-            hooks=[semantic_memory_hook]
+            hooks=[semantic_memory_hook],
+            callback_handler=callback_handler,
         )
 
     def process_input(self, player_input: str) -> str:
@@ -217,6 +230,16 @@ Player says: {player_input}"""
         response = self.agent(context)
 
         return str(response)
+
+    def get_conv_state(self) -> dict[str, Any]:
+        """Get the current conversation state.
+
+        Returns:
+            The conversation state as a dictionary.
+        """
+        if self.agent.conversation_manager:
+            return self.agent.conversation_manager.get_state()
+        return {}
 
     def describe_scene(self) -> str:
         """Generate an initial scene description.

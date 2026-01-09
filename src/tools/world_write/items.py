@@ -323,3 +323,71 @@ def use_item(user_id: str, item_id: str, user_type: str = "player") -> dict[str,
             "item_used": item.name,
             "effects": effects_applied,
         }
+
+@tool
+def spawn_item_to_user(
+    user_id: str,
+    item_data: dict[str, Any],
+    quantity: int = 1,
+    user_type: str = "player",
+) -> dict[str, Any]:
+    """Spawn an item directly into a player's or NPC's inventory.
+
+    Args:
+        user_id: The user's ID.
+        item_data: Dictionary with item template data.
+        quantity: How many to spawn.
+        user_type: Type of user ("player" or "npc").
+
+    Returns:
+        Dictionary with result.
+    """
+    with get_session() as session:
+        if user_type == "player":
+            user = session.get(Player, user_id)
+            inv_field = "inventory"
+        else:
+            user = session.get(NPC, user_id)
+            inv_field = "inventory_notable"
+
+        if not user:
+            return {"error": "User not found"}
+
+        inventory_raw = getattr(user, inv_field) or []
+
+        # Parse inventory as Item objects
+        inventory = [Item.from_dict(item) for item in inventory_raw]
+
+        # Create new item
+        new_item = Item(
+            id=item_data["id"],
+            name=item_data["name"],
+            type=item_data["type"],
+            value=item_data["value"],
+            description=item_data["description"],
+            effects=item_data.get("effects", {}),
+            stackable=item_data.get("stackable", True),
+            quantity=quantity,
+        )
+
+        # Add to inventory
+        dest_item_idx = None
+        for idx, item in enumerate(inventory):
+            if item.id == new_item.id and item.stackable:
+                dest_item_idx = idx
+                break
+
+        if dest_item_idx is not None:
+            inventory[dest_item_idx].quantity += quantity
+        else:
+            inventory.append(new_item)
+
+        # Convert back to dicts and save
+        setattr(user, inv_field, [item.to_dict() for item in inventory])
+        session.commit()
+
+        return {
+            "success": True,
+            "item_id": new_item.id,
+            "quantity": quantity,
+        }

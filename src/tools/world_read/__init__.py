@@ -51,6 +51,14 @@ from src.tools.world_read.player import (
 # World State tools
 from src.tools.world_read.world_state import get_world_state_summary
 
+# Quest tools
+from src.tools.world_read.quests import (
+    get_active_quests,
+    get_all_quests,
+    get_available_quests_for_npc,
+    get_quest,
+)
+
 __all__ = [
     # Locations
     "get_current_location",
@@ -85,4 +93,9 @@ __all__ = [
     "get_world_clock",
     # World State
     "get_world_state_summary",
+    # Quests
+    "get_active_quests",
+    "get_all_quests",
+    "get_available_quests_for_npc",
+    "get_quest",
 ]

@@ -28,7 +28,7 @@ st.set_page_config(
 from src.models import init_db, get_session
 from src.models import (
     Faction, FactionRelationship, Location, NPC, WorldBible,
-    HistoricalEvent, WorldClock, Event, Connection
+    HistoricalEvent, WorldClock, Event, Connection, Player
 )
 from src.models.quests import Quest, QuestStatus
 
@@ -90,6 +90,11 @@ def get_quests():
         return session.query(Quest).all()
 
 
+def get_players():
+    with get_session() as session:
+        return session.query(Player).all()
+
+
 def delete_entity(entity_type, entity_id):
     """Delete an entity from the database."""
     with get_session() as session:
@@ -120,7 +125,7 @@ init_database()
 st.sidebar.title("🌍 World Viewer")
 page = st.sidebar.radio(
     "Navigate",
-    ["Overview", "Factions", "Locations", "Connections", "NPCs", "Quests", "History", "Events", "Raw Data"]
+    ["Overview", "Players", "Factions", "Locations", "Connections", "NPCs", "Quests", "Items", "History", "Events", "Raw Data"]
 )
 
 # Main content
@@ -178,6 +183,146 @@ if page == "Overview":
         ]
         df = pd.DataFrame(faction_data)
         st.bar_chart(df.set_index("Name")["Power"])
+
+elif page == "Players":
+    st.title("👤 Player Characters")
+
+    players = get_players()
+    locations = get_locations()
+    factions = get_factions()
+    location_names = {l.id: l.name for l in locations}
+    location_names[None] = "Unknown"
+    faction_names = {f.id: f.name for f in factions}
+
+    if not players:
+        st.warning("No players found. Start a game to create a player.")
+        st.stop()
+
+    # Player selector if multiple
+    if len(players) > 1:
+        player_names = {p.id: p.name for p in players}
+        selected_player_id = st.selectbox(
+            "Select Player",
+            options=[p.id for p in players],
+            format_func=lambda x: player_names[x]
+        )
+        player = next(p for p in players if p.id == selected_player_id)
+    else:
+        player = players[0]
+
+    # Player details
+    col1, col2 = st.columns([2, 1])
+
+    with col1:
+        st.header(f"🎭 {player.name}")
+        st.markdown(f"**Description:** {player.description}")
+        st.markdown(f"**Background:** {player.background or 'Not specified'}")
+
+        if player.traits:
+            st.markdown(f"**Traits:** {', '.join(player.traits)}")
+
+        st.markdown(f"**Location:** {location_names.get(player.current_location_id, 'Unknown')}")
+
+    with col2:
+        # Status
+        health_colors = {
+            "healthy": "green",
+            "winded": "yellow",
+            "hurt": "orange",
+            "badly_hurt": "red",
+            "critical": "darkred"
+        }
+        health_color = health_colors.get(player.health_status, "gray")
+        st.markdown(f"**Health:** :{health_color}[{player.health_status}]")
+        st.metric("Currency", f"{player.currency} cr")
+
+        if player.party_members:
+            st.markdown(f"**Party:** {len(player.party_members)} members")
+
+    # Inventory Section
+    st.subheader("🎒 Inventory")
+    if player.inventory:
+        inv_cols = st.columns(3)
+        for idx, item in enumerate(player.inventory):
+            with inv_cols[idx % 3]:
+                item_type_emoji = {
+                    "consumable": "🧪", "weapon": "⚔️", "armor": "🛡️",
+                    "quest_item": "📜", "misc": "📦"
+                }.get(item.get("type", "misc"), "📦")
+                qty = item.get("quantity", 1)
+                st.markdown(f"{item_type_emoji} **{item.get('name')}** x{qty}")
+    else:
+        st.info("Empty inventory")
+
+    # Reputation Section
+    if player.reputation:
+        st.subheader("📊 Faction Reputation")
+        for faction_id, score in player.reputation.items():
+            faction_name = faction_names.get(faction_id, faction_id)
+            st.progress(min(100, max(0, score + 50)) / 100, text=f"{faction_name}: {score}")
+
+    # Active Quests
+    if player.active_quests:
+        st.subheader("📜 Active Quests")
+        for quest_id in player.active_quests:
+            st.markdown(f"• {quest_id}")
+
+    st.divider()
+
+    # Edit Form
+    st.header("✏️ Edit Player")
+    with st.form(key=f"edit_player_{player.id}"):
+        new_name = st.text_input("Name", value=player.name)
+        new_description = st.text_area("Description", value=player.description)
+        new_background = st.text_area("Background", value=player.background or "")
+        new_traits = st.text_input("Traits (comma separated)", value=", ".join(player.traits) if player.traits else "")
+
+        col1, col2 = st.columns(2)
+        with col1:
+            new_health = st.selectbox(
+                "Health Status",
+                ["healthy", "winded", "hurt", "badly_hurt", "critical"],
+                index=["healthy", "winded", "hurt", "badly_hurt", "critical"].index(player.health_status) if player.health_status in ["healthy", "winded", "hurt", "badly_hurt", "critical"] else 0
+            )
+        with col2:
+            new_currency = st.number_input("Currency", value=player.currency, min_value=0)
+
+        new_location = st.selectbox(
+            "Current Location",
+            options=[None] + [l.id for l in locations],
+            format_func=lambda x: location_names.get(x, "Unknown"),
+            index=([None] + [l.id for l in locations]).index(player.current_location_id) if player.current_location_id in [l.id for l in locations] else 0
+        )
+
+        if st.form_submit_button("Save Changes", type="primary"):
+            with get_session() as session:
+                player_obj = session.get(Player, player.id)
+                if player_obj:
+                    player_obj.name = new_name
+                    player_obj.description = new_description
+                    player_obj.background = new_background
+                    player_obj.traits = [t.strip() for t in new_traits.split(",") if t.strip()]
+                    player_obj.health_status = new_health
+                    player_obj.currency = new_currency
+                    player_obj.current_location_id = new_location
+                    session.commit()
+                    st.success(f"Player '{new_name}' updated!")
+                    st.rerun()
+
+    # Delete player (with confirmation)
+    st.divider()
+    if st.button(f"🗑️ Delete {player.name}", type="secondary"):
+        if st.session_state.get(f"confirm_delete_player_{player.id}", False):
+            with get_session() as session:
+                player_obj = session.get(Player, player.id)
+                if player_obj:
+                    session.delete(player_obj)
+                    session.commit()
+                    st.success(f"Deleted {player.name}")
+                    st.rerun()
+        else:
+            st.session_state[f"confirm_delete_player_{player.id}"] = True
+            st.warning("Click again to confirm deletion")
 
 elif page == "Factions":
     st.title("⚔️ Factions")
@@ -862,6 +1007,116 @@ elif page == "Quests":
                     st.rerun()
             else:
                 st.error("Quest title is required")
+
+elif page == "Items":
+    st.title("🎒 Items & Inventories")
+
+    players = get_players()
+    npcs = get_npcs()
+    locations = get_locations()
+    location_names = {l.id: l.name for l in locations}
+
+    # Player Inventories
+    st.header("👤 Player Inventories")
+    if not players:
+        st.info("No players found.")
+    else:
+        for player in players:
+            with st.expander(f"**{player.name}** - {player.currency} credits"):
+                col1, col2 = st.columns([2, 1])
+
+                with col1:
+                    if player.inventory:
+                        st.markdown("**Items:**")
+                        for item in player.inventory:
+                            item_type_emoji = {
+                                "consumable": "🧪",
+                                "weapon": "⚔️",
+                                "armor": "🛡️",
+                                "quest_item": "📜",
+                                "misc": "📦"
+                            }.get(item.get("type", "misc"), "📦")
+
+                            qty = item.get("quantity", 1)
+                            qty_str = f" x{qty}" if qty > 1 else ""
+                            value = item.get("value", 0)
+
+                            st.markdown(f"{item_type_emoji} **{item.get('name', 'Unknown')}**{qty_str} ({value} cr)")
+                            if item.get("description"):
+                                st.caption(item.get("description"))
+                            if item.get("effects"):
+                                st.caption(f"Effects: {item.get('effects')}")
+                    else:
+                        st.info("Empty inventory")
+
+                with col2:
+                    st.markdown(f"**Health:** {player.health_status}")
+                    st.markdown(f"**Location:** {location_names.get(player.current_location_id, 'Unknown')}")
+
+    st.divider()
+
+    # NPC Inventories (only those with items)
+    st.header("👥 NPC Notable Items")
+    npcs_with_items = [n for n in npcs if n.inventory_notable]
+
+    if not npcs_with_items:
+        st.info("No NPCs with notable items.")
+    else:
+        for npc in npcs_with_items:
+            with st.expander(f"**{npc.name}** ({npc.profession}) - {location_names.get(npc.current_location_id, 'Unknown')}"):
+                for item in npc.inventory_notable:
+                    item_type_emoji = {
+                        "consumable": "🧪",
+                        "weapon": "⚔️",
+                        "armor": "🛡️",
+                        "quest_item": "📜",
+                        "misc": "📦"
+                    }.get(item.get("type", "misc"), "📦")
+
+                    qty = item.get("quantity", 1)
+                    qty_str = f" x{qty}" if qty > 1 else ""
+                    value = item.get("value", 0)
+
+                    st.markdown(f"{item_type_emoji} **{item.get('name', 'Unknown')}**{qty_str} ({value} cr)")
+                    if item.get("description"):
+                        st.caption(item.get("description"))
+
+    st.divider()
+
+    # Item Statistics
+    st.header("📊 Item Statistics")
+
+    all_items = []
+    for player in players:
+        all_items.extend(player.inventory or [])
+    for npc in npcs:
+        all_items.extend(npc.inventory_notable or [])
+
+    if all_items:
+        # Count by type
+        type_counts = {}
+        total_value = 0
+        for item in all_items:
+            item_type = item.get("type", "misc")
+            qty = item.get("quantity", 1)
+            type_counts[item_type] = type_counts.get(item_type, 0) + qty
+            total_value += item.get("value", 0) * qty
+
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Total Items", sum(type_counts.values()))
+        with col2:
+            st.metric("Unique Types", len(type_counts))
+        with col3:
+            st.metric("Total Value", f"{total_value} cr")
+
+        # Type breakdown
+        import pandas as pd
+        if type_counts:
+            df = pd.DataFrame(list(type_counts.items()), columns=["Type", "Count"])
+            st.bar_chart(df.set_index("Type"))
+    else:
+        st.info("No items in the world yet.")
 
 elif page == "History":
     st.title("📜 Historical Events")
