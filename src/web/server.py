@@ -25,6 +25,7 @@ from src.tools.world_read import (
 from src.tools.narration import set_web_output_callback
 from src.web.streaming import ToolUsageTracker
 from src.agents.callback_context import set_callback_handler, clear_callback_handler
+from src.services.asset_manager import AssetManager
 
 load_dotenv()
 
@@ -121,7 +122,7 @@ async def get_session_info(player_id: str):
     get_or_create_session(player_id)
 
     # Get current state
-    location = get_current_location(player_id)
+    location = get_current_location(player_id) # This helper usually returns a dict
     clock = get_world_clock()
     player = get_player(player_id)
 
@@ -129,6 +130,7 @@ async def get_session_info(player_id: str):
         "player_id": player_id,
         "player_name": player.get("name", "Unknown"),
         "location": location.get("name", "Unknown"),
+        "location_id": location.get("id"),  # <--- ADD THIS LINE
         "location_description": location.get("description", ""),
         "time": f"Day {clock.get('day', 1)}, {clock.get('hour', 8)}:00",
         "time_of_day": clock.get("time_of_day", "day"),
@@ -300,10 +302,159 @@ async def get_quests(player_id: str):
     return get_active_quests()
 
 
+# =====================
+# Asset Endpoints (Visual RPG)
+# =====================
+
+# Global asset manager instance
+_asset_manager: AssetManager | None = None
+
+
+def get_asset_manager() -> AssetManager:
+    """Get or create asset manager singleton."""
+    global _asset_manager
+    if _asset_manager is None:
+        _asset_manager = AssetManager()
+    return _asset_manager
+
+
+@app.get("/api/assets/location/{location_id}")
+async def get_location_assets(location_id: str, player_id: str):
+    """Get all assets needed to render a location.
+
+    Returns background, walkable bounds, player sprite, and NPC sprites.
+    """
+    get_or_create_session(player_id)  # Ensure DB is initialized
+    asset_manager = get_asset_manager()
+
+    try:
+        assets = await asset_manager.get_location_assets(location_id, player_id)
+
+        # Convert paths to URLs
+        return {
+            "location_id": assets["location_id"],
+            "location_name": assets["location_name"],
+            "background_url": asset_manager.get_asset_url(assets["background_path"]),
+            "walkable_bounds": assets["walkable_bounds"],
+            "player": {
+                "id": assets["player"]["id"],
+                "name": assets["player"]["name"],
+                "x": assets["player"]["x"],
+                "y": assets["player"]["y"],
+                "direction": assets["player"]["direction"],
+                "sprite_url": asset_manager.get_asset_url(assets["player"]["sprite_path"])
+            },
+            "npcs": [
+                {
+                    "id": npc["id"],
+                    "name": npc["name"],
+                    "x": npc["x"],
+                    "y": npc["y"],
+                    "sprite_url": asset_manager.get_asset_url(npc["sprite_path"]),
+                    "tier": npc["tier"]
+                }
+                for npc in assets["npcs"]
+            ]
+        }
+    except Exception as e:
+        logger.error(f"Error getting location assets: {e}", exc_info=True)
+        return {"error": str(e)}
+
+
+@app.get("/api/assets/sprite/{character_type}/{character_id}/{direction}")
+async def get_sprite(character_type: str, character_id: str, direction: str):
+    """Get or generate character sprite.
+
+    character_type: 'player' or 'npc'
+    direction: 'front', 'back', 'left', 'right' or 'front_walk1', 'front_walk2', etc.
+    """
+    direction = direction.replace(".png", "")
+
+    asset_manager = get_asset_manager()
+
+    try:
+        # Check if this is a walk animation frame request
+        if "_walk" in direction:
+            # Parse direction and frame: e.g., "front_walk1" -> direction="front", frame=1
+            parts = direction.rsplit("_walk", 1)
+            base_direction = parts[0]
+            frame = int(parts[1])
+            path = await asset_manager.get_walk_frame(character_id, base_direction, frame, character_type)
+        elif character_type == "player":
+            path = await asset_manager.get_player_sprite(character_id, direction)
+        else:
+            path = await asset_manager.get_npc_sprite(character_id, direction)
+        return FileResponse(path, media_type="image/png")
+    except Exception as e:
+        logger.error(f"Error getting sprite: {e}", exc_info=True)
+        return {"error": str(e)}
+
+
+@app.get("/api/assets/portrait/{npc_id}")
+async def get_portrait(npc_id: str):
+    """Get or generate NPC portrait for dialogue."""
+    asset_manager = get_asset_manager()
+
+    try:
+        path = await asset_manager.get_npc_portrait(npc_id)
+        return FileResponse(path, media_type="image/png")
+    except Exception as e:
+        logger.error(f"Error getting portrait: {e}", exc_info=True)
+        return {"error": str(e)}
+
+
+class MoveRequest(BaseModel):
+    """Request model for player movement."""
+    player_id: str
+    x: float
+    y: float
+    direction: str
+
+
+@app.post("/api/player/move")
+async def move_player(request: MoveRequest):
+    """Update player position within current location."""
+    settings = load_settings()
+    init_db(settings.database.path)
+
+    with get_session() as db:
+        player = db.query(Player).filter(Player.id == request.player_id).first()
+        if not player:
+            return {"error": "Player not found"}
+
+        player.position_x = request.x
+        player.position_y = request.y
+        player.facing_direction = request.direction
+        db.commit()
+
+    return {"success": True, "x": request.x, "y": request.y, "direction": request.direction}
+
+
+@app.post("/api/assets/pregenerate/{location_id}")
+async def pregenerate_assets(location_id: str):
+    """Pre-generate all assets for a location (background + NPC sprites/portraits).
+
+    Useful for warming up the cache before gameplay.
+    """
+    asset_manager = get_asset_manager()
+
+    try:
+        await asset_manager.pregenerate_location_assets(location_id)
+        return {"success": True, "message": f"Pre-generated assets for location {location_id}"}
+    except Exception as e:
+        logger.error(f"Error pre-generating assets: {e}", exc_info=True)
+        return {"error": str(e)}
+
+
 # Mount static files
 static_path = Path(__file__).parent / "static"
 if static_path.exists():
     app.mount("/static", StaticFiles(directory=str(static_path)), name="static")
+
+# Mount assets directory for generated images
+assets_path = Path("data/assets")
+assets_path.mkdir(parents=True, exist_ok=True)
+app.mount("/assets", StaticFiles(directory=str(assets_path)), name="assets")
 
 
 def run_server(host: str = "0.0.0.0", port: int = 8000):
