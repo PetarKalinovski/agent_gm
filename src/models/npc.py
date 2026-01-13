@@ -46,6 +46,10 @@ class NPC(Base):
     position_x: Mapped[float] = mapped_column(Float, default=50.0)  # 0-100 normalized
     position_y: Mapped[float] = mapped_column(Float, default=50.0)  # 0-100 normalized
 
+    # Visual assets (generated)
+    sprite_path: Mapped[str | None] = mapped_column(String(500), nullable=True)  # Base sprite path
+    portrait_path: Mapped[str | None] = mapped_column(String(500), nullable=True)  # Portrait for dialogue
+
     # Appearance and personality
     description_physical: Mapped[str] = mapped_column(Text, default="")
     description_personality: Mapped[str] = mapped_column(Text, default="")

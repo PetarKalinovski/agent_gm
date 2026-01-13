@@ -354,6 +354,36 @@
             color: var(--text-secondary);
             z-index: 10;
         }
+
+        #travel-overlay {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.85);
+        display: none; /* Hidden by default */
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        z-index: 1000;
+        color: var(--accent);
+        font-size: 1.5rem;
+        font-weight: bold;
+        backdrop-filter: blur(5px);
+    }
+
+    .loader {
+        border: 4px solid var(--bg-tertiary);
+        border-top: 4px solid var(--accent);
+        border-radius: 50%;
+        width: 40px;
+        height: 40px;
+        animation: spin 1s linear infinite;
+        margin-bottom: 1rem;
+    }
+
+    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     </style>
 </head>
 <body>
@@ -374,6 +404,10 @@
             <span id="game-time"></span>
         </div>
         <div class="controls-hint">WASD to move | Click NPCs to talk</div>
+        <div id="travel-overlay">
+            <div class="loader"></div>
+            <div id="travel-text">Traveling...</div>
+        </div>
     </div>
 
     <!-- Chat Toggle -->
@@ -509,11 +543,23 @@
         window.addEventListener('npc-interact', async (e) => {
             const { npcId, npcName: name } = e.detail;
             currentNpcId = npcId;
+
+            // Show NPC portrait
             npcPortraitContainer.classList.add('visible');
             npcPortrait.src = `/api/assets/portrait/${npcId}`;
             document.getElementById('npc-name').textContent = name;
-            if (chatPanel.classList.contains('collapsed')) toggleBtn.click();
-            await sendMessage(`Talk to ${name}`);
+
+            // Expand chat if collapsed
+            if (chatPanel.classList.contains('collapsed')) {
+                toggleBtn.click();
+            }
+
+            // Focus input and add hint - but DON'T auto-send
+            userInput.placeholder = `Talk to ${name}...`;
+            userInput.focus();
+
+            // Add a system hint message
+            addMessage('assistant', `*You approach ${name}. What do you say?*`);
         });
 
         function addMessage(role, content) {
@@ -542,10 +588,20 @@
         async function sendMessage(inputText = null) {
             const input = inputText || userInput.value.trim();
             if (!input || !currentPlayerId || isProcessing) return;
+
             isProcessing = true;
             if (!inputText) userInput.value = '';
+            userInput.disabled = true;
+            sendBtn.disabled = true;
+
+            // Add user message
+            addMessage('user', input);
+
+            // Create streaming message
             const messageEl = createStreamingMessage();
+            const toolsContainer = messageEl.querySelector('.tools-container');
             const contentEl = messageEl.querySelector('.message-content');
+            let textBuffer = '';
 
             try {
                 const response = await fetch('/api/play', {
@@ -553,10 +609,105 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ player_id: currentPlayerId, player_input: input })
                 });
-                // Handle SSE streaming... (same as your previous code)
-            } catch (error) { console.error('Play error:', error); }
-            finally { isProcessing = false; }
+
+                if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
+
+                // Process SSE stream
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    buffer += decoder.decode(value, { stream: true });
+
+                    let boundary;
+                    while ((boundary = buffer.indexOf('\n\n')) !== -1) {
+                        const rawEvent = buffer.slice(0, boundary);
+                        buffer = buffer.slice(boundary + 2);
+                        if (!rawEvent.trim()) continue;
+
+                        for (const line of rawEvent.split('\n')) {
+                            if (line.startsWith('data:')) {
+                                try {
+                                    const payload = JSON.parse(line.slice(5).trim());
+                                    if (payload.type === 'token' && payload.data) {
+                                        textBuffer += payload.data;
+                                        contentEl.innerHTML = formatText(textBuffer);
+                                    } else if (payload.type === 'narration' && payload.content) {
+                                        textBuffer += payload.content;
+                                        contentEl.innerHTML = formatText(textBuffer);
+                                    }
+                                    chatMessages.scrollTop = chatMessages.scrollHeight;
+                                } catch (e) { /* ignore parse errors */ }
+                            }
+                        }
+                    }
+                }
+
+                  const session = await getSessionData(currentPlayerId);
+
+            // 2. Now 'session' is defined, so we can check for movement
+            if (session && session.location_id && session.location_id !== currentLocationId) {
+                console.log("Movement detected! Moving to:", session.location);
+
+                const travelOverlay = document.getElementById('travel-overlay');
+                const travelText = document.getElementById('travel-text');
+
+                if (travelOverlay) {
+                    if (travelText) travelText.textContent = `Entering ${session.location}...`;
+                    travelOverlay.style.display = 'flex';
+                }
+
+                currentLocationId = session.location_id;
+
+                if (game) {
+                    await game.loadLocation(currentLocationId, currentPlayerId);
+                }
+
+                if (travelOverlay) travelOverlay.style.display = 'none';
+            }
+
+                // 2. CHECK IF LOCATION ID CHANGED
+            if (session.location_id && session.location_id !== currentLocationId) {
+                console.log("Movement detected! Moving to:", session.location);
+
+                // Show the Travel Overlay
+                const travelOverlay = document.getElementById('travel-overlay');
+                document.getElementById('travel-text').textContent = `Entering ${session.location}...`;
+                travelOverlay.style.display = 'flex';
+
+                currentLocationId = session.location_id;
+
+                if (game) {
+                    // This triggers the full background/NPC generation for the new room
+                    await game.loadLocation(currentLocationId, currentPlayerId);
+                }
+
+                // Hide overlay
+                travelOverlay.style.display = 'none';
+            }
+            } catch (error) {
+                console.error('Play error:', error);
+                contentEl.innerHTML = `<span style="color: var(--error);">Error: ${error.message}</span>`;
+            } finally {
+                isProcessing = false;
+                userInput.disabled = false;
+                sendBtn.disabled = false;
+                userInput.focus();
+            }
         }
+
+        // Send button and enter key
+        sendBtn.addEventListener('click', () => sendMessage());
+        userInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage();
+            }
+        });
 
         // Start everything
         initGame();

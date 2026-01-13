@@ -34,7 +34,7 @@ class GameRenderer {
         this.keys = {};
 
         // Movement settings
-        this.moveSpeed = 0.5; // Normalized units per frame (slower for better control)
+        this.moveSpeed = 0.3; // Normalized units per frame (slower for better control)
         this.syncInterval = 200; // ms between server syncs
         this.lastSync = 0;
         this.positionDirty = false;
@@ -58,6 +58,17 @@ class GameRenderer {
         });
 
         this.container.appendChild(this.app.canvas);
+
+        this.app.canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+        this.app.canvas.addEventListener('wheel', (e) => this.onWheel(e), { passive: false });
+
+        // Track the currently selected NPC for editing
+        this.editingNpc = null;
+
+        // Add a global move listener for the "follow mouse" behavior
+        this.app.stage.eventMode = 'static';
+        this.app.stage.on('pointermove', (e) => this.onGlobalMouseMove(e));
+
 
         // Create world container (this moves with camera)
         this.worldContainer = new PIXI.Container();
@@ -114,6 +125,16 @@ class GameRenderer {
 
         this.playerId = playerId;
         this.locationId = locationId;
+
+        // 1. CLEAR PREVIOUS SCENE IMMEDIATELY
+        this.backgroundLayer.removeChildren();
+        this.npcLayer.removeChildren();
+        // Keep the player, but maybe hide them or move them to center
+        if (this.player) {
+            this.player.normalizedX = 50;
+            this.player.normalizedY = 50;
+            this.updatePlayerPosition();
+        }
 
         this.showLoading(true);
 
@@ -196,119 +217,85 @@ class GameRenderer {
     }
 
     async loadPlayer(playerData) {
+        if (!this.playerLayer) return;
         this.playerLayer.removeChildren();
 
-        try {
-            const texture = await PIXI.Assets.load(playerData.sprite_url);
-            const sprite = new PIXI.Sprite(texture);
+        console.log("Setting up player sprite structure...");
+        this.player = {
+            sprite: new PIXI.Sprite(PIXI.Texture.WHITE),
+            id: playerData.id,
+            name: playerData.name,
+            direction: playerData.direction || 'front',
+            normalizedX: playerData.x,
+            normalizedY: playerData.y,
+            sprites: {},
+            walkSprites: {}
+        };
 
-            // Scale sprite relative to world size
-            const targetHeight = this.worldHeight * 0.12;
-            const scale = targetHeight / sprite.height;
-            sprite.scale.set(scale);
+        const s = this.player.sprite;
+        s.anchor.set(0.5, 1);
+        s.tint = 0x6366f1; // Purple
+        this.playerLayer.addChild(s);
 
-            // Center anchor at bottom center (feet)
-            sprite.anchor.set(0.5, 1);
+        // Initial positioning
+        this.updatePlayerPosition();
 
-            // Position in world coordinates
-            sprite.x = this.normalizedToWorldX(playerData.x);
-            sprite.y = this.normalizedToWorldY(playerData.y);
+        // Load textures one by one (safer than bundle mapping)
+        await this.preloadAllSprites();
 
-            this.playerLayer.addChild(sprite);
-
-            this.player = {
-                sprite: sprite,
-                id: playerData.id,
-                name: playerData.name,
-                direction: playerData.direction,
-                normalizedX: playerData.x,
-                normalizedY: playerData.y,
-                sprites: {},      // Idle sprites by direction
-                walkSprites: {}   // Walk sprites: walkSprites[direction][frame]
-            };
-
-            this.player.sprites[playerData.direction] = texture;
-
-            console.log('Player loaded, direction:', playerData.direction, 'playerId:', this.playerId);
-            console.log('Player sprites cache:', Object.keys(this.player.sprites));
-
-            // Pre-load ALL direction sprites and walk animations
-            this.preloadAllSprites().catch(err => console.error('preloadAllSprites error:', err));
-
-        } catch (error) {
-            console.error('Failed to load player sprite:', error);
-            // Create placeholder circle
-            const placeholder = new PIXI.Graphics();
-            placeholder.circle(0, 0, 20);
-            placeholder.fill(0x6366f1);
-            placeholder.x = this.normalizedToWorldX(playerData.x);
-            placeholder.y = this.normalizedToWorldY(playerData.y);
-            this.playerLayer.addChild(placeholder);
-
-            this.player = {
-                sprite: placeholder,
-                id: playerData.id,
-                name: playerData.name,
-                direction: 'front',
-                normalizedX: playerData.x,
-                normalizedY: playerData.y,
-                sprites: {},
-                walkSprites: {}
-            };
-        }
+        // Remove tint and force initial frame
+        s.tint = 0xffffff;
+        this.applyAnimationFrame();
+        console.log("Player initialization complete. Texture height check:", s.texture.height);
     }
 
-    async loadNPCs(npcsData) {
+
+     async loadNPCs(npcsData) {
         this.npcLayer.removeChildren();
         this.npcs = {};
 
         for (const npcData of npcsData) {
             try {
-                const texture = await PIXI.Assets.load(npcData.sprite_url);
+                const apiUrl = `/api/assets/sprite/npc/${npcData.id}/front.png`;
+                const texture = await PIXI.Assets.load(apiUrl);
                 const sprite = new PIXI.Sprite(texture);
 
-                // Scale sprite
-                const targetHeight = this.worldHeight * 0.10;
-                const scale = targetHeight / sprite.height;
-                sprite.scale.set(scale);
-
+                // Setup Initial Scale & Pos
+                const targetHeight = this.worldHeight * 0.12;
+                sprite.scale.set(targetHeight / texture.height);
                 sprite.anchor.set(0.5, 1);
-
-                // Position in world coordinates
                 sprite.x = this.normalizedToWorldX(npcData.x);
                 sprite.y = this.normalizedToWorldY(npcData.y);
 
-                // Make interactive
                 sprite.eventMode = 'static';
                 sprite.cursor = 'pointer';
 
-                sprite.on('pointerdown', () => this.onNpcClick(npcData));
-                sprite.on('pointerover', () => {
-                    sprite.tint = 0xaaaaff;
-                    this.showNpcTooltip(npcData.name, sprite);
+                // --- INTERACTION LOGIC ---
+
+                sprite.on('pointerdown', (e) => {
+                    // Left Click (0): Talk
+                    if (e.button === 0) {
+                        if (this.editingNpc) {
+                            this.saveAndExitTransform();
+                        } else {
+                            this.onNpcClick(npcData);
+                        }
+                    }
                 });
-                sprite.on('pointerout', () => {
-                    sprite.tint = 0xffffff;
-                    this.hideNpcTooltip();
+
+                sprite.on('rightclick', (e) => {
+                    // Prevent bubbling and select for move
+                    e.stopPropagation();
+                    this.startTransform(sprite, npcData);
                 });
+
+                sprite.on('pointerover', () => { if(!this.editingNpc) sprite.tint = 0xaaaaff; });
+                sprite.on('pointerout', () => { if(!this.editingNpc) sprite.tint = 0xffffff; });
 
                 this.npcLayer.addChild(sprite);
                 this.npcs[npcData.id] = { sprite: sprite, data: npcData };
 
-            } catch (error) {
-                console.error(`Failed to load NPC sprite for ${npcData.name}:`, error);
-                // Placeholder
-                const placeholder = new PIXI.Graphics();
-                placeholder.circle(0, 0, 15);
-                placeholder.fill(0x22c55e);
-                placeholder.x = this.normalizedToWorldX(npcData.x);
-                placeholder.y = this.normalizedToWorldY(npcData.y);
-                placeholder.eventMode = 'static';
-                placeholder.cursor = 'pointer';
-                placeholder.on('pointerdown', () => this.onNpcClick(npcData));
-                this.npcLayer.addChild(placeholder);
-                this.npcs[npcData.id] = { sprite: placeholder, data: npcData };
-            }
+            } catch (error) { console.error("NPC Load Error", error); }
         }
     }
 
@@ -317,77 +304,43 @@ class GameRenderer {
 
         const deltaTime = this.app.ticker.deltaMS;
 
-        // Handle movement
         let dx = 0;
         let dy = 0;
-        let newDirection = this.player.direction;
+        let newDir = this.player.direction; // Default to current
 
-        if (this.keys['w'] || this.keys['arrowup']) {
-            dy = -this.moveSpeed;
-            newDirection = 'back';
-        }
-        if (this.keys['s'] || this.keys['arrowdown']) {
-            dy = this.moveSpeed;
-            newDirection = 'front';
-        }
-        if (this.keys['a'] || this.keys['arrowleft']) {
-            dx = -this.moveSpeed;
-            newDirection = 'left';
-        }
-        if (this.keys['d'] || this.keys['arrowright']) {
-            dx = this.moveSpeed;
-            newDirection = 'right';
-        }
+        // Handle WASD
+        if (this.keys['w'] || this.keys['arrowup']) { dy = -this.moveSpeed; newDir = 'back'; }
+        else if (this.keys['s'] || this.keys['arrowdown']) { dy = this.moveSpeed; newDir = 'front'; }
+        else if (this.keys['a'] || this.keys['arrowleft']) { dx = -this.moveSpeed; newDir = 'left'; }
+        else if (this.keys['d'] || this.keys['arrowright']) { dx = this.moveSpeed; newDir = 'right'; }
 
-        const wasMoving = this.isMoving;
         this.isMoving = (dx !== 0 || dy !== 0);
 
         if (this.isMoving) {
-            const newX = Math.max(0, Math.min(100, this.player.normalizedX + dx));
-            const newY = Math.max(0, Math.min(100, this.player.normalizedY + dy));
+            // Apply Movement
+            this.player.normalizedX = Math.max(0, Math.min(100, this.player.normalizedX + dx));
+            this.player.normalizedY = Math.max(0, Math.min(100, this.player.normalizedY + dy));
 
-            if (this.isWalkable(newX, newY)) {
-                this.player.normalizedX = newX;
-                this.player.normalizedY = newY;
-                this.player.sprite.x = this.normalizedToWorldX(newX);
-                this.player.sprite.y = this.normalizedToWorldY(newY);
-                this.positionDirty = true;
+            // CRITICAL: Update the direction in the player object
+            this.player.direction = newDir;
 
-                if (newDirection !== this.player.direction) {
-                    this.player.direction = newDirection;
-                    // Load idle sprite for new direction immediately
-                    this.updatePlayerSprite(newDirection);
-                    // Preload walk sprites for new direction in background
-                    this.preloadWalkSprites(newDirection);
-                    // Reset animation to start fresh with new direction
-                    this.animationFrame = 0;
-                    this.animationTimer = 0;
-                }
-            }
+            this.updatePlayerPosition();
+            this.positionDirty = true;
 
-            this.syncPlayerPosition();
-
-            // Update walk animation
+            // Handle Animation Frames
             this.animationTimer += deltaTime;
             if (this.animationTimer >= this.animationSpeed) {
                 this.animationTimer = 0;
-                // Cycle through frames: 0 (idle) -> 1 (walk1) -> 2 (idle) -> 3 (walk2)
                 this.animationFrame = (this.animationFrame + 1) % 4;
             }
-
-            // Apply animation frame
-            this.applyAnimationFrame();
-        } else if (wasMoving) {
-            // Just stopped moving - return to idle
-            this.animationFrame = 0;
-            this.animationTimer = 0;
-            this.applyAnimationFrame();
+            this.syncPlayerPosition();
+        } else {
+            this.animationFrame = 0; // Return to idle frame
         }
 
-        // Update camera to follow player
+        // Apply visual updates
+        this.applyAnimationFrame();
         this.updateCamera();
-
-        // Sort sprites by Y for depth
         this.sortByDepth();
     }
 
@@ -490,92 +443,167 @@ class GameRenderer {
     }
 
     async preloadAllSprites() {
-        // Preload all 4 directions and their walk animations
         const directions = ['front', 'back', 'left', 'right'];
+        const frames = [1, 2];
+        // Add .png to the base if you like, or just in the loop
+        const playerUrlBase = `/api/assets/sprite/player/${this.playerId}`;
 
-        console.log('preloadAllSprites called, playerId:', this.playerId);
-        console.log('Current sprites cache:', Object.keys(this.player.sprites));
+        const loadJobs = [];
 
-        for (const direction of directions) {
-            // Load idle sprite for this direction
-            const alreadyCached = !!this.player.sprites[direction];
-            console.log(`Checking direction ${direction}, already cached: ${alreadyCached}`);
+        directions.forEach(dir => {
+            // LOAD IDLE (Append .png)
+            loadJobs.push(
+                PIXI.Assets.load(`${playerUrlBase}/${dir}.png`).then(tex => {
+                    this.player.sprites[dir] = tex;
+                })
+            );
 
-            if (!this.player.sprites[direction]) {
-                try {
-                    const url = `/api/assets/sprite/player/${this.playerId}/${direction}`;
-                    console.log(`Fetching: ${url}`);
-                    const texture = await PIXI.Assets.load(url);
-                    this.player.sprites[direction] = texture;
-                    console.log(`Loaded idle sprite: ${direction}`);
-                } catch (error) {
-                    console.error(`Failed to load idle sprite for ${direction}:`, error);
-                }
-            }
+            // LOAD WALK (Append .png)
+            this.player.walkSprites[dir] = {};
+            frames.forEach(f => {
+                loadJobs.push(
+                    PIXI.Assets.load(`${playerUrlBase}/${dir}_walk${f}.png`).then(tex => {
+                        this.player.walkSprites[dir][f] = tex;
+                    }).catch(e => {
+                        this.player.walkSprites[dir][f] = this.player.sprites[dir];
+                    })
+                );
+            });
+        });
 
-            // Load walk frames for this direction
-            if (!this.player.walkSprites[direction]) {
-                this.player.walkSprites[direction] = {};
-            }
-
-            for (const frame of [1, 2]) {
-                if (!this.player.walkSprites[direction][frame]) {
-                    try {
-                        const url = `/api/assets/sprite/player/${this.playerId}/${direction}_walk${frame}`;
-                        const texture = await PIXI.Assets.load(url);
-                        this.player.walkSprites[direction][frame] = texture;
-                        console.log(`Loaded walk sprite: ${direction}_walk${frame}`);
-                    } catch (error) {
-                        console.error(`Failed to load walk sprite ${direction}_walk${frame}:`, error);
-                        // Fall back to idle sprite for this direction
-                        this.player.walkSprites[direction][frame] = this.player.sprites[direction] || null;
-                    }
-                }
-            }
-        }
-
-        console.log('All player sprites preloaded!');
+        await Promise.all(loadJobs);
     }
 
-    applyAnimationFrame() {
+    startTransform(sprite, npcData) {
+        // If we are already editing someone, save them first
+        if (this.editingNpc) this.saveAndExitTransform();
+
+        console.log("Picking up:", npcData.name);
+        this.editingNpc = { sprite, data: npcData };
+
+        sprite.tint = 0xffaa00; // Orange
+        sprite.alpha = 0.7;
+
+        // --- ADD THIS: Global listener to "Drop" the NPC anywhere ---
+        const dropHandler = (e) => {
+            // Only drop on Left Click (0)
+            if (e.button === 0) {
+                this.saveAndExitTransform();
+                // Remove this temporary global listener
+                this.app.stage.off('pointerdown', dropHandler);
+            }
+        };
+
+        // Use a timeout so the same right-click doesn't immediately trigger a drop
+        setTimeout(() => {
+            this.app.stage.on('pointerdown', dropHandler);
+        }, 100);
+    }
+
+    async saveAndExitTransform() {
+        if (!this.editingNpc) return;
+
+        const { sprite, data } = this.editingNpc;
+
+        // Convert screen pixels back to 0-100 for the DB
+        const normX = this.worldToNormalizedX(sprite.x);
+        const normY = this.worldToNormalizedY(sprite.y);
+
+        console.log(`Sending Save Request for ${data.name}...`);
+
+        // Immediate visual feedback
+        sprite.tint = 0xffffff;
+        sprite.alpha = 1.0;
+
+        try {
+            const response = await fetch('/api/npc/transform', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    npc_id: data.id,
+                    x: normX,
+                    y: normY,
+                    scale: sprite.scale.y
+                })
+            });
+            const result = await response.json();
+            if (result.success) {
+                console.log(`SAVE SUCCESS: ${data.name} is now at ${normX.toFixed(2)}%`);
+            } else {
+                console.error("Save failed on server:", result.error);
+            }
+        } catch (err) {
+            console.error("Network error during save:", err);
+        }
+
+        this.editingNpc = null;
+    }
+
+    onGlobalMouseMove(event) {
+        // If we are in transform mode, make the sprite follow the mouse
+        if (this.editingNpc) {
+            const newPos = event.getLocalPosition(this.worldContainer);
+            this.editingNpc.sprite.x = newPos.x;
+            this.editingNpc.sprite.y = newPos.y;
+        }
+    }
+
+    onWheel(e) {
+        if (this.editingNpc) {
+            e.preventDefault();
+            const sprite = this.editingNpc.sprite;
+            // deltaY is usually 100 or -100
+            const factor = e.deltaY > 0 ? 0.9 : 1.1;
+            sprite.scale.x *= factor;
+            sprite.scale.y *= factor;
+        }
+    }
+
+
+     applyAnimationFrame() {
         if (!this.player || !this.player.sprite) return;
 
-        const direction = this.player.direction;
+        const dir = this.player.direction;
+        let tex = null;
 
-        // Animation cycle: 0=idle, 1=walk1, 2=idle, 3=walk2
-        let texture = null;
-        let textureSource = 'none';
-
-        if (this.animationFrame === 0 || this.animationFrame === 2) {
-            // Idle frames
-            texture = this.player.sprites[direction];
-            textureSource = `idle-${direction}`;
-        } else if (this.animationFrame === 1) {
-            // Walk frame 1
-            texture = this.player.walkSprites[direction]?.[1];
-            textureSource = `walk1-${direction}`;
-        } else if (this.animationFrame === 3) {
-            // Walk frame 2
-            texture = this.player.walkSprites[direction]?.[2];
-            textureSource = `walk2-${direction}`;
+        // Pull texture from our assigned dictionary
+        if (!this.isMoving) {
+            tex = this.player.sprites[dir];
+        } else {
+            const walk = this.player.walkSprites[dir] || {};
+            const cycle = [
+                this.player.sprites[dir],
+                walk[1] || this.player.sprites[dir],
+                this.player.sprites[dir],
+                walk[2] || this.player.sprites[dir]
+            ];
+            tex = cycle[this.animationFrame];
         }
 
-        // Debug log (throttled)
-        if (!this._lastAnimLog || Date.now() - this._lastAnimLog > 500) {
-            console.log(`Animation: dir=${direction}, frame=${this.animationFrame}, source=${textureSource}, hasTexture=${!!texture}`);
-            console.log('Available idle sprites:', Object.keys(this.player.sprites));
-            console.log('Available walk sprites:', Object.keys(this.player.walkSprites),
-                        this.player.walkSprites[direction] ? Object.keys(this.player.walkSprites[direction]) : 'none');
-            this._lastAnimLog = Date.now();
-        }
+        // Final safety fallback
+        if (!tex) tex = this.player.sprites['front'] || this.player.sprites['back'];
 
-        // Apply texture if available, otherwise fall back to idle
-        if (texture) {
-            this.player.sprite.texture = texture;
-        } else if (this.player.sprites[direction]) {
-            this.player.sprite.texture = this.player.sprites[direction];
+        if (tex) {
+            const s = this.player.sprite;
+            s.texture = tex;
+
+            // Debugging: If texture is 1x1, it's not a real image
+            if (tex.width <= 1) {
+                console.warn("Applying an empty/invalid texture!");
+                return;
+            }
+
+            // Calculation check:
+            const targetH = this.worldHeight * 0.15; // Slightly larger 15%
+            const scale = targetH / tex.height;
+            s.scale.set(scale);
+
+            // Force Alpha/Visible
+            s.alpha = 1;
+            s.visible = true;
         }
     }
+
 
     async syncPlayerPosition() {
         const now = Date.now();
@@ -632,15 +660,17 @@ class GameRenderer {
                 fill: 0xffffff,
                 align: 'center',
                 dropShadow: true,
-                dropShadowColor: 0x000000,
                 dropShadowDistance: 2,
             }
         });
 
         tooltip.anchor.set(0.5, 1);
-        // Position in screen space (relative to sprite's screen position)
-        tooltip.x = sprite.x - this.camera.x;
-        tooltip.y = sprite.y - sprite.height - this.camera.y - 10;
+        // Calculate based on the sprite's current scaled height
+        const screenX = sprite.x - this.camera.x;
+        const screenY = sprite.y - (sprite.texture.height * sprite.scale.y) - this.camera.y - 15;
+
+        tooltip.x = screenX;
+        tooltip.y = screenY;
         tooltip.name = 'npc-tooltip';
 
         this.uiLayer.addChild(tooltip);
@@ -688,6 +718,17 @@ class GameRenderer {
         error.y = this.app.screen.height / 2;
         error.name = 'error';
         this.uiLayer.addChild(error);
+    }
+
+    updatePlayerPosition() {
+        if (!this.player || !this.player.sprite) return;
+
+        // Convert 0-100 coordinates to actual world pixels
+        this.player.sprite.x = this.normalizedToWorldX(this.player.normalizedX);
+        this.player.sprite.y = this.normalizedToWorldY(this.player.normalizedY);
+
+        // Debugging to ensure coordinates are valid
+        // console.log(`Player Pos: ${this.player.sprite.x}, ${this.player.sprite.y}`);
     }
 
     // Coordinate conversions (normalized 0-100 <-> world pixels)

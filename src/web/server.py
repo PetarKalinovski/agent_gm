@@ -64,6 +64,12 @@ class SessionInfo(BaseModel):
     location: str
     time: str
 
+class TransformRequest(BaseModel):
+    npc_id: str
+    x: float
+    y: float
+    scale: float
+
 
 def get_or_create_session(player_id: str) -> dict[str, Any]:
     """Get or create a session with DM and tool tracker."""
@@ -363,32 +369,32 @@ async def get_location_assets(location_id: str, player_id: str):
 
 @app.get("/api/assets/sprite/{character_type}/{character_id}/{direction}")
 async def get_sprite(character_type: str, character_id: str, direction: str):
-    """Get or generate character sprite.
-
-    character_type: 'player' or 'npc'
-    direction: 'front', 'back', 'left', 'right' or 'front_walk1', 'front_walk2', etc.
-    """
-    direction = direction.replace(".png", "")
+    """Get or generate character sprite."""
+    # 1. STRIP EXTENSION FIRST
+    if "." in direction:
+        direction = direction.split(".")[0]
 
     asset_manager = get_asset_manager()
-
     try:
-        # Check if this is a walk animation frame request
+        # 2. NOW parse the walk frame
         if "_walk" in direction:
-            # Parse direction and frame: e.g., "front_walk1" -> direction="front", frame=1
             parts = direction.rsplit("_walk", 1)
             base_direction = parts[0]
-            frame = int(parts[1])
-            path = await asset_manager.get_walk_frame(character_id, base_direction, frame, character_type)
+            try:
+                frame = int(parts[1])  # This will now be "1" or "2"
+                path = await asset_manager.get_walk_frame(character_id, base_direction, frame, character_type)
+            except ValueError:
+                # Fallback if parsing fails
+                path = await asset_manager.get_player_sprite(character_id, base_direction)
         elif character_type == "player":
             path = await asset_manager.get_player_sprite(character_id, direction)
         else:
             path = await asset_manager.get_npc_sprite(character_id, direction)
+
         return FileResponse(path, media_type="image/png")
     except Exception as e:
         logger.error(f"Error getting sprite: {e}", exc_info=True)
         return {"error": str(e)}
-
 
 @app.get("/api/assets/portrait/{npc_id}")
 async def get_portrait(npc_id: str):
@@ -445,6 +451,29 @@ async def pregenerate_assets(location_id: str):
         logger.error(f"Error pre-generating assets: {e}", exc_info=True)
         return {"error": str(e)}
 
+@app.post("/api/npc/transform")
+async def update_npc_transform(request: TransformRequest):
+    settings = load_settings()
+    init_db(settings.database.path)
+
+    with get_session() as db:
+        # Import NPC here to avoid circular imports
+        from src.models.npc import NPC
+
+        npc = db.query(NPC).filter(NPC.id == request.npc_id).first()
+        if not npc:
+            print(f"Error: NPC {request.npc_id} not found in DB")
+            return {"error": "NPC not found"}
+
+        # Update the database columns
+        npc.position_x = request.x
+        npc.position_y = request.y
+
+        # Save changes
+        db.commit()
+
+        print(f"--- DB SUCCESS: {npc.name} permanently moved to {request.x}, {request.y} ---")
+        return {"success": True}
 
 # Mount static files
 static_path = Path(__file__).parent / "static"
@@ -461,6 +490,7 @@ def run_server(host: str = "0.0.0.0", port: int = 8000):
     """Run the FastAPI server."""
     import uvicorn
     uvicorn.run(app, host=host, port=port)
+
 
 
 if __name__ == "__main__":

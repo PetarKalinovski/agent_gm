@@ -1,20 +1,16 @@
 #!/usr/bin/env python3
-"""Migration script to add map-related fields to existing database.
-
-Usage:
-    python scripts/migrate_add_map_fields.py
-    python scripts/migrate_add_map_fields.py --db data/my_world.db
+"""
+Migration script to sync database schema with the latest
+Player, NPC, and Location visual/position models.
 """
 
 import argparse
 import sqlite3
+import json
 from pathlib import Path
-from random import randint
 
 
 def migrate(db_path: str = "data/sw.db"):
-    """Add map-related columns to locations and connections tables."""
-
     if not Path(db_path).exists():
         print(f"Database not found: {db_path}")
         return False
@@ -22,89 +18,60 @@ def migrate(db_path: str = "data/sw.db"):
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
 
-    # Get existing columns in locations table
-    cursor.execute("PRAGMA table_info(locations)")
-    existing_columns = {row[1] for row in cursor.fetchall()}
+    def add_columns(table_name, columns):
+        cursor.execute(f"PRAGMA table_info({table_name})")
+        existing = {row[1] for row in cursor.fetchall()}
 
-    # New columns to add to locations
-    location_columns = [
-        ("display_type", "VARCHAR(20) DEFAULT 'pin'"),
-        ("is_map_container", "BOOLEAN DEFAULT 0"),
-        ("map_image_path", "VARCHAR(500)"),
-        ("map_width", "INTEGER DEFAULT 1000"),
-        ("map_height", "INTEGER DEFAULT 1000"),
-        ("pin_icon", "VARCHAR(100) DEFAULT 'circle'"),
-        ("pin_color", "VARCHAR(20) DEFAULT '#3388ff'"),
-        ("pin_size", "FLOAT DEFAULT 15.0"),
-    ]
+        print(f"\nChecking table: {table_name}")
+        for col_name, col_def in columns:
+            if col_name not in existing:
+                try:
+                    cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN {col_name} {col_def}")
+                    print(f"  [+] Added: {col_name}")
+                except Exception as e:
+                    print(f"  [!] Error: {e}")
+            else:
+                print(f"  [.] Exists: {col_name}")
 
-    print(f"Migrating database: {db_path}")
-    print(f"Existing columns in locations: {len(existing_columns)}")
-
-    for col_name, col_def in location_columns:
-        if col_name not in existing_columns:
-            try:
-                sql = f"ALTER TABLE locations ADD COLUMN {col_name} {col_def}"
-                cursor.execute(sql)
-                print(f"  Added column: locations.{col_name}")
-            except sqlite3.OperationalError as e:
-                print(f"  Error adding {col_name}: {e}")
-        else:
-            print(f"  Column already exists: locations.{col_name}")
-
-    # Get existing columns in connections table
-    cursor.execute("PRAGMA table_info(connections)")
-    existing_conn_columns = {row[1] for row in cursor.fetchall()}
-
-    # New columns to add to connections
-    connection_columns = [
-        ("difficulty", "INTEGER DEFAULT 0"),
-        ("description", "TEXT DEFAULT ''"),
-    ]
-
-    for col_name, col_def in connection_columns:
-        if col_name not in existing_conn_columns:
-            try:
-                sql = f"ALTER TABLE connections ADD COLUMN {col_name} {col_def}"
-                cursor.execute(sql)
-                print(f"  Added column: connections.{col_name}")
-            except sqlite3.OperationalError as e:
-                print(f"  Error adding {col_name}: {e}")
-        else:
-            print(f"  Column already exists: connections.{col_name}")
-
-    # Get existing columns in npcs table
-    cursor.execute("PRAGMA table_info(npcs)")
-    existing_npc_columns = {row[1] for row in cursor.fetchall()}
-
-    # New columns to add to npcs (position within location for map display)
-    npc_columns = [
+    # --- 1. NPC Updates ---
+    npc_cols = [
+        ("sprite_path", "VARCHAR(500)"),
+        ("portrait_path", "VARCHAR(500)"),
         ("position_x", "FLOAT DEFAULT 50.0"),
         ("position_y", "FLOAT DEFAULT 50.0"),
     ]
-    for col_name, col_def in npc_columns:
-        if col_name not in existing_npc_columns:
-            x = randint(0, 100)
-            col_def = f"FLOAT DEFAULT {x}.0"
-            try:
-                sql = f"ALTER TABLE npcs ADD COLUMN {col_name} {col_def}"
-                cursor.execute(sql)
-                print(f"  Added column: npcs.{col_name}")
-            except sqlite3.OperationalError as e:
-                print(f"  Error adding {col_name}: {e}")
-        else:
-            print(f"  Column already exists: npcs.{col_name}")
+    add_columns("npcs", npc_cols)
+
+    # --- 2. Location Updates ---
+    # Default JSON for walkable bounds
+    default_bounds = json.dumps({"x_min": 10, "x_max": 90, "y_min": 20, "y_max": 80})
+    loc_cols = [
+        ("background_image_path", "VARCHAR(500)"),
+        ("collision_mask_path", "VARCHAR(500)"),
+        ("walkable_bounds", f"TEXT DEFAULT '{default_bounds}'"),
+        ("display_type", "VARCHAR(20) DEFAULT 'pin'"),
+        ("is_map_container", "BOOLEAN DEFAULT 0"),
+    ]
+    add_columns("locations", loc_cols)
+
+    # --- 3. Player Updates ---
+    player_cols = [
+        ("position_x", "FLOAT DEFAULT 50.0"),
+        ("position_y", "FLOAT DEFAULT 50.0"),
+        ("facing_direction", "VARCHAR(10) DEFAULT 'front'"),
+        ("sprite_base_path", "VARCHAR(500)"),
+        ("portrait_path", "VARCHAR(500)"),
+    ]
+    add_columns("players", player_cols)
 
     conn.commit()
     conn.close()
-
-    print("\nMigration complete!")
+    print("\nMigration complete! All visual and position fields are synced.")
     return True
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Add map fields to database")
-    parser.add_argument("--db", type=str, default="data/sw.db", help="Database path")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--db", type=str, default="data/sw.db")
     args = parser.parse_args()
-
     migrate(args.db)

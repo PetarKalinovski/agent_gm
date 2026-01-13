@@ -2,7 +2,7 @@
 
 import uuid
 
-from sqlalchemy import ForeignKey, Integer, String, Text
+from sqlalchemy import Float, ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.sqlite import JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -19,6 +19,15 @@ class Player(Base):
 
     # Location
     current_location_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("locations.id"), nullable=True)
+
+    # Position within current location (0-100 normalized)
+    position_x: Mapped[float] = mapped_column(Float, default=50.0)
+    position_y: Mapped[float] = mapped_column(Float, default=50.0)
+    facing_direction: Mapped[str] = mapped_column(String(10), default="front")  # front, back, left, right
+
+    # Visual assets
+    sprite_base_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    portrait_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
     # Character details
     description: Mapped[str] = mapped_column(Text, default="")
