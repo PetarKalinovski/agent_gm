@@ -1,17 +1,14 @@
+"""Agent delegation tools for the DM orchestrator.
+
+These tools allow the DM to delegate to specialized sub-agents.
+"""
+
 import os
 import tempfile
 
 from strands import tool
 from strands.session.file_session_manager import FileSessionManager
-
-from src.agents.creation_agent import CREATORAgent
-from src.agents.npc_agent import NPCAgent
-from src.agents.economy_agent import EconomyAgent
-from src.agents.world_forge import WorldForge
 from strands_semantic_memory.message_utils import extract_text_content
-
-# Global cache for NPC agents to maintain conversation history
-_npc_agent_cache: dict[str, NPCAgent] = {}
 
 
 def get_recent_dm_context(player_id: str, num_messages: int = 6) -> str:
@@ -82,11 +79,13 @@ def prompt_creator_agent(player_id: str, instruction: str) -> dict[str, str]:
     Returns:
         Dictionary with the agent's response.
     """
-    agent = WorldForge(player_id)
+    # Import inside function to avoid circular imports
+    from src.agents.world_forge import WorldForge
 
+    agent = WorldForge(player_id)
     result = agent.agent(instruction)
 
-    return {"text_response": result}
+    return {"text_response": str(result)}
 
 
 @tool
@@ -106,6 +105,31 @@ def prompt_npc_agent(player_id: str, npc_id: str, player_input: str, is_first_in
     Returns:
         Dictionary with the NPC's response text.
     """
+    # Import inside function to avoid circular imports
+    from src.repositories.unit_of_work import unit_of_work
+    from src.agents.npc_agent import NPCAgent
+
+    # Validate NPC exists before creating agent (fixes "nothing to say" bug)
+    with unit_of_work() as uow:
+        npc_result = uow.npcs.validate_for_conversation(npc_id)
+        if not npc_result.success:
+            return {"text_response": npc_result.error, "error": npc_result.error_code}
+
+        npc_data = uow.npcs.to_dict(npc_result.data)
+
+        # Get relationship data
+        rel_result = uow.npcs.get_with_relationship(npc_id, player_id)
+        _, relationship = rel_result.data if rel_result.success else (None, None)
+
+        relationship_dict = {
+            "summary": relationship.summary if relationship else "You have not met this person before.",
+            "trust_level": relationship.trust_level if relationship else 50,
+            "current_disposition": relationship.current_disposition if relationship else "neutral",
+            "key_moments": relationship.key_moments if relationship else [],
+            "recent_messages": (relationship.recent_messages or [])[-10:] if relationship else [],
+            "revealed_secrets": relationship.revealed_secrets if relationship else [],
+        }
+
     # Auto-fetch recent DM conversation context
     dm_context = get_recent_dm_context(player_id, num_messages=6)
 
@@ -118,11 +142,12 @@ def prompt_npc_agent(player_id: str, npc_id: str, player_input: str, is_first_in
 
     combined_context = "\n\n".join(combined_context_parts)
 
-    # Create NPC agent and start conversation
+    # Create NPC agent and start conversation with validated data
     agent = NPCAgent(player_id, npc_id)
-    response = agent.start_conversation(npc=agent.npc, context=combined_context)
+    response = agent.start_conversation(npc=npc_data, relationship=relationship_dict, context=combined_context)
 
-    return {"text_response": response}
+    return {"text_response": str(response)}
+
 
 @tool
 def prompt_economy_agent(player_id: str, instruction: str) -> dict[str, str]:
@@ -142,7 +167,10 @@ def prompt_economy_agent(player_id: str, instruction: str) -> dict[str, str]:
     Returns:
         Dictionary with the agent's response.
     """
-    agent = EconomyAgent(player_id)
+    # Import inside function to avoid circular imports
+    from src.agents.economy_agent import EconomyAgent
 
+    agent = EconomyAgent(player_id)
     result = agent.process_input(instruction)
-    return {"text_response": result}
+
+    return {"text_response": str(result)}

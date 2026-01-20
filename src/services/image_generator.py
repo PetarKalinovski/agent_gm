@@ -23,7 +23,7 @@ class ImageGenerator:
 
     def __init__(self):
         self.api_key = os.getenv("OPENROUTER_API_KEY")
-        self.model = "google/gemini-2.5-flash-image-preview"
+        self.model = "google/gemini-2.5-flash-image"
         self.api_url = "https://openrouter.ai/api/v1/chat/completions"
         self.assets_dir = Path("data/assets")
         self._ensure_directories()
@@ -204,6 +204,8 @@ Character: {npc.name}
 Appearance: {npc.description_physical}
 Personality: {npc.description_personality}
 Current mood: {npc.current_mood}
+
+It should be a 2d painted style suitable for use in an RPG game.
 
 Requirements:
 - Head and shoulders portrait, close-up

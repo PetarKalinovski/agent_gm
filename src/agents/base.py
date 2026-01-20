@@ -90,15 +90,14 @@ def create_agent(
     # Use provided callback_handler, or fall back to context callback
     handler = callback_handler
     if handler is None:
-        # return Agent(
-        #     model=model,
-        #     system_prompt=system_prompt,
-        #     tools=tools or [],
-        #     session_manager=session_manager,
-        #     conversation_manager=conversation_manager,
-        #     hooks=hooks or [],
-        # )
-        handler = get_callback_handler()
+        return Agent(
+            model=model,
+            system_prompt=system_prompt,
+            tools=tools or [],
+            session_manager=session_manager,
+            conversation_manager=conversation_manager,
+            hooks=hooks or [],
+        )
 
     return Agent(
         model=model,

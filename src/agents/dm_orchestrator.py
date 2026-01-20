@@ -1,16 +1,11 @@
 """DM Orchestrator Agent - The main dungeon master using Strands Agents."""
 
-from typing import Any
+from typing import Any, Callable
 
-from strands import Agent
-from strands_semantic_memory import (
-    SemanticSummarizingConversationManager,
-    SemanticMemoryHook,
-)
-
-from strands.session.file_session_manager import FileSessionManager
 from strands_tools import journal
-from src.agents.base import create_agent
+
+from src.agents.core.base_agent import BaseGameAgent
+from src.core.types import AgentContext
 from src.tools.world_read import (
     get_current_location,
     get_npcs_at_location,
@@ -134,7 +129,7 @@ Use the `journal` tool to log important narrative developments, world changes, a
 
 
 # Collect DM tools
-DM_TOOLS = [
+DM_TOOLS: list[Callable] = [
     # Read tools
     get_current_location,
     get_npcs_at_location,
@@ -161,50 +156,89 @@ DM_TOOLS = [
     prompt_creator_agent,
     prompt_npc_agent,
     prompt_economy_agent,
-
     # Journal tool
     journal,
 ]
 
 
-class DMOrchestrator:
-    """The main Dungeon Master agent that orchestrates the game."""
+class DMOrchestrator(BaseGameAgent):
+    """The main Dungeon Master agent that orchestrates the game.
 
-    def __init__(self, player_id: str, callback_handler: Any = None):
+    Inherits from BaseGameAgent for standardized initialization:
+    - Automatic FileSessionManager setup
+    - Automatic SemanticSummarizingConversationManager
+    - Automatic SemanticMemoryHook
+    - Callback handler propagation
+    """
+
+    AGENT_NAME = "dm_orchestrator"
+    DEFAULT_TOOLS = DM_TOOLS
+
+    def __init__(self, context_or_player_id: AgentContext | str, callback_handler: Any = None):
         """Initialize the DM.
 
         Args:
-            player_id: The player's ID in the database.
+            context_or_player_id: Either an AgentContext or player_id string.
+                                  String is supported for backward compatibility.
             callback_handler: Optional callback handler for tool tracking.
+                             Only used if context_or_player_id is a string.
         """
-        self.player_id = player_id
-        self.callback_handler = callback_handler
+        # Support both new AgentContext and old player_id string for backward compatibility
+        if isinstance(context_or_player_id, str):
+            context = AgentContext(
+                player_id=context_or_player_id,
+                session_id=context_or_player_id,
+                callback_handler=callback_handler,
+            )
+        else:
+            context = context_or_player_id
 
-        session_manager = FileSessionManager(session_id=player_id)
+        # Load world context before calling super().__init__
+        self._world_context = self._load_world_context()
+        self._player_name = self._load_player_name(context.player_id)
 
-        # Get world context for the system prompt
+        super().__init__(context)
+
+        # Store for backward compatibility
+        self.player_id = context.player_id
+        self.callback_handler = context.callback_handler
+
+    def _load_world_context(self) -> str:
+        """Load world context for the system prompt."""
         world_context = get_world_bible_for_dm()
         if not world_context or "No World Bible" in world_context:
-            world_context = ""
-        else:
-            world_context = f"\n\n### WORLD CONTEXT\n{world_context}"
+            return ""
+        return f"\n\n### WORLD CONTEXT\n{world_context}"
 
-        # Create the Strands agent
-        conv_manager = SemanticSummarizingConversationManager(
-            embedding_model="all-MiniLM-L12-v2"
-        )
-        semantic_memory_hook = SemanticMemoryHook()
+    def _load_player_name(self, player_id: str) -> str:
+        """Load player name for the system prompt."""
+        player_data = get_player(player_id)
+        return player_data.get('name', 'Unknown') if player_data else 'Unknown'
 
+    def _get_session_id(self) -> str:
+        """DM uses player_id as session ID (maintains history across sessions)."""
+        return self.context.player_id
 
-        self.agent = create_agent(
-            agent_name="dm_orchestrator",
-            system_prompt=DM_SYSTEM_PROMPT + world_context + f"\n\nThe current player_id is: {player_id}, with name: {get_player(player_id).get('name', 'Unknown')}.",
-            tools=DM_TOOLS,
-            session_manager=session_manager,
-            conversation_manager=conv_manager,
-            hooks=[semantic_memory_hook],
-            callback_handler=callback_handler,
-        )
+    def _build_system_prompt(self) -> str:
+        """Build the DM system prompt with world context."""
+        prompt = DM_SYSTEM_PROMPT
+        prompt += self._world_context
+        prompt += f"\n\nThe current player_id is: {self.context.player_id}, with name: {self._player_name}."
+        return prompt
+
+    def _build_context(self, player_input: str) -> str:
+        """Build rich context for DM processing."""
+        location = get_current_location(self.context.player_id)
+        clock = get_world_clock()
+
+        npc_names = ', '.join(n['name'] for n in location.get('npcs_present', [])) or 'None'
+
+        return f"""Current context:
+- Location: {location.get('name', 'Unknown')} ({location.get('type', 'unknown')})
+- Time: Day {clock.get('day', 1)}, {clock.get('hour', 8)}:00 ({clock.get('time_of_day', 'day')})
+- NPCs here: {npc_names}
+
+Player says: {player_input}"""
 
     def process_input(self, player_input: str) -> str:
         """Process player input and generate a response.
@@ -215,21 +249,7 @@ class DMOrchestrator:
         Returns:
             The DM's response text.
         """
-        # Build context
-        location = get_current_location(self.player_id)
-        clock = get_world_clock()
-
-        context = f"""Current context:
-- Location: {location.get('name', 'Unknown')} ({location.get('type', 'unknown')})
-- Time: Day {clock.get('day', 1)}, {clock.get('hour', 8)}:00 ({clock.get('time_of_day', 'day')})
-- NPCs here: {', '.join(n['name'] for n in location.get('npcs_present', [])) or 'None'}
-
-Player says: {player_input}"""
-
-        # Run the agent
-        response = self.agent(context)
-
-        return str(response)
+        return self.process(player_input)
 
     def get_conv_state(self) -> dict[str, Any]:
         """Get the current conversation state.
@@ -247,7 +267,7 @@ Player says: {player_input}"""
         Returns:
             The scene description.
         """
-        location = get_current_location(self.player_id)
+        location = get_current_location(self.context.player_id)
         clock = get_world_clock()
 
         if "error" in location:

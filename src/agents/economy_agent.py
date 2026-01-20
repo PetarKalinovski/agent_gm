@@ -1,15 +1,11 @@
 """Economy Agent - Handles inventory, items, shops, and transactions."""
 
-from typing import Any
+from typing import Any, Callable
 
-from strands import Agent
-from strands.agent import AgentResult
-from strands.session.file_session_manager import FileSessionManager
-
-from src.agents.base import create_agent
+from src.agents.core.base_agent import BaseGameAgent
+from src.core.types import AgentContext
 from src.tools.world_read.npcs import get_npc
 from src.tools.world_read.player import get_player
-
 from src.tools.world_write.items import (
     create_item_template,
     get_inventory,
@@ -74,7 +70,7 @@ When you receive a request, use the appropriate tools and return clear results.
 
 
 # Collect Economy tools
-ECONOMY_TOOLS = [
+ECONOMY_TOOLS: list[Callable] = [
     get_npc,
     get_player,
     create_item_template,
@@ -86,37 +82,51 @@ ECONOMY_TOOLS = [
 ]
 
 
-class EconomyAgent:
-    """A sub-agent for economy and inventory management."""
+class EconomyAgent(BaseGameAgent):
+    """A sub-agent for economy and inventory management.
 
-    def __init__(self, player_id: str):
-        """Initialize the agent
+    Inherits from BaseGameAgent for standardized initialization:
+    - Automatic FileSessionManager setup
+    - Automatic SemanticSummarizingConversationManager
+    - Automatic SemanticMemoryHook
+    """
+
+    AGENT_NAME = "economy_agent"
+    DEFAULT_TOOLS = ECONOMY_TOOLS
+
+    def __init__(self, player_id: str, callback_handler: Any = None):
+        """Initialize the agent.
 
         Args:
             player_id: The player's ID in the database.
+            callback_handler: Optional callback handler for tool tracking.
         """
-        self.player_id = player_id
-
-        session_manager = FileSessionManager(session_id=f"{player_id}_economy")
-
-        # Create the Strands agent
-        self.agent = create_agent(
-            agent_name="economy_agent",
-            system_prompt=ECONOMY_SYSTEM_PROMPT + f"\n\nThe current player_id is: {player_id}",
-            tools=ECONOMY_TOOLS,
-            session_manager=session_manager,
+        context = AgentContext(
+            player_id=player_id,
+            session_id=f"{player_id}_economy",
+            callback_handler=callback_handler,
         )
 
-    def process_input(self, instruction: str) -> AgentResult:
+        super().__init__(context)
+
+        # Store for backward compatibility
+        self.player_id = player_id
+
+    def _get_session_id(self) -> str:
+        """Economy agent uses player_id + 'economy' for session."""
+        return f"{self.context.player_id}_economy"
+
+    def _build_system_prompt(self) -> str:
+        """Build the economy system prompt."""
+        return ECONOMY_SYSTEM_PROMPT + f"\n\nThe current player_id is: {self.context.player_id}"
+
+    def process_input(self, instruction: str) -> str:
         """Process an economy-related instruction.
 
         Args:
             instruction: The instruction text (e.g., "Player wants to buy health potion from merchant_123").
 
         Returns:
-            AgentResult with response and any actions taken.
+            Agent response as string.
         """
-        # Run the agent
-        response = self.agent(instruction)
-
-        return response
+        return self.process(instruction)
