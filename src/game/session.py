@@ -220,7 +220,7 @@ class GameSession:
         # Show title
         self.console.print()
         self.console.print(Panel(
-            Text("AGENT GM", style="bold magenta", justify="center"),
+            Text("FORGE", style="bold magenta", justify="center"),
             subtitle="A Multi-Agent Text Adventure",
             border_style="magenta"
         ))

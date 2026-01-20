@@ -33,6 +33,12 @@ agents:
     max_tokens: 1024
     description: "Manages combat encounters and narration"
 
+  creator_agent:
+    model: "openrouter/z-ai/glm-4.7"
+    temperature: 0.8
+    max_tokens: 4096
+    description: "On-demand world expansion during gameplay - lazy loading of locations, NPCs, quests"
+
   # World Forge agents
   world_forge:
     model: "openrouter/deepseek/deepseek-v3.2"

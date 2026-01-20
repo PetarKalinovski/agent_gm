@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Agent GM - Visual RPG</title>
+    <title>Forge - Visual RPG</title>
     <!-- PixiJS -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pixi.js/8.6.6/pixi.min.js"></script>
     <style>
@@ -384,12 +384,619 @@
     }
 
     @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
+    /* Tab Bar */
+    .tab-bar {
+        display: flex;
+        background: var(--bg-secondary);
+        border-bottom: 1px solid var(--bg-tertiary);
+        padding: 0 1rem;
+        flex-shrink: 0;
+    }
+
+    .tab-btn {
+        padding: 0.6rem 1.2rem;
+        background: transparent;
+        border: none;
+        color: var(--text-secondary);
+        font-size: 0.85rem;
+        font-weight: 500;
+        cursor: pointer;
+        border-bottom: 2px solid transparent;
+        transition: all 0.2s;
+    }
+
+    .tab-btn:hover {
+        color: var(--text-primary);
+        background: var(--bg-tertiary);
+    }
+
+    .tab-btn.active {
+        color: var(--accent);
+        border-bottom-color: var(--accent);
+    }
+
+    /* Tab Content */
+    .tab-content {
+        display: none;
+        flex: 1;
+        min-height: 0;
+        flex-direction: column;
+    }
+
+    .tab-content.active {
+        display: flex;
+    }
+
+    /* World Viewer Layout */
+    .world-layout {
+        display: flex;
+        flex: 1;
+        min-height: 0;
+    }
+
+    .world-sidebar {
+        width: 200px;
+        background: var(--bg-secondary);
+        border-right: 1px solid var(--bg-tertiary);
+        padding: 0.5rem;
+        overflow-y: auto;
+    }
+
+    .world-sidebar-btn {
+        display: block;
+        width: 100%;
+        padding: 0.6rem 0.8rem;
+        background: transparent;
+        border: none;
+        color: var(--text-secondary);
+        font-size: 0.85rem;
+        text-align: left;
+        cursor: pointer;
+        border-radius: 6px;
+        transition: all 0.2s;
+    }
+
+    .world-sidebar-btn:hover {
+        background: var(--bg-tertiary);
+        color: var(--text-primary);
+    }
+
+    .world-sidebar-btn.active {
+        background: var(--accent);
+        color: white;
+    }
+
+    .world-main {
+        flex: 1;
+        padding: 1rem;
+        overflow-y: auto;
+    }
+
+    /* World Viewer Panels */
+    .world-panel {
+        display: none;
+    }
+
+    .world-panel.active {
+        display: block;
+    }
+
+    .world-panel h2 {
+        font-size: 1.2rem;
+        margin-bottom: 1rem;
+        color: var(--accent);
+    }
+
+    .world-panel h3 {
+        font-size: 1rem;
+        margin: 1rem 0 0.5rem;
+        color: var(--text-primary);
+    }
+
+    /* World Bible Editor */
+    .bible-section {
+        background: var(--bg-tertiary);
+        border-radius: 8px;
+        padding: 1rem;
+        margin-bottom: 1rem;
+    }
+
+    .bible-section label {
+        display: block;
+        font-size: 0.8rem;
+        color: var(--text-secondary);
+        margin-bottom: 0.3rem;
+    }
+
+    .bible-section input,
+    .bible-section textarea,
+    .bible-section select {
+        width: 100%;
+        background: var(--bg-secondary);
+        border: 1px solid var(--bg-tertiary);
+        border-radius: 6px;
+        padding: 0.5rem;
+        color: var(--text-primary);
+        font-size: 0.9rem;
+    }
+
+    .bible-section textarea {
+        min-height: 80px;
+        resize: vertical;
+    }
+
+    .bible-section input:focus,
+    .bible-section textarea:focus {
+        outline: none;
+        border-color: var(--accent);
+    }
+
+    /* Data Tables */
+    .data-table {
+        width: 100%;
+        border-collapse: collapse;
+    }
+
+    .data-table th,
+    .data-table td {
+        padding: 0.6rem;
+        text-align: left;
+        border-bottom: 1px solid var(--bg-tertiary);
+    }
+
+    .data-table th {
+        background: var(--bg-tertiary);
+        font-weight: 600;
+        font-size: 0.85rem;
+    }
+
+    .data-table tr:hover {
+        background: var(--bg-tertiary);
+    }
+
+    /* Action Buttons */
+    .action-btn {
+        padding: 0.4rem 0.8rem;
+        border: none;
+        border-radius: 6px;
+        font-size: 0.8rem;
+        cursor: pointer;
+        transition: opacity 0.2s;
+    }
+
+    .action-btn:hover {
+        opacity: 0.8;
+    }
+
+    .action-btn.primary {
+        background: var(--accent);
+        color: white;
+    }
+
+    .action-btn.danger {
+        background: var(--error);
+        color: white;
+    }
+
+    .action-btn.secondary {
+        background: var(--bg-tertiary);
+        color: var(--text-primary);
+    }
+
+    /* World Forge Chat */
+    .forge-container {
+        display: flex;
+        flex-direction: column;
+        flex: 1;
+        max-width: 900px;
+        margin: 0 auto;
+        padding: 1rem;
+    }
+
+    .forge-messages {
+        flex: 1;
+        overflow-y: auto;
+        padding: 1rem;
+        background: var(--bg-secondary);
+        border-radius: 8px;
+        margin-bottom: 1rem;
+    }
+
+    .forge-message {
+        margin-bottom: 1rem;
+        padding: 0.75rem;
+        border-radius: 8px;
+    }
+
+    .forge-message.user {
+        background: var(--accent);
+        color: white;
+        margin-left: 20%;
+    }
+
+    .forge-message.assistant {
+        background: var(--bg-tertiary);
+        margin-right: 20%;
+    }
+
+    .forge-input {
+        display: flex;
+        gap: 0.5rem;
+    }
+
+    .forge-input textarea {
+        flex: 1;
+        background: var(--bg-tertiary);
+        border: 1px solid transparent;
+        border-radius: 8px;
+        padding: 0.75rem;
+        color: var(--text-primary);
+        font-size: 0.95rem;
+        resize: none;
+        min-height: 60px;
+    }
+
+    .forge-input textarea:focus {
+        outline: none;
+        border-color: var(--accent);
+    }
+
+    .forge-input button {
+        background: var(--accent);
+        color: white;
+        border: none;
+        border-radius: 8px;
+        padding: 0 1.5rem;
+        font-size: 0.9rem;
+        font-weight: 500;
+        cursor: pointer;
+        transition: background 0.2s;
+    }
+
+    .forge-input button:hover:not(:disabled) {
+        background: var(--accent-dim);
+    }
+
+    /* World Selection Page */
+    #world-selection-page {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100vw;
+        height: 100vh;
+        background: var(--bg-primary);
+        z-index: 1000;
+        display: block;
+        padding: 2rem;
+        overflow-y: auto;
+        overflow-x: hidden;
+        text-align: center;
+    }
+
+    #world-selection-page .world-selection-content {
+        text-align: left;
+        margin: 0 auto;
+    }
+
+    #world-selection-page.hidden {
+        display: none;
+    }
+
+    .world-selection-header {
+        text-align: center;
+        margin-bottom: 2rem;
+    }
+
+    .world-selection-header h1 {
+        font-size: 2.5rem;
+        background: linear-gradient(135deg, var(--accent), #a78bfa);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        margin-bottom: 0.5rem;
+    }
+
+    .world-selection-header p {
+        color: var(--text-secondary);
+        font-size: 1rem;
+    }
+
+    .world-selection-content {
+        width: 100%;
+        max-width: 900px;
+        display: flex;
+        flex-direction: column;
+        gap: 2rem;
+    }
+
+    .worlds-section, .create-world-section {
+        background: var(--bg-secondary);
+        border-radius: 12px;
+        padding: 1.5rem;
+    }
+
+    .worlds-section h2, .create-world-section h2 {
+        font-size: 1.2rem;
+        color: var(--accent);
+        margin-bottom: 1rem;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+
+    .worlds-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+        gap: 1rem;
+    }
+
+    .world-card {
+        background: var(--bg-tertiary);
+        border-radius: 8px;
+        padding: 1rem;
+        cursor: pointer;
+        border: 2px solid transparent;
+        transition: all 0.2s;
+    }
+
+    .world-card:hover {
+        border-color: var(--accent-dim);
+        transform: translateY(-2px);
+    }
+
+    .world-card.selected {
+        border-color: var(--accent);
+        background: rgba(99, 102, 241, 0.1);
+    }
+
+    .world-card-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        margin-bottom: 0.5rem;
+    }
+
+    .world-card-name {
+        font-size: 1.1rem;
+        font-weight: 600;
+        color: var(--text-primary);
+    }
+
+    .world-card-genre {
+        font-size: 0.75rem;
+        background: var(--accent-dim);
+        color: white;
+        padding: 0.2rem 0.5rem;
+        border-radius: 4px;
+        text-transform: uppercase;
+    }
+
+    .world-card-description {
+        font-size: 0.85rem;
+        color: var(--text-secondary);
+        margin-bottom: 0.5rem;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+    }
+
+    .world-card-meta {
+        font-size: 0.75rem;
+        color: var(--text-secondary);
+        display: flex;
+        gap: 1rem;
+    }
+
+    .world-card-empty {
+        border: 2px dashed var(--bg-tertiary);
+        background: transparent;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        min-height: 120px;
+        color: var(--text-secondary);
+    }
+
+    .world-card-empty:hover {
+        border-color: var(--accent);
+        color: var(--accent);
+    }
+
+    .enter-world-btn {
+        width: 100%;
+        margin-top: 1rem;
+        padding: 0.75rem 1.5rem;
+        background: var(--accent);
+        color: white;
+        border: none;
+        border-radius: 8px;
+        font-size: 1rem;
+        font-weight: 500;
+        cursor: pointer;
+        transition: background 0.2s;
+    }
+
+    .enter-world-btn:hover:not(:disabled) {
+        background: var(--accent-dim);
+    }
+
+    .enter-world-btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+    }
+
+    /* Create World Form */
+    .create-form {
+        display: grid;
+        gap: 1rem;
+    }
+
+    .create-form .form-row {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 1rem;
+    }
+
+    .create-form .form-group {
+        display: flex;
+        flex-direction: column;
+        gap: 0.3rem;
+    }
+
+    .create-form .form-group.full-width {
+        grid-column: 1 / -1;
+    }
+
+    .create-form label {
+        font-size: 0.85rem;
+        color: var(--text-secondary);
+    }
+
+    .create-form input, .create-form select, .create-form textarea {
+        background: var(--bg-tertiary);
+        border: 1px solid transparent;
+        border-radius: 6px;
+        padding: 0.6rem 0.8rem;
+        color: var(--text-primary);
+        font-size: 0.9rem;
+    }
+
+    .create-form input:focus, .create-form select:focus, .create-form textarea:focus {
+        outline: none;
+        border-color: var(--accent);
+    }
+
+    .create-form textarea {
+        min-height: 80px;
+        resize: vertical;
+    }
+
+    .create-world-btn {
+        padding: 0.75rem 1.5rem;
+        background: var(--success);
+        color: white;
+        border: none;
+        border-radius: 8px;
+        font-size: 1rem;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.2s;
+    }
+
+    .create-world-btn:hover:not(:disabled) {
+        filter: brightness(1.1);
+    }
+
+    .create-world-btn:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+    }
+
+    /* Generation Progress */
+    .generation-progress {
+        display: none;
+        margin-top: 1rem;
+        padding: 1rem;
+        background: var(--bg-tertiary);
+        border-radius: 8px;
+    }
+
+    .generation-progress.visible {
+        display: block;
+    }
+
+    .generation-status {
+        font-size: 0.9rem;
+        color: var(--accent);
+        margin-bottom: 0.5rem;
+    }
+
+    .generation-output {
+        max-height: 200px;
+        overflow-y: auto;
+        font-size: 0.8rem;
+        color: var(--text-secondary);
+        font-family: monospace;
+        white-space: pre-wrap;
+        background: var(--bg-primary);
+        padding: 0.5rem;
+        border-radius: 4px;
+    }
     </style>
 </head>
 <body>
+    <!-- World Selection Page -->
+    <div id="world-selection-page">
+        <div class="world-selection-header">
+            <h1>Forge</h1>
+            <p>Select a world to enter or create a new one</p>
+        </div>
+
+        <div class="world-selection-content">
+            <!-- Existing Worlds -->
+            <section class="worlds-section">
+                <h2>Available Worlds</h2>
+                <div class="worlds-grid" id="worlds-grid">
+                    <div class="world-card world-card-empty">
+                        <div class="loader"></div>
+                        <span>Loading worlds...</span>
+                    </div>
+                </div>
+                <button class="enter-world-btn" id="enter-world-btn" disabled>Select a World to Enter</button>
+            </section>
+
+            <!-- Create New World -->
+            <section class="create-world-section">
+                <h2>Create New World</h2>
+                <div class="create-form">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>World Name</label>
+                            <input type="text" id="new-world-name" placeholder="e.g., my_fantasy_world" />
+                        </div>
+                        <div class="form-group">
+                            <label>Genre</label>
+                            <select id="new-world-genre">
+                                <option value="fantasy">Fantasy</option>
+                                <option value="scifi">Sci-Fi</option>
+                                <option value="modern">Modern</option>
+                                <option value="post-apocalyptic">Post-Apocalyptic</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-group full-width">
+                        <label>World Premise</label>
+                        <textarea id="new-world-premise" placeholder="Describe your world in 1-3 sentences..."></textarea>
+                    </div>
+                    <div class="form-group full-width">
+                        <label>Player Character Concept (optional)</label>
+                        <input type="text" id="new-world-pc" placeholder="e.g., A wandering sellsword with a mysterious past" />
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Factions</label>
+                            <input type="number" id="new-world-factions" value="6" min="2" max="12" />
+                        </div>
+                        <div class="form-group">
+                            <label>Major NPCs</label>
+                            <input type="number" id="new-world-major-npcs" value="12" min="5" max="30" />
+                        </div>
+                    </div>
+                    <button class="create-world-btn" id="create-world-btn">Create World</button>
+                </div>
+                <div class="generation-progress" id="generation-progress">
+                    <div class="generation-status" id="generation-status">Generating world...</div>
+                    <div class="generation-output" id="generation-output"></div>
+                </div>
+            </section>
+        </div>
+    </div>
+
     <!-- Header -->
     <header class="header">
-        <h1>Agent GM</h1>
+        <h1>Forge</h1>
         <div class="player-select">
             <select id="player-select">
                 <option value="">Select Player...</option>
@@ -397,8 +1004,17 @@
         </div>
     </header>
 
-    <!-- Game View -->
-    <div id="game-container">
+    <!-- Tab Bar -->
+    <nav class="tab-bar">
+        <button class="tab-btn active" data-tab="game">Game</button>
+        <button class="tab-btn" data-tab="world-viewer">World Viewer</button>
+        <button class="tab-btn" data-tab="world-forge">World Forge</button>
+    </nav>
+
+    <!-- Tab: Game -->
+    <div id="tab-game" class="tab-content active">
+        <!-- Game View -->
+        <div id="game-container">
         <div class="game-overlay">
             <span class="location" id="game-location">No location</span>
             <span id="game-time"></span>
@@ -437,6 +1053,387 @@
             <button id="send-btn" disabled>Send</button>
         </div>
     </div>
+    </div><!-- End Tab: Game -->
+
+    <!-- Tab: World Viewer -->
+    <div id="tab-world-viewer" class="tab-content">
+        <div class="world-layout">
+            <aside class="world-sidebar">
+                <button class="world-sidebar-btn active" data-panel="overview">Overview</button>
+                <button class="world-sidebar-btn" data-panel="players">Players</button>
+                <button class="world-sidebar-btn" data-panel="factions">Factions</button>
+                <button class="world-sidebar-btn" data-panel="locations">Locations</button>
+                <button class="world-sidebar-btn" data-panel="connections">Connections</button>
+                <button class="world-sidebar-btn" data-panel="npcs">NPCs</button>
+                <button class="world-sidebar-btn" data-panel="quests">Quests</button>
+                <button class="world-sidebar-btn" data-panel="items">Items</button>
+                <button class="world-sidebar-btn" data-panel="history">History</button>
+                <button class="world-sidebar-btn" data-panel="events">Events</button>
+                <button class="world-sidebar-btn" data-panel="raw-data">Raw Data</button>
+            </aside>
+            <main class="world-main">
+                <!-- Overview Panel -->
+                <div id="panel-overview" class="world-panel active">
+                    <h2>World Bible</h2>
+                    <div id="bible-content">
+                        <p style="color: var(--text-secondary);">Loading world bible...</p>
+                    </div>
+                </div>
+
+                <!-- Players Panel -->
+                <div id="panel-players" class="world-panel">
+                    <h2>Players</h2>
+                    <div id="players-content">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Name</th>
+                                    <th>Location</th>
+                                    <th>Health</th>
+                                    <th>Currency</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="players-table-body"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Factions Panel -->
+                <div id="panel-factions" class="world-panel">
+                    <h2>Factions</h2>
+                    <div id="factions-content">
+                        <p style="color: var(--text-secondary);">Loading factions...</p>
+                    </div>
+                </div>
+
+                <!-- Locations Panel -->
+                <div id="panel-locations" class="world-panel">
+                    <h2>Locations</h2>
+                    <div id="locations-content">
+                        <p style="color: var(--text-secondary);">Loading locations...</p>
+                    </div>
+                </div>
+
+                <!-- Connections Panel -->
+                <div id="panel-connections" class="world-panel">
+                    <h2>Connections</h2>
+
+                    <!-- Add Connection Form -->
+                    <div class="add-form-section" style="background: var(--bg-tertiary); padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">
+                        <h3 style="margin-top: 0; color: var(--accent);">Add New Connection</h3>
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem;">
+                            <div>
+                                <label style="font-size: 0.8rem; color: var(--text-secondary);">From Location</label>
+                                <select id="conn-from" class="form-input" style="width: 100%;"></select>
+                            </div>
+                            <div>
+                                <label style="font-size: 0.8rem; color: var(--text-secondary);">To Location</label>
+                                <select id="conn-to" class="form-input" style="width: 100%;"></select>
+                            </div>
+                            <div>
+                                <label style="font-size: 0.8rem; color: var(--text-secondary);">Travel Type</label>
+                                <select id="conn-type" class="form-input" style="width: 100%;">
+                                    <option value="walk">Walk</option>
+                                    <option value="vehicle">Vehicle</option>
+                                    <option value="ship">Ship</option>
+                                    <option value="hyperspace">Hyperspace</option>
+                                    <option value="teleport">Teleport</option>
+                                    <option value="flight">Flight</option>
+                                    <option value="swim">Swim</option>
+                                    <option value="climb">Climb</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label style="font-size: 0.8rem; color: var(--text-secondary);">Travel Time (hours)</label>
+                                <input type="number" id="conn-time" class="form-input" value="1" min="0.1" step="0.5" style="width: 100%;">
+                            </div>
+                            <div style="display: flex; align-items: center; gap: 1rem;">
+                                <label><input type="checkbox" id="conn-bidir" checked> Bidirectional</label>
+                                <label><input type="checkbox" id="conn-discovered" checked> Discovered</label>
+                            </div>
+                            <div>
+                                <button class="action-btn primary" onclick="createConnection()">Add Connection</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="connections-content">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>From</th>
+                                    <th>To</th>
+                                    <th>Type</th>
+                                    <th>Travel Time</th>
+                                    <th>Direction</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="connections-table-body"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- NPCs Panel -->
+                <div id="panel-npcs" class="world-panel">
+                    <h2>NPCs</h2>
+                    <div style="margin-bottom: 1rem;">
+                        <input type="text" id="npc-search" placeholder="Search NPCs..." style="padding: 0.5rem; background: var(--bg-tertiary); border: 1px solid var(--bg-tertiary); border-radius: 6px; color: var(--text-primary); width: 200px;">
+                        <select id="npc-tier-filter" style="padding: 0.5rem; background: var(--bg-tertiary); border: 1px solid var(--bg-tertiary); border-radius: 6px; color: var(--text-primary); margin-left: 0.5rem;">
+                            <option value="">All Tiers</option>
+                            <option value="MAJOR">Major</option>
+                            <option value="MINOR">Minor</option>
+                            <option value="AMBIENT">Ambient</option>
+                        </select>
+                    </div>
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Name</th>
+                                <th>Tier</th>
+                                <th>Location</th>
+                                <th>Status</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="npcs-table-body"></tbody>
+                    </table>
+                </div>
+
+                <!-- Quests Panel -->
+                <div id="panel-quests" class="world-panel">
+                    <h2>Quests</h2>
+
+                    <!-- Quest Stats -->
+                    <div id="quest-stats" style="display: flex; gap: 1rem; margin-bottom: 1rem;"></div>
+
+                    <!-- Filter -->
+                    <div style="margin-bottom: 1rem;">
+                        <select id="quest-status-filter" class="form-input" style="width: 200px;">
+                            <option value="">All Statuses</option>
+                            <option value="not_started">Not Started</option>
+                            <option value="active">Active</option>
+                            <option value="completed">Completed</option>
+                            <option value="failed">Failed</option>
+                        </select>
+                    </div>
+
+                    <!-- Add Quest Form -->
+                    <div class="add-form-section" style="background: var(--bg-tertiary); padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">
+                        <h3 style="margin-top: 0; color: var(--accent);">Add New Quest</h3>
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem;">
+                            <div>
+                                <label style="font-size: 0.8rem; color: var(--text-secondary);">Title</label>
+                                <input type="text" id="quest-new-title" class="form-input" style="width: 100%;" placeholder="Quest title...">
+                            </div>
+                            <div>
+                                <label style="font-size: 0.8rem; color: var(--text-secondary);">Quest Giver (NPC)</label>
+                                <select id="quest-new-npc" class="form-input" style="width: 100%;"></select>
+                            </div>
+                            <div style="grid-column: span 2;">
+                                <label style="font-size: 0.8rem; color: var(--text-secondary);">Description</label>
+                                <textarea id="quest-new-desc" class="form-input" style="width: 100%; min-height: 60px;" placeholder="Quest description..."></textarea>
+                            </div>
+                            <div style="grid-column: span 2;">
+                                <label style="font-size: 0.8rem; color: var(--text-secondary);">Objectives (one per line)</label>
+                                <textarea id="quest-new-objectives" class="form-input" style="width: 100%; min-height: 60px;" placeholder="Find the artifact&#10;Return to the quest giver"></textarea>
+                            </div>
+                            <div>
+                                <label style="font-size: 0.8rem; color: var(--text-secondary);">Initial Status</label>
+                                <select id="quest-new-status" class="form-input" style="width: 100%;">
+                                    <option value="not_started">Not Started</option>
+                                    <option value="active">Active</option>
+                                </select>
+                            </div>
+                            <div style="display: flex; align-items: end;">
+                                <button class="action-btn primary" onclick="createQuest()">Create Quest</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="quests-content">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Title</th>
+                                    <th>Status</th>
+                                    <th>Giver</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="quests-table-body"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Items Panel -->
+                <div id="panel-items" class="world-panel">
+                    <h2>Items</h2>
+                    <p style="color: var(--text-secondary); font-size: 0.9rem; margin-bottom: 1rem;">View items from player inventories and NPC notable items.</p>
+                    <div id="items-content">
+                        <p style="color: var(--text-secondary);">Loading items...</p>
+                    </div>
+                </div>
+
+                <!-- History Panel -->
+                <div id="panel-history" class="world-panel">
+                    <h2>Historical Events</h2>
+                    <div id="history-content">
+                        <p style="color: var(--text-secondary);">Loading history...</p>
+                    </div>
+                </div>
+
+                <!-- Events Panel -->
+                <div id="panel-events" class="world-panel">
+                    <h2>Runtime Events</h2>
+                    <div id="events-content">
+                        <p style="color: var(--text-secondary);">Loading events...</p>
+                    </div>
+                </div>
+
+                <!-- Raw Data Panel -->
+                <div id="panel-raw-data" class="world-panel">
+                    <h2>Export Data</h2>
+                    <div style="display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1rem;">
+                        <button class="action-btn primary" onclick="exportData('bible')">World Bible</button>
+                        <button class="action-btn primary" onclick="exportData('players')">Players</button>
+                        <button class="action-btn primary" onclick="exportData('factions')">Factions</button>
+                        <button class="action-btn primary" onclick="exportData('locations')">Locations</button>
+                        <button class="action-btn primary" onclick="exportData('npcs')">NPCs</button>
+                        <button class="action-btn primary" onclick="exportData('quests')">Quests</button>
+                    </div>
+                    <pre id="raw-data-output" style="background: var(--bg-tertiary); padding: 1rem; border-radius: 8px; overflow: auto; max-height: 500px; font-size: 0.8rem;"></pre>
+                </div>
+            </main>
+        </div>
+    </div><!-- End Tab: World Viewer -->
+
+    <!-- Tab: World Forge -->
+    <div id="tab-world-forge" class="tab-content">
+        <div class="forge-container">
+            <h2 style="color: var(--accent); margin-bottom: 1rem;">World Forge</h2>
+            <p style="color: var(--text-secondary); margin-bottom: 1rem;">Query the World Forge agent to modify your world. Examples: "Create a new tavern NPC", "Add a secret passage", "Generate a new quest"</p>
+            <div class="forge-messages" id="forge-messages">
+                <div class="forge-message assistant">
+                    Welcome to World Forge. Ask me to create or modify anything in your world.
+                </div>
+            </div>
+            <div class="forge-input">
+                <textarea id="forge-query" placeholder="Enter your world modification request..."></textarea>
+                <button id="forge-send">Send</button>
+            </div>
+        </div>
+    </div><!-- End Tab: World Forge -->
+
+    <!-- Edit Modal -->
+    <div id="edit-modal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="modal-title">Edit</h3>
+                <button class="modal-close" onclick="closeModal()">&times;</button>
+            </div>
+            <div class="modal-body" id="modal-body">
+                <!-- Dynamic content -->
+            </div>
+            <div class="modal-footer">
+                <button class="action-btn secondary" onclick="closeModal()">Cancel</button>
+                <button class="action-btn primary" id="modal-save-btn">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <style>
+        .modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 2000;
+        }
+        .modal-content {
+            background: var(--bg-secondary);
+            border-radius: 12px;
+            width: 90%;
+            max-width: 600px;
+            max-height: 80vh;
+            display: flex;
+            flex-direction: column;
+        }
+        .modal-header {
+            padding: 1rem;
+            border-bottom: 1px solid var(--bg-tertiary);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .modal-header h3 {
+            margin: 0;
+            color: var(--accent);
+        }
+        .modal-close {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            font-size: 1.5rem;
+            cursor: pointer;
+        }
+        .modal-close:hover {
+            color: var(--text-primary);
+        }
+        .modal-body {
+            padding: 1rem;
+            overflow-y: auto;
+            flex: 1;
+        }
+        .modal-footer {
+            padding: 1rem;
+            border-top: 1px solid var(--bg-tertiary);
+            display: flex;
+            justify-content: flex-end;
+            gap: 0.5rem;
+        }
+        .form-group {
+            margin-bottom: 1rem;
+        }
+        .form-group label {
+            display: block;
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            margin-bottom: 0.3rem;
+        }
+        .form-group input,
+        .form-group textarea,
+        .form-group select {
+            width: 100%;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--bg-tertiary);
+            border-radius: 6px;
+            padding: 0.5rem;
+            color: var(--text-primary);
+            font-size: 0.9rem;
+        }
+        .form-group input:focus,
+        .form-group textarea:focus,
+        .form-group select:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+        .form-group textarea {
+            min-height: 80px;
+            resize: vertical;
+        }
+        .form-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1rem;
+        }
+    </style>
 
     <!-- Game Renderer -->
     <script src="/static/js/game.js"></script>
@@ -448,6 +1445,197 @@
         let currentLocationId = null;
         let isProcessing = false;
         let currentNpcId = null;
+        let selectedWorldPath = null;
+
+        // World Selection DOM elements
+        const worldSelectionPage = document.getElementById('world-selection-page');
+        const worldsGrid = document.getElementById('worlds-grid');
+        const enterWorldBtn = document.getElementById('enter-world-btn');
+        const createWorldBtn = document.getElementById('create-world-btn');
+        const generationProgress = document.getElementById('generation-progress');
+        const generationStatus = document.getElementById('generation-status');
+        const generationOutput = document.getElementById('generation-output');
+
+        // ===============================
+        // WORLD SELECTION FUNCTIONS
+        // ===============================
+
+        async function loadWorlds() {
+            try {
+                const res = await fetch('/api/worlds');
+                const data = await res.json();
+
+                if (data.worlds.length === 0) {
+                    worldsGrid.innerHTML = `
+                        <div class="world-card world-card-empty" style="cursor: default;">
+                            <span>No worlds found</span>
+                            <span style="font-size: 0.8rem;">Create one below!</span>
+                        </div>
+                    `;
+                    return;
+                }
+
+                worldsGrid.innerHTML = data.worlds.map(world => `
+                    <div class="world-card" data-db-path="${world.db_path}" onclick="selectWorld('${world.db_path}')">
+                        <div class="world-card-header">
+                            <span class="world-card-name">${world.world_name || world.name}</span>
+                            ${world.genre ? `<span class="world-card-genre">${world.genre}</span>` : ''}
+                        </div>
+                        <div class="world-card-description">
+                            ${world.description || 'No description available'}
+                        </div>
+                        <div class="world-card-meta">
+                            <span>${world.size_mb} MB</span>
+                            ${world.has_world_bible ? '<span style="color: var(--success);">Ready</span>' : '<span style="color: var(--warning);">Empty</span>'}
+                        </div>
+                    </div>
+                `).join('');
+
+            } catch (error) {
+                console.error('Failed to load worlds:', error);
+                worldsGrid.innerHTML = `
+                    <div class="world-card world-card-empty" style="cursor: default; color: var(--error);">
+                        <span>Failed to load worlds</span>
+                        <span style="font-size: 0.8rem;">${error.message}</span>
+                    </div>
+                `;
+            }
+        }
+
+        function selectWorld(dbPath) {
+            // Update selection UI
+            document.querySelectorAll('.world-card').forEach(card => {
+                card.classList.remove('selected');
+            });
+            const selectedCard = document.querySelector(`.world-card[data-db-path="${dbPath}"]`);
+            if (selectedCard) {
+                selectedCard.classList.add('selected');
+            }
+
+            selectedWorldPath = dbPath;
+            enterWorldBtn.disabled = false;
+            enterWorldBtn.textContent = 'Enter World';
+        }
+
+        async function enterSelectedWorld() {
+            if (!selectedWorldPath) return;
+
+            enterWorldBtn.disabled = true;
+            enterWorldBtn.textContent = 'Loading...';
+
+            try {
+                const res = await fetch('/api/worlds/select', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ db_path: selectedWorldPath })
+                });
+                const data = await res.json();
+
+                if (data.success) {
+                    // Hide world selection, show game
+                    worldSelectionPage.classList.add('hidden');
+                    // Initialize game
+                    await initGame();
+                    await loadPlayers();
+                } else {
+                    alert('Failed to select world: ' + data.error);
+                    enterWorldBtn.disabled = false;
+                    enterWorldBtn.textContent = 'Enter World';
+                }
+            } catch (error) {
+                console.error('Failed to enter world:', error);
+                alert('Failed to enter world: ' + error.message);
+                enterWorldBtn.disabled = false;
+                enterWorldBtn.textContent = 'Enter World';
+            }
+        }
+
+        async function createNewWorld() {
+            const name = document.getElementById('new-world-name').value.trim();
+            const genre = document.getElementById('new-world-genre').value;
+            const premise = document.getElementById('new-world-premise').value.trim();
+            const pc = document.getElementById('new-world-pc').value.trim();
+            const numFactions = parseInt(document.getElementById('new-world-factions').value) || 6;
+            const numMajorNpcs = parseInt(document.getElementById('new-world-major-npcs').value) || 12;
+
+            if (!name) {
+                alert('Please enter a world name');
+                return;
+            }
+            if (!premise) {
+                alert('Please enter a world premise');
+                return;
+            }
+
+            createWorldBtn.disabled = true;
+            createWorldBtn.textContent = 'Creating...';
+            generationProgress.classList.add('visible');
+            generationStatus.textContent = 'Starting world generation...';
+            generationOutput.textContent = '';
+
+            try {
+                const res = await fetch('/api/worlds/create/stream', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        name,
+                        genre,
+                        premise,
+                        pc_concept: pc,
+                        num_factions: numFactions,
+                        num_major_npcs: numMajorNpcs,
+                        num_minor_npcs: 40
+                    })
+                });
+
+                const reader = res.body.getReader();
+                const decoder = new TextDecoder();
+                let outputText = '';
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    const text = decoder.decode(value);
+                    const lines = text.split('\n');
+
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            try {
+                                const data = JSON.parse(line.substring(6));
+                                if (data.type === 'status') {
+                                    generationStatus.textContent = data.message;
+                                } else if (data.type === 'token') {
+                                    outputText += data.data;
+                                    generationOutput.textContent = outputText.slice(-2000);
+                                    generationOutput.scrollTop = generationOutput.scrollHeight;
+                                } else if (data.type === 'complete') {
+                                    generationStatus.textContent = data.message || 'World created successfully!';
+                                    // Reload worlds and select the new one
+                                    await loadWorlds();
+                                    selectWorld(data.db_path);
+                                } else if (data.type === 'error') {
+                                    generationStatus.textContent = 'Error: ' + data.message;
+                                    generationStatus.style.color = 'var(--error)';
+                                }
+                            } catch (e) { }
+                        }
+                    }
+                }
+
+            } catch (error) {
+                console.error('World creation failed:', error);
+                generationStatus.textContent = 'Error: ' + error.message;
+                generationStatus.style.color = 'var(--error)';
+            } finally {
+                createWorldBtn.disabled = false;
+                createWorldBtn.textContent = 'Create World';
+            }
+        }
+
+        // World selection event listeners
+        enterWorldBtn.addEventListener('click', enterSelectedWorld);
+        createWorldBtn.addEventListener('click', createNewWorld);
 
         // DOM elements
         const playerSelect = document.getElementById('player-select');
@@ -709,9 +1897,1615 @@
             }
         });
 
-        // Start everything
-        initGame();
-        loadPlayers();
+        // Start with world selection
+        loadWorlds();
+
+        // ===============================
+        // TAB SWITCHING
+        // ===============================
+        document.querySelectorAll('.tab-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const tabId = btn.dataset.tab;
+
+                // Update tab buttons
+                document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+
+                // Update tab content
+                document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
+                document.getElementById(`tab-${tabId}`).classList.add('active');
+
+                // Load data when switching to world viewer
+                if (tabId === 'world-viewer') {
+                    loadWorldViewerData();
+                }
+
+                // Resize game when switching back
+                if (tabId === 'game' && game && game.app) {
+                    setTimeout(() => { game.app.resize(); game.onResize(); }, 100);
+                }
+            });
+        });
+
+        // ===============================
+        // WORLD VIEWER SIDEBAR SWITCHING
+        // ===============================
+        document.querySelectorAll('.world-sidebar-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const panelId = btn.dataset.panel;
+
+                // Update sidebar buttons
+                document.querySelectorAll('.world-sidebar-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+
+                // Update panels
+                document.querySelectorAll('.world-panel').forEach(panel => panel.classList.remove('active'));
+                document.getElementById(`panel-${panelId}`).classList.add('active');
+            });
+        });
+
+        // ===============================
+        // WORLD VIEWER DATA LOADING
+        // ===============================
+        async function loadWorldViewerData() {
+            await Promise.all([
+                loadWorldBible(),
+                loadPlayers_WorldViewer(),
+                loadFactions(),
+                loadLocations_WorldViewer(),
+                loadConnections(),
+                loadNPCs(),
+                loadQuests(),
+                loadItems(),
+                loadHistoricalEvents(),
+                loadRuntimeEvents()
+            ]);
+        }
+
+        async function loadWorldBible() {
+            try {
+                // Fetch bible and stats in parallel
+                const [bibleRes, factionsRes, locationsRes, npcsRes, clockRes] = await Promise.all([
+                    fetch('/api/world/bible'),
+                    fetch('/api/world/factions'),
+                    fetch('/api/locations'),
+                    fetch('/api/world/npcs'),
+                    fetch('/api/world/clock')
+                ]);
+
+                if (!bibleRes.ok) {
+                    document.getElementById('bible-content').innerHTML = '<p style="color: var(--error);">World Bible API not yet implemented</p>';
+                    return;
+                }
+                const bible = await bibleRes.json();
+                const factions = factionsRes.ok ? await factionsRes.json() : [];
+                const locations = locationsRes.ok ? await locationsRes.json() : [];
+                const npcs = npcsRes.ok ? await npcsRes.json() : [];
+                const clock = clockRes.ok ? await clockRes.json() : { day: 1, hour: 8, time_of_day: 'morning' };
+
+                renderWorldBible(bible, { factions, locations, npcs, clock });
+            } catch (e) {
+                document.getElementById('bible-content').innerHTML = '<p style="color: var(--error);">Failed to load world bible</p>';
+            }
+        }
+
+        function renderWorldBible(bible, stats = {}) {
+            const container = document.getElementById('bible-content');
+            if (!bible || bible.error) {
+                container.innerHTML = '<p style="color: var(--text-secondary);">No world bible found.</p>';
+                return;
+            }
+
+            const { factions = [], locations = [], npcs = [], clock = {} } = stats;
+
+            container.innerHTML = `
+                <!-- World Stats Header -->
+                <div style="display: flex; gap: 1rem; margin-bottom: 1.5rem; flex-wrap: wrap;">
+                    <div style="background: var(--bg-tertiary); padding: 0.75rem 1.25rem; border-radius: 8px; text-align: center; min-width: 100px;">
+                        <div style="font-size: 1.5rem; font-weight: bold; color: var(--accent);">${factions.length}</div>
+                        <div style="font-size: 0.8rem; color: var(--text-secondary);">Factions</div>
+                    </div>
+                    <div style="background: var(--bg-tertiary); padding: 0.75rem 1.25rem; border-radius: 8px; text-align: center; min-width: 100px;">
+                        <div style="font-size: 1.5rem; font-weight: bold; color: var(--accent);">${locations.length}</div>
+                        <div style="font-size: 0.8rem; color: var(--text-secondary);">Locations</div>
+                    </div>
+                    <div style="background: var(--bg-tertiary); padding: 0.75rem 1.25rem; border-radius: 8px; text-align: center; min-width: 100px;">
+                        <div style="font-size: 1.5rem; font-weight: bold; color: var(--accent);">${npcs.length}</div>
+                        <div style="font-size: 0.8rem; color: var(--text-secondary);">NPCs</div>
+                    </div>
+                    <div style="background: var(--bg-tertiary); padding: 0.75rem 1.25rem; border-radius: 8px; text-align: center; min-width: 120px;">
+                        <div style="font-size: 1rem; font-weight: bold;">Day ${clock.day || 1}, ${String(clock.hour || 8).padStart(2, '0')}:00</div>
+                        <div style="font-size: 0.8rem; color: var(--text-secondary);">${clock.time_of_day || 'morning'}</div>
+                    </div>
+                </div>
+
+                <div class="bible-section">
+                    <label>World Name</label>
+                    <input type="text" id="bible-name" value="${bible.name || ''}" />
+                </div>
+                <div class="bible-section">
+                    <label>Tagline</label>
+                    <input type="text" id="bible-tagline" value="${bible.tagline || ''}" readonly />
+                </div>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                    <div class="bible-section">
+                        <label>Genre</label>
+                        <input type="text" id="bible-genre" value="${bible.genre || ''}" />
+                    </div>
+                    <div class="bible-section">
+                        <label>Sub-Genres</label>
+                        <input type="text" value="${(bible.sub_genres || []).join(', ')}" readonly style="background: var(--bg-tertiary);" />
+                    </div>
+                </div>
+                <div class="bible-section">
+                    <label>Tone</label>
+                    <textarea id="bible-tone">${bible.tone || ''}</textarea>
+                </div>
+                <div class="bible-section">
+                    <label>Themes</label>
+                    <input type="text" id="bible-themes" value="${(bible.themes || []).join(', ')}" placeholder="Comma-separated themes" />
+                </div>
+                <div class="bible-section">
+                    <label>Setting Description</label>
+                    <textarea id="bible-setting" style="min-height: 150px;">${bible.setting_description || ''}</textarea>
+                </div>
+                <div class="bible-section">
+                    <label>Current Situation</label>
+                    <textarea id="bible-current-situation">${bible.current_situation || ''}</textarea>
+                </div>
+                ${bible.rules && bible.rules.length ? `
+                <div class="bible-section">
+                    <label>World Rules</label>
+                    <div style="background: var(--bg-tertiary); padding: 0.75rem; border-radius: 6px;">
+                        <ul style="margin: 0; padding-left: 1.5rem;">
+                            ${bible.rules.map(r => `<li style="margin-bottom: 0.25rem;">${r}</li>`).join('')}
+                        </ul>
+                    </div>
+                </div>
+                ` : ''}
+                <div class="bible-section">
+                    <label>Visual Style</label>
+                    <textarea id="bible-visual-style">${bible.visual_style || ''}</textarea>
+                </div>
+                <div class="bible-section">
+                    <label>Narration Style</label>
+                    <input type="text" id="bible-narration" value="${bible.narration_style || ''}" readonly />
+                </div>
+                <button class="action-btn primary" onclick="saveWorldBible()" style="margin-top: 1rem;">Save Changes</button>
+            `;
+        }
+
+        async function saveWorldBible() {
+            const themesStr = document.getElementById('bible-themes').value;
+            const themes = themesStr ? themesStr.split(',').map(t => t.trim()).filter(t => t) : [];
+
+            const bible = {
+                name: document.getElementById('bible-name').value,
+                genre: document.getElementById('bible-genre').value,
+                tone: document.getElementById('bible-tone').value,
+                themes: themes,
+                setting_description: document.getElementById('bible-setting').value,
+                current_situation: document.getElementById('bible-current-situation').value,
+                visual_style: document.getElementById('bible-visual-style').value
+            };
+            try {
+                const response = await fetch('/api/world/bible', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(bible)
+                });
+                if (response.ok) {
+                    alert('World Bible saved!');
+                } else {
+                    alert('Failed to save world bible');
+                }
+            } catch (e) {
+                alert('Error saving world bible: ' + e.message);
+            }
+        }
+
+        async function loadPlayers_WorldViewer() {
+            try {
+                const response = await fetch('/api/players');
+                const players = await response.json();
+
+                // Get location names
+                const locResponse = await fetch('/api/locations');
+                const locations = locResponse.ok ? await locResponse.json() : [];
+                const locNames = {};
+                locations.forEach(l => locNames[l.id] = l.name);
+
+                const tbody = document.getElementById('players-table-body');
+                const healthColors = {
+                    'healthy': 'var(--success)',
+                    'winded': 'var(--warning)',
+                    'hurt': 'orange',
+                    'badly_hurt': 'var(--error)',
+                    'critical': 'darkred',
+                    'dead': 'gray'
+                };
+
+                tbody.innerHTML = players.map(p => `
+                    <tr>
+                        <td>${p.name}</td>
+                        <td>${locNames[p.current_location_id] || p.current_location_id || 'Unknown'}</td>
+                        <td><span style="color: ${healthColors[p.health_status] || 'var(--text-primary)'};">${p.health_status || 'healthy'}</span></td>
+                        <td>${p.currency || 0} cr</td>
+                        <td>
+                            <button class="action-btn secondary" onclick="editPlayer('${p.id}')">Edit</button>
+                            <button class="action-btn danger" onclick="deletePlayer('${p.id}')" style="margin-left: 0.25rem;">Delete</button>
+                        </td>
+                    </tr>
+                `).join('') || '<tr><td colspan="5">No players found</td></tr>';
+            } catch (e) {
+                document.getElementById('players-table-body').innerHTML = '<tr><td colspan="5">Failed to load players</td></tr>';
+            }
+        }
+
+        async function loadFactions() {
+            try {
+                const [factionsRes, relRes] = await Promise.all([
+                    fetch('/api/world/factions'),
+                    fetch('/api/world/faction-relationships')
+                ]);
+
+                if (!factionsRes.ok) {
+                    document.getElementById('factions-content').innerHTML = '<p style="color: var(--error);">Factions API not yet implemented</p>';
+                    return;
+                }
+                const factions = await factionsRes.json();
+                const relationships = relRes.ok ? await relRes.json() : [];
+                renderFactions(factions, relationships);
+            } catch (e) {
+                document.getElementById('factions-content').innerHTML = '<p style="color: var(--error);">Failed to load factions</p>';
+            }
+        }
+
+        function renderFactions(factions, relationships = []) {
+            const container = document.getElementById('factions-content');
+            if (!factions || factions.length === 0) {
+                container.innerHTML = '<p style="color: var(--text-secondary);">No factions found.</p>';
+                return;
+            }
+
+            const relTypeColors = {
+                'allied': 'var(--success)',
+                'friendly': '#4ade80',
+                'neutral': 'var(--text-secondary)',
+                'rival': 'orange',
+                'hostile': 'var(--error)',
+                'war': '#dc2626'
+            };
+
+            let html = `
+                <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 1rem;">
+                    ${factions.map(f => `
+                        <div class="bible-section">
+                            <h3 style="color: var(--accent); margin: 0 0 0.5rem 0;">${f.name}</h3>
+                            <p style="font-size: 0.85rem; color: var(--text-secondary);">${f.ideology || 'No ideology defined'}</p>
+                            ${f.aesthetic ? `<p style="font-size: 0.8rem;"><strong>Aesthetic:</strong> ${f.aesthetic}</p>` : ''}
+                            <div style="margin: 0.5rem 0;">
+                                <div style="background: var(--bg-tertiary); border-radius: 4px; height: 8px; overflow: hidden;">
+                                    <div style="background: var(--accent); height: 100%; width: ${f.power_level || 0}%;"></div>
+                                </div>
+                                <span style="font-size: 0.75rem; color: var(--text-secondary);">Power: ${f.power_level || 0}/100</span>
+                            </div>
+                            <p style="font-size: 0.8rem;"><strong>Goals:</strong> ${(f.goals_short || []).slice(0, 2).join(', ') || 'None'}</p>
+                            <div style="margin-top: 0.5rem;">
+                                <button class="action-btn secondary" onclick="editFaction('${f.id}')">Edit</button>
+                                <button class="action-btn danger" onclick="deleteFaction('${f.id}')" style="margin-left: 0.25rem;">Delete</button>
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+
+            // Add relationships section if any exist
+            if (relationships && relationships.length > 0) {
+                html += `
+                    <h3 style="margin-top: 1.5rem; color: var(--accent);">Faction Relationships</h3>
+                    <table class="data-table" style="margin-top: 0.5rem;">
+                        <thead>
+                            <tr>
+                                <th>Faction A</th>
+                                <th>Relationship</th>
+                                <th>Faction B</th>
+                                <th>Stability</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${relationships.map(r => `
+                                <tr>
+                                    <td>${r.faction_a_name}</td>
+                                    <td><span style="color: ${relTypeColors[r.relationship_type] || 'var(--text-primary)'};">${r.relationship_type}</span></td>
+                                    <td>${r.faction_b_name}</td>
+                                    <td>${r.stability || 'stable'}</td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                `;
+            }
+
+            container.innerHTML = html;
+        }
+
+        async function loadLocations_WorldViewer() {
+            try {
+                const response = await fetch('/api/locations');
+                const locations = await response.json();
+                renderLocationsTree(locations);
+            } catch (e) {
+                document.getElementById('locations-content').innerHTML = '<p style="color: var(--error);">Failed to load locations</p>';
+            }
+        }
+
+        function renderLocationsTree(locations) {
+            const container = document.getElementById('locations-content');
+            // Build tree structure
+            const roots = locations.filter(l => !l.parent_id);
+            const children = {};
+            locations.forEach(l => {
+                if (l.parent_id) {
+                    if (!children[l.parent_id]) children[l.parent_id] = [];
+                    children[l.parent_id].push(l);
+                }
+            });
+
+            function renderNode(loc, depth = 0) {
+                const indent = depth * 20;
+                const kids = children[loc.id] || [];
+                const stateEmoji = {'peaceful': '✅', 'under_siege': '⚠️', 'destroyed': '💀', 'abandoned': '🏚️'}[loc.current_state] || '';
+                return `
+                    <div style="margin-left: ${indent}px; padding: 0.5rem; border-left: 2px solid var(--bg-tertiary); margin-bottom: 0.25rem;">
+                        <span style="color: var(--accent); font-weight: 600;">${loc.name}</span>
+                        <span style="color: var(--text-secondary); font-size: 0.8rem; margin-left: 0.5rem;">(${loc.type}) ${stateEmoji}</span>
+                        <button class="action-btn secondary" onclick="editLocation('${loc.id}')" style="margin-left: 0.5rem; padding: 0.2rem 0.5rem; font-size: 0.7rem;">Edit</button>
+                        <button class="action-btn danger" onclick="deleteLocation('${loc.id}')" style="padding: 0.2rem 0.5rem; font-size: 0.7rem; margin-left: 0.25rem;">Delete</button>
+                        ${kids.map(k => renderNode(k, depth + 1)).join('')}
+                    </div>
+                `;
+            }
+
+            container.innerHTML = roots.map(r => renderNode(r)).join('') || '<p style="color: var(--text-secondary);">No locations found.</p>';
+        }
+
+        async function loadConnections() {
+            try {
+                // Load connections
+                const response = await fetch('/api/world/connections');
+                const connections = await response.json();
+                const tbody = document.getElementById('connections-table-body');
+
+                tbody.innerHTML = connections.map(c => `
+                    <tr>
+                        <td>${c.from_location_name}</td>
+                        <td>${c.to_location_name}</td>
+                        <td>${c.travel_type || 'road'}</td>
+                        <td>${c.travel_time_hours || 1} hour(s)</td>
+                        <td>${c.bidirectional ? '↔' : '→'}</td>
+                        <td><button class="action-btn danger" onclick="deleteConnection('${c.id}')" style="padding: 0.2rem 0.5rem; font-size: 0.7rem;">Delete</button></td>
+                    </tr>
+                `).join('') || '<tr><td colspan="6">No connections found</td></tr>';
+
+                // Populate location dropdowns for add form
+                const locResponse = await fetch('/api/locations');
+                const locations = await locResponse.json();
+                const connFrom = document.getElementById('conn-from');
+                const connTo = document.getElementById('conn-to');
+                if (connFrom && connTo) {
+                    const options = locations.map(l => `<option value="${l.id}">${l.name}</option>`).join('');
+                    connFrom.innerHTML = '<option value="">Select location...</option>' + options;
+                    connTo.innerHTML = '<option value="">Select location...</option>' + options;
+                }
+            } catch (e) {
+                document.getElementById('connections-table-body').innerHTML = '<tr><td colspan="6">Failed to load connections</td></tr>';
+            }
+        }
+
+        async function loadNPCs() {
+            try {
+                const response = await fetch('/api/world/npcs');
+                if (!response.ok) {
+                    // Fallback to locations API to get NPCs
+                    const locResponse = await fetch('/api/locations');
+                    const locations = await locResponse.json();
+                    const allNpcs = [];
+                    const nameMap = {};
+                    locations.forEach(l => {
+                        nameMap[l.id] = l.name;
+                        (l.npcs || []).forEach(n => {
+                            allNpcs.push({ ...n, location_name: l.name });
+                        });
+                    });
+                    renderNPCs(allNpcs);
+                    return;
+                }
+                const npcs = await response.json();
+                renderNPCs(npcs);
+            } catch (e) {
+                document.getElementById('npcs-table-body').innerHTML = '<tr><td colspan="5">Failed to load NPCs</td></tr>';
+            }
+        }
+
+        function renderNPCs(npcs) {
+            window._allNpcs = npcs; // Store for filtering
+            filterNPCs();
+        }
+
+        function filterNPCs() {
+            const search = document.getElementById('npc-search').value.toLowerCase();
+            const tier = document.getElementById('npc-tier-filter').value;
+            const npcs = window._allNpcs || [];
+
+            const filtered = npcs.filter(n => {
+                const matchesSearch = !search || n.name.toLowerCase().includes(search);
+                const matchesTier = !tier || n.tier === tier;
+                return matchesSearch && matchesTier;
+            });
+
+            const tbody = document.getElementById('npcs-table-body');
+            tbody.innerHTML = filtered.map(n => `
+                <tr>
+                    <td>${n.name}</td>
+                    <td><span style="padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.75rem; background: ${n.tier === 'MAJOR' ? 'var(--accent)' : n.tier === 'MINOR' ? 'var(--warning)' : 'var(--bg-tertiary)'};">${n.tier || 'Unknown'}</span></td>
+                    <td>${n.location_name || 'Unknown'}</td>
+                    <td>${n.status || 'alive'}</td>
+                    <td>
+                        <button class="action-btn secondary" onclick="editNPC('${n.id}')" style="padding: 0.2rem 0.5rem; font-size: 0.7rem;">Edit</button>
+                        <button class="action-btn danger" onclick="deleteNPC('${n.id}')" style="padding: 0.2rem 0.5rem; font-size: 0.7rem; margin-left: 0.25rem;">Delete</button>
+                    </td>
+                </tr>
+            `).join('') || '<tr><td colspan="5">No NPCs found</td></tr>';
+        }
+
+        async function deleteNPC(npcId) {
+            if (!confirm('Are you sure you want to delete this NPC?')) return;
+
+            try {
+                const res = await fetch(`/api/world/npcs/${npcId}`, { method: 'DELETE' });
+                const result = await res.json();
+                if (result.success) {
+                    loadNPCs();
+                } else {
+                    alert('Failed to delete NPC: ' + (result.error || 'Unknown error'));
+                }
+            } catch (e) {
+                alert('Failed to delete NPC: ' + e.message);
+            }
+        }
+
+        // Add filter event listeners
+        document.getElementById('npc-search')?.addEventListener('input', filterNPCs);
+        document.getElementById('npc-tier-filter')?.addEventListener('change', filterNPCs);
+
+        async function loadQuests() {
+            try {
+                const response = await fetch('/api/world/quests');
+                if (!response.ok) {
+                    document.getElementById('quests-table-body').innerHTML = '<tr><td colspan="5">Quests API not yet implemented</td></tr>';
+                    return;
+                }
+                const quests = await response.json();
+                window._allQuests = quests;
+
+                // Load NPCs for dropdown and display
+                const npcsResponse = await fetch('/api/world/npcs');
+                const npcs = npcsResponse.ok ? await npcsResponse.json() : [];
+                const npcNames = {};
+                npcs.forEach(n => npcNames[n.id] = n.name);
+
+                // Populate NPC dropdown for add form
+                const npcSelect = document.getElementById('quest-new-npc');
+                if (npcSelect) {
+                    npcSelect.innerHTML = '<option value="">None</option>' + npcs.map(n => `<option value="${n.id}">${n.name}</option>`).join('');
+                }
+
+                // Show stats
+                const stats = document.getElementById('quest-stats');
+                if (stats) {
+                    const total = quests.length;
+                    const active = quests.filter(q => q.status === 'active').length;
+                    const notStarted = quests.filter(q => q.status === 'not_started').length;
+                    const completed = quests.filter(q => q.status === 'completed').length;
+                    stats.innerHTML = `
+                        <div style="background: var(--bg-tertiary); padding: 0.5rem 1rem; border-radius: 6px; text-align: center;">
+                            <div style="font-size: 1.5rem; font-weight: bold;">${total}</div>
+                            <div style="font-size: 0.8rem; color: var(--text-secondary);">Total</div>
+                        </div>
+                        <div style="background: var(--bg-tertiary); padding: 0.5rem 1rem; border-radius: 6px; text-align: center;">
+                            <div style="font-size: 1.5rem; font-weight: bold; color: var(--success);">${active}</div>
+                            <div style="font-size: 0.8rem; color: var(--text-secondary);">Active</div>
+                        </div>
+                        <div style="background: var(--bg-tertiary); padding: 0.5rem 1rem; border-radius: 6px; text-align: center;">
+                            <div style="font-size: 1.5rem; font-weight: bold;">${notStarted}</div>
+                            <div style="font-size: 0.8rem; color: var(--text-secondary);">Not Started</div>
+                        </div>
+                        <div style="background: var(--bg-tertiary); padding: 0.5rem 1rem; border-radius: 6px; text-align: center;">
+                            <div style="font-size: 1.5rem; font-weight: bold; color: var(--accent);">${completed}</div>
+                            <div style="font-size: 0.8rem; color: var(--text-secondary);">Completed</div>
+                        </div>
+                    `;
+                }
+
+                renderQuests(quests, npcNames);
+            } catch (e) {
+                document.getElementById('quests-table-body').innerHTML = '<tr><td colspan="5">Failed to load quests</td></tr>';
+            }
+        }
+
+        function renderQuests(quests, npcNames) {
+            const tbody = document.getElementById('quests-table-body');
+            const statusColors = {
+                'active': 'var(--success)',
+                'completed': 'var(--accent)',
+                'failed': 'var(--error)',
+                'not_started': 'var(--bg-tertiary)'
+            };
+
+            tbody.innerHTML = quests.map(q => {
+                // Truncate description to ~100 chars for preview
+                const descPreview = q.description ?
+                    (q.description.length > 100 ? q.description.substring(0, 100) + '...' : q.description) : '';
+                return `
+                <tr>
+                    <td>
+                        <strong>${q.title}</strong>
+                        ${descPreview ? `<br><small style="color: var(--text-secondary); font-style: italic;">${descPreview}</small>` : ''}
+                        ${q.objectives && q.objectives.length ? `<br><small style="color: var(--accent);">${q.objectives.length} objective(s)</small>` : ''}
+                    </td>
+                    <td><span style="padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.75rem; background: ${statusColors[q.status] || 'var(--bg-tertiary)'};">${q.status || 'unknown'}</span></td>
+                    <td>${npcNames[q.assigned_by_npc_id] || q.assigned_by_npc_id || 'Unknown'}</td>
+                    <td>
+                        <button class="action-btn secondary" onclick="editQuest('${q.id}')" style="padding: 0.2rem 0.5rem; font-size: 0.7rem;">Edit</button>
+                        <button class="action-btn danger" onclick="deleteQuest('${q.id}')" style="padding: 0.2rem 0.5rem; font-size: 0.7rem; margin-left: 0.25rem;">Delete</button>
+                    </td>
+                </tr>
+            `}).join('') || '<tr><td colspan="5">No quests found</td></tr>';
+        }
+
+        // Quest filter
+        document.getElementById('quest-status-filter')?.addEventListener('change', function() {
+            const status = this.value;
+            const quests = window._allQuests || [];
+            const filtered = status ? quests.filter(q => q.status === status) : quests;
+
+            // Re-fetch NPC names (from cache if possible)
+            fetch('/api/world/npcs').then(r => r.json()).then(npcs => {
+                const npcNames = {};
+                npcs.forEach(n => npcNames[n.id] = n.name);
+                renderQuests(filtered, npcNames);
+            });
+        });
+
+        async function loadItems() {
+            try {
+                const response = await fetch('/api/world/items');
+                if (!response.ok) {
+                    document.getElementById('items-content').innerHTML = '<p style="color: var(--error);">Items API not available</p>';
+                    return;
+                }
+                const items = await response.json();
+                const container = document.getElementById('items-content');
+
+                if (items.length === 0) {
+                    container.innerHTML = '<p style="color: var(--text-secondary);">No items found in the world.</p>';
+                    return;
+                }
+
+                // Group items by owner
+                const playerItems = items.filter(i => i.owner_type === 'player');
+                const npcItems = items.filter(i => i.owner_type === 'npc');
+
+                let html = '';
+
+                if (playerItems.length > 0) {
+                    html += '<h3 style="color: var(--accent); margin-top: 0;">Player Inventory</h3>';
+                    html += '<table class="data-table"><thead><tr><th>Item</th><th>Type</th><th>Value</th><th>Qty</th><th>Owner</th></tr></thead><tbody>';
+                    html += playerItems.map(i => `
+                        <tr>
+                            <td><strong>${i.name || 'Unknown'}</strong>${i.description ? `<br><small style="color: var(--text-secondary);">${i.description}</small>` : ''}</td>
+                            <td>${i.type || 'misc'}</td>
+                            <td>${i.value || 0}</td>
+                            <td>${i.quantity || 1}</td>
+                            <td>${i.owner_name}</td>
+                        </tr>
+                    `).join('');
+                    html += '</tbody></table>';
+                }
+
+                if (npcItems.length > 0) {
+                    html += '<h3 style="color: var(--accent); margin-top: 1rem;">NPC Notable Items</h3>';
+                    html += '<table class="data-table"><thead><tr><th>Item</th><th>NPC</th></tr></thead><tbody>';
+                    html += npcItems.map(i => `
+                        <tr>
+                            <td>${i.name || 'Unknown'}</td>
+                            <td>${i.owner_name}</td>
+                        </tr>
+                    `).join('');
+                    html += '</tbody></table>';
+                }
+
+                container.innerHTML = html;
+            } catch (e) {
+                document.getElementById('items-content').innerHTML = '<p style="color: var(--error);">Failed to load items</p>';
+            }
+        }
+
+        async function loadHistoricalEvents() {
+            try {
+                const response = await fetch('/api/world/historical-events');
+                if (!response.ok) {
+                    document.getElementById('history-content').innerHTML = '<p style="color: var(--error);">Historical Events API not yet implemented</p>';
+                    return;
+                }
+                const events = await response.json();
+                const container = document.getElementById('history-content');
+
+                const eventTypeEmoji = {
+                    'war': '⚔️', 'founding': '🏛️', 'discovery': '🔍', 'disaster': '💥',
+                    'treaty': '🤝', 'rebellion': '🔥', 'migration': '🚶', 'invention': '💡',
+                    'death': '💀', 'birth': '👶', 'coronation': '👑', 'betrayal': '🗡️'
+                };
+
+                container.innerHTML = events.map(e => `
+                    <div class="bible-section" style="margin-bottom: 1rem;">
+                        <h3 style="margin: 0;">
+                            ${eventTypeEmoji[e.event_type] || '📜'} ${e.name}
+                        </h3>
+                        <p style="font-size: 0.8rem; color: var(--text-secondary); margin-top: 0.25rem;">
+                            ${e.time_ago || ''} ${e.event_type ? `• ${e.event_type}` : ''}
+                        </p>
+                        <p style="font-size: 0.9rem; margin-top: 0.5rem;">${e.description || ''}</p>
+                        ${e.involved_parties && e.involved_parties.length ? `
+                            <p style="font-size: 0.8rem;"><strong>Involved:</strong> ${e.involved_parties.join(', ')}</p>
+                        ` : ''}
+                        ${e.key_figures && e.key_figures.length ? `
+                            <p style="font-size: 0.8rem;"><strong>Key Figures:</strong> ${e.key_figures.join(', ')}</p>
+                        ` : ''}
+                        ${e.locations_affected && e.locations_affected.length ? `
+                            <p style="font-size: 0.8rem;"><strong>Locations:</strong> ${e.locations_affected.join(', ')}</p>
+                        ` : ''}
+                        ${e.consequences ? `
+                            <p style="font-size: 0.8rem;"><strong>Consequences:</strong> ${e.consequences}</p>
+                        ` : ''}
+                        ${e.artifacts_left && e.artifacts_left.length ? `
+                            <p style="font-size: 0.8rem;"><strong>Artifacts:</strong> ${e.artifacts_left.join(', ')}</p>
+                        ` : ''}
+                        ${e.common_knowledge ? `
+                            <div style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 0.5rem; font-style: italic;">
+                                ${e.common_knowledge ? '📢 Common knowledge' : '🤫 Hidden'}
+                            </div>
+                        ` : ''}
+                    </div>
+                `).join('') || '<p style="color: var(--text-secondary);">No historical events found.</p>';
+            } catch (e) {
+                document.getElementById('history-content').innerHTML = '<p style="color: var(--error);">Failed to load history</p>';
+            }
+        }
+
+        async function loadRuntimeEvents() {
+            try {
+                // Fetch events and clock in parallel
+                const [eventsRes, clockRes] = await Promise.all([
+                    fetch('/api/world/runtime-events'),
+                    fetch('/api/world/clock')
+                ]);
+
+                if (!eventsRes.ok) {
+                    document.getElementById('events-content').innerHTML = '<p style="color: var(--error);">Runtime Events API not yet implemented</p>';
+                    return;
+                }
+                const events = await eventsRes.json();
+                const clock = clockRes.ok ? await clockRes.json() : { day: 1, hour: 8 };
+                const container = document.getElementById('events-content');
+
+                // Add world clock header
+                let html = `
+                    <div style="background: var(--bg-tertiary); padding: 1rem; border-radius: 8px; margin-bottom: 1rem; text-align: center;">
+                        <div style="font-size: 1.25rem; font-weight: bold;">Day ${clock.day}, ${String(clock.hour).padStart(2, '0')}:00</div>
+                        <div style="font-size: 0.9rem; color: var(--text-secondary);">${clock.time_of_day || 'morning'}</div>
+                    </div>
+                `;
+
+                html += events.map(e => `
+                    <div style="padding: 0.75rem; border-left: 3px solid var(--accent); margin-bottom: 0.5rem; background: var(--bg-tertiary); border-radius: 0 6px 6px 0;">
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <span style="font-size: 0.75rem; color: var(--text-secondary);">
+                                ${e.day ? `Day ${e.day}` : ''} ${e.hour ? `${String(e.hour).padStart(2, '0')}:00` : ''}
+                            </span>
+                            <span style="font-size: 0.7rem; padding: 0.2rem 0.5rem; background: var(--bg-primary); border-radius: 4px;">
+                                ${e.event_type || 'event'}
+                            </span>
+                        </div>
+                        <p style="margin: 0.5rem 0 0 0;">${e.description || ''}</p>
+                        ${e.location_id ? `<p style="font-size: 0.8rem; color: var(--text-secondary); margin-top: 0.25rem;">Location: ${e.location_id}</p>` : ''}
+                    </div>
+                `).join('') || '<p style="color: var(--text-secondary);">No runtime events recorded yet.</p>';
+
+                container.innerHTML = html;
+            } catch (e) {
+                document.getElementById('events-content').innerHTML = '<p style="color: var(--error);">Failed to load events</p>';
+            }
+        }
+
+        async function exportData(type) {
+            try {
+                const response = await fetch(`/api/world/export/${type}`);
+                const data = await response.json();
+                document.getElementById('raw-data-output').textContent = JSON.stringify(data, null, 2);
+            } catch (e) {
+                document.getElementById('raw-data-output').textContent = `Error exporting ${type}: ${e.message}`;
+            }
+        }
+
+        // Modal functions
+        function openModal(title) {
+            document.getElementById('modal-title').textContent = title;
+            document.getElementById('edit-modal').style.display = 'flex';
+        }
+
+        function closeModal() {
+            document.getElementById('edit-modal').style.display = 'none';
+            document.getElementById('modal-body').innerHTML = '';
+        }
+
+        // Cache for locations (for dropdowns)
+        let _locationsCache = [];
+        let _factionsCache = [];
+        let _npcsCache = [];
+
+        async function loadCaches() {
+            try {
+                const [locRes, facRes, npcRes] = await Promise.all([
+                    fetch('/api/locations'),
+                    fetch('/api/world/factions'),
+                    fetch('/api/world/npcs')
+                ]);
+                _locationsCache = await locRes.json();
+                _factionsCache = await facRes.json();
+                _npcsCache = await npcRes.json();
+            } catch (e) {
+                console.error('Failed to load caches', e);
+            }
+        }
+
+        function locationOptions(selectedId) {
+            return _locationsCache.map(l =>
+                `<option value="${l.id}" ${l.id === selectedId ? 'selected' : ''}>${l.name}</option>`
+            ).join('');
+        }
+
+        function factionOptions(selectedId) {
+            return `<option value="">None</option>` + _factionsCache.map(f =>
+                `<option value="${f.id}" ${f.id === selectedId ? 'selected' : ''}>${f.name}</option>`
+            ).join('');
+        }
+
+        // Edit Player
+        async function editPlayer(id) {
+            await loadCaches();
+            const res = await fetch(`/api/world/players/${id}`);
+            const player = await res.json();
+            if (player.error) { alert(player.error); return; }
+
+            openModal(`Edit Player: ${player.name}`);
+            document.getElementById('modal-body').innerHTML = `
+                <div class="form-group">
+                    <label>Name</label>
+                    <input type="text" id="edit-player-name" value="${player.name || ''}" />
+                </div>
+                <div class="form-group">
+                    <label>Description</label>
+                    <textarea id="edit-player-description" style="min-height: 80px;">${player.description || ''}</textarea>
+                </div>
+                <div class="form-group">
+                    <label>Background</label>
+                    <textarea id="edit-player-background" style="min-height: 100px;">${player.background || ''}</textarea>
+                </div>
+                <div class="form-group">
+                    <label>Traits (comma-separated)</label>
+                    <input type="text" id="edit-player-traits" value="${(player.traits || []).join(', ')}" placeholder="quick, cunning, tough" />
+                </div>
+                <div class="form-group">
+                    <label>Location</label>
+                    <select id="edit-player-location">${locationOptions(player.current_location_id)}</select>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Health Status</label>
+                        <select id="edit-player-status">
+                            <option value="healthy" ${player.health_status === 'healthy' ? 'selected' : ''}>Healthy</option>
+                            <option value="winded" ${player.health_status === 'winded' ? 'selected' : ''}>Winded</option>
+                            <option value="hurt" ${player.health_status === 'hurt' ? 'selected' : ''}>Hurt</option>
+                            <option value="badly_hurt" ${player.health_status === 'badly_hurt' ? 'selected' : ''}>Badly Hurt</option>
+                            <option value="critical" ${player.health_status === 'critical' ? 'selected' : ''}>Critical</option>
+                            <option value="dead" ${player.health_status === 'dead' ? 'selected' : ''}>Dead</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Currency</label>
+                        <input type="number" id="edit-player-currency" value="${player.currency || 0}" min="0" />
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Status Effects (comma-separated)</label>
+                    <input type="text" id="edit-player-effects" value="${(player.status_effects || []).join(', ')}" placeholder="poisoned, exhausted" />
+                </div>
+
+                <h4 style="margin-top: 1rem; color: var(--accent);">Read-Only Info</h4>
+                <div class="form-group">
+                    <label>Inventory (${(player.inventory || []).length} items)</label>
+                    <div style="background: var(--bg-tertiary); padding: 0.5rem; border-radius: 4px; max-height: 100px; overflow-y: auto; font-size: 0.85rem;">
+                        ${(player.inventory || []).map(i => typeof i === 'object' ? i.name : i).join(', ') || 'Empty'}
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Active Quests</label>
+                    <div style="background: var(--bg-tertiary); padding: 0.5rem; border-radius: 4px; font-size: 0.85rem;">
+                        ${(player.active_quests || []).join(', ') || 'None'}
+                    </div>
+                </div>
+
+                <h4 style="margin-top: 1rem; color: var(--text-secondary);">Position & Scale</h4>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Position X</label>
+                        <input type="number" id="edit-player-x" value="${player.position_x || 50}" step="0.1" />
+                    </div>
+                    <div class="form-group">
+                        <label>Position Y</label>
+                        <input type="number" id="edit-player-y" value="${player.position_y || 50}" step="0.1" />
+                    </div>
+                    <div class="form-group">
+                        <label>Scale</label>
+                        <input type="number" id="edit-player-scale" value="${player.scale || 1.0}" step="0.1" min="0.1" max="3" />
+                    </div>
+                </div>
+            `;
+            document.getElementById('modal-save-btn').onclick = () => savePlayer(id);
+        }
+
+        async function savePlayer(id) {
+            const traitsStr = document.getElementById('edit-player-traits').value;
+            const effectsStr = document.getElementById('edit-player-effects').value;
+
+            const data = {
+                name: document.getElementById('edit-player-name').value,
+                description: document.getElementById('edit-player-description').value,
+                background: document.getElementById('edit-player-background').value,
+                traits: traitsStr ? traitsStr.split(',').map(s => s.trim()).filter(s => s) : [],
+                current_location_id: document.getElementById('edit-player-location').value,
+                health_status: document.getElementById('edit-player-status').value,
+                currency: parseInt(document.getElementById('edit-player-currency').value) || 0,
+                status_effects: effectsStr ? effectsStr.split(',').map(s => s.trim()).filter(s => s) : [],
+                position_x: parseFloat(document.getElementById('edit-player-x').value),
+                position_y: parseFloat(document.getElementById('edit-player-y').value),
+                scale: parseFloat(document.getElementById('edit-player-scale').value),
+            };
+            const res = await fetch(`/api/world/players/${id}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data)
+            });
+            if ((await res.json()).success) {
+                closeModal();
+                loadPlayers_WorldViewer();
+            } else {
+                alert('Failed to save player');
+            }
+        }
+
+        // Edit NPC
+        async function editNPC(id) {
+            await loadCaches();
+            const res = await fetch(`/api/world/npcs/${id}`);
+            const npc = await res.json();
+            if (npc.error) { alert(npc.error); return; }
+
+            openModal(`Edit NPC: ${npc.name}`);
+            document.getElementById('modal-body').innerHTML = `
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Name</label>
+                        <input type="text" id="edit-npc-name" value="${npc.name || ''}" />
+                    </div>
+                    <div class="form-group">
+                        <label>Species</label>
+                        <input type="text" id="edit-npc-species" value="${npc.species || ''}" />
+                    </div>
+                    <div class="form-group">
+                        <label>Age</label>
+                        <input type="number" id="edit-npc-age" value="${npc.age || ''}" min="0" />
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Profession</label>
+                        <input type="text" id="edit-npc-profession" value="${npc.profession || ''}" />
+                    </div>
+                    <div class="form-group">
+                        <label>Status</label>
+                        <select id="edit-npc-status">
+                            <option value="alive" ${npc.status === 'alive' ? 'selected' : ''}>Alive</option>
+                            <option value="dead" ${npc.status === 'dead' ? 'selected' : ''}>Dead</option>
+                            <option value="missing" ${npc.status === 'missing' ? 'selected' : ''}>Missing</option>
+                            <option value="imprisoned" ${npc.status === 'imprisoned' ? 'selected' : ''}>Imprisoned</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Mood</label>
+                        <input type="text" id="edit-npc-mood" value="${npc.current_mood || 'neutral'}" />
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Current Location</label>
+                        <select id="edit-npc-location">${locationOptions(npc.current_location_id)}</select>
+                    </div>
+                    <div class="form-group">
+                        <label>Home Location</label>
+                        <select id="edit-npc-home">${locationOptions(npc.home_location_id)}</select>
+                    </div>
+                    <div class="form-group">
+                        <label>Faction</label>
+                        <select id="edit-npc-faction">${factionOptions(npc.faction_id)}</select>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Physical Description</label>
+                    <textarea id="edit-npc-physical">${npc.description_physical || ''}</textarea>
+                </div>
+                <div class="form-group">
+                    <label>Personality</label>
+                    <textarea id="edit-npc-personality">${npc.description_personality || ''}</textarea>
+                </div>
+                <div class="form-group">
+                    <label>Voice Pattern</label>
+                    <input type="text" id="edit-npc-voice" value="${npc.voice_pattern || ''}" placeholder="e.g., Speaks slowly, uses formal language" />
+                </div>
+                <div class="form-group">
+                    <label>Goals (comma-separated)</label>
+                    <input type="text" id="edit-npc-goals" value="${(npc.goals || []).join(', ')}" />
+                </div>
+                <div class="form-group">
+                    <label>Secrets (comma-separated)</label>
+                    <input type="text" id="edit-npc-secrets" value="${(npc.secrets || []).join(', ')}" />
+                </div>
+                <div class="form-group">
+                    <label>Skills (comma-separated)</label>
+                    <input type="text" id="edit-npc-skills" value="${(npc.skills || []).join(', ')}" placeholder="e.g., negotiation, combat, stealth" />
+                </div>
+                <div class="form-group">
+                    <label>Notable Items (comma-separated)</label>
+                    <input type="text" id="edit-npc-items" value="${(npc.inventory_notable || []).map(i => typeof i === 'object' ? i.name : i).join(', ')}" />
+                </div>
+
+                <h4 style="margin-top: 1rem; color: var(--text-secondary);">Position & Scale</h4>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Position X</label>
+                        <input type="number" id="edit-npc-x" value="${npc.position_x || 50}" step="0.1" />
+                    </div>
+                    <div class="form-group">
+                        <label>Position Y</label>
+                        <input type="number" id="edit-npc-y" value="${npc.position_y || 50}" step="0.1" />
+                    </div>
+                    <div class="form-group">
+                        <label>Scale</label>
+                        <input type="number" id="edit-npc-scale" value="${npc.scale || 1.0}" step="0.1" min="0.1" max="3" />
+                    </div>
+                </div>
+            `;
+            document.getElementById('modal-save-btn').onclick = () => saveNPC(id);
+        }
+
+        async function saveNPC(id) {
+            const goalsStr = document.getElementById('edit-npc-goals').value;
+            const secretsStr = document.getElementById('edit-npc-secrets').value;
+            const skillsStr = document.getElementById('edit-npc-skills').value;
+            const itemsStr = document.getElementById('edit-npc-items').value;
+            const ageVal = document.getElementById('edit-npc-age').value;
+
+            const data = {
+                name: document.getElementById('edit-npc-name').value,
+                species: document.getElementById('edit-npc-species').value,
+                age: ageVal ? parseInt(ageVal) : null,
+                profession: document.getElementById('edit-npc-profession').value,
+                status: document.getElementById('edit-npc-status').value,
+                current_mood: document.getElementById('edit-npc-mood').value,
+                current_location_id: document.getElementById('edit-npc-location').value,
+                home_location_id: document.getElementById('edit-npc-home').value,
+                faction_id: document.getElementById('edit-npc-faction').value,
+                description_physical: document.getElementById('edit-npc-physical').value,
+                description_personality: document.getElementById('edit-npc-personality').value,
+                voice_pattern: document.getElementById('edit-npc-voice').value,
+                goals: goalsStr ? goalsStr.split(',').map(s => s.trim()).filter(s => s) : [],
+                secrets: secretsStr ? secretsStr.split(',').map(s => s.trim()).filter(s => s) : [],
+                skills: skillsStr ? skillsStr.split(',').map(s => s.trim()).filter(s => s) : [],
+                inventory_notable: itemsStr ? itemsStr.split(',').map(s => s.trim()).filter(s => s) : [],
+                position_x: parseFloat(document.getElementById('edit-npc-x').value),
+                position_y: parseFloat(document.getElementById('edit-npc-y').value),
+                scale: parseFloat(document.getElementById('edit-npc-scale').value),
+            };
+            const res = await fetch(`/api/world/npcs/${id}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data)
+            });
+            if ((await res.json()).success) {
+                closeModal();
+                loadNPCs();
+            } else {
+                alert('Failed to save NPC');
+            }
+        }
+
+        // Edit Location
+        async function editLocation(id) {
+            await loadCaches();
+            const res = await fetch(`/api/world/locations/${id}`);
+            const loc = await res.json();
+            if (loc.error) { alert(loc.error); return; }
+
+            openModal(`Edit Location: ${loc.name}`);
+            document.getElementById('modal-body').innerHTML = `
+                <div class="form-group">
+                    <label>Name</label>
+                    <input type="text" id="edit-loc-name" value="${loc.name || ''}" />
+                </div>
+                <div class="form-group">
+                    <label>Description</label>
+                    <textarea id="edit-loc-desc" style="min-height: 120px;">${loc.description || ''}</textarea>
+                </div>
+                <div class="form-group">
+                    <label>Parent Location</label>
+                    <select id="edit-loc-parent">
+                        <option value="">None (Top Level)</option>
+                        ${_locationsCache.filter(l => l.id !== id).map(l =>
+                            `<option value="${l.id}" ${l.id === loc.parent_id ? 'selected' : ''}>${l.name}</option>`
+                        ).join('')}
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Type</label>
+                    <input type="text" value="${loc.type || ''}" disabled />
+                </div>
+                <div class="form-group">
+                    <label>Controlling Faction</label>
+                    <select id="edit-loc-faction">
+                        <option value="">None</option>
+                        ${_factionsCache.map(f =>
+                            `<option value="${f.id}" ${f.id === loc.controlling_faction_id ? 'selected' : ''}>${f.name}</option>`
+                        ).join('')}
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Atmosphere Tags (comma-separated)</label>
+                    <input type="text" id="edit-loc-atmosphere" value="${(loc.atmosphere_tags || []).join(', ')}" placeholder="e.g., dangerous, wealthy, lawless" />
+                </div>
+                <div class="form-group">
+                    <label>Economic Function</label>
+                    <input type="text" id="edit-loc-economic" value="${loc.economic_function || ''}" placeholder="e.g., trade_hub, military, agricultural" />
+                </div>
+                <div class="form-group">
+                    <label>Population Level</label>
+                    <select id="edit-loc-population">
+                        <option value="" ${!loc.population_level ? 'selected' : ''}>Not Set</option>
+                        <option value="sparse" ${loc.population_level === 'sparse' ? 'selected' : ''}>Sparse</option>
+                        <option value="moderate" ${loc.population_level === 'moderate' ? 'selected' : ''}>Moderate</option>
+                        <option value="dense" ${loc.population_level === 'dense' ? 'selected' : ''}>Dense</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Current State</label>
+                    <select id="edit-loc-state">
+                        <option value="peaceful" ${loc.current_state === 'peaceful' ? 'selected' : ''}>Peaceful</option>
+                        <option value="under_siege" ${loc.current_state === 'under_siege' ? 'selected' : ''}>Under Siege</option>
+                        <option value="destroyed" ${loc.current_state === 'destroyed' ? 'selected' : ''}>Destroyed</option>
+                        <option value="occupied" ${loc.current_state === 'occupied' ? 'selected' : ''}>Occupied</option>
+                        <option value="abandoned" ${loc.current_state === 'abandoned' ? 'selected' : ''}>Abandoned</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Secrets (one per line)</label>
+                    <textarea id="edit-loc-secrets" style="min-height: 80px;" placeholder="Hidden things at this location...">${(loc.secrets || []).join('\n')}</textarea>
+                </div>
+                <div class="form-group" style="display: flex; gap: 20px;">
+                    <label style="display: flex; align-items: center; gap: 8px;">
+                        <input type="checkbox" id="edit-loc-visited" ${loc.visited ? 'checked' : ''} />
+                        Visited by Player
+                    </label>
+                    <label style="display: flex; align-items: center; gap: 8px;">
+                        <input type="checkbox" id="edit-loc-discovered" ${loc.discovered ? 'checked' : ''} />
+                        Discovered (Known to Exist)
+                    </label>
+                </div>
+            `;
+            document.getElementById('modal-save-btn').onclick = () => saveLocation(id);
+        }
+
+        async function saveLocation(id) {
+            const atmosphereStr = document.getElementById('edit-loc-atmosphere').value;
+            const secretsStr = document.getElementById('edit-loc-secrets').value;
+            const data = {
+                name: document.getElementById('edit-loc-name').value,
+                description: document.getElementById('edit-loc-desc').value,
+                parent_id: document.getElementById('edit-loc-parent').value,
+                controlling_faction_id: document.getElementById('edit-loc-faction').value,
+                atmosphere_tags: atmosphereStr ? atmosphereStr.split(',').map(s => s.trim()).filter(s => s) : [],
+                economic_function: document.getElementById('edit-loc-economic').value,
+                population_level: document.getElementById('edit-loc-population').value,
+                current_state: document.getElementById('edit-loc-state').value,
+                secrets: secretsStr ? secretsStr.split('\n').map(s => s.trim()).filter(s => s) : [],
+                visited: document.getElementById('edit-loc-visited').checked,
+                discovered: document.getElementById('edit-loc-discovered').checked,
+            };
+            const res = await fetch(`/api/world/locations/${id}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data)
+            });
+            if ((await res.json()).success) {
+                closeModal();
+                loadLocations_WorldViewer();
+            } else {
+                alert('Failed to save location');
+            }
+        }
+
+        // Edit Faction
+        async function editFaction(id) {
+            const res = await fetch(`/api/world/factions/${id}`);
+            const faction = await res.json();
+            if (faction.error) { alert(faction.error); return; }
+
+            // Format resources and leadership for display
+            const resourcesStr = faction.resources ? JSON.stringify(faction.resources, null, 2) : '{}';
+            const leadershipStr = faction.leadership ? JSON.stringify(faction.leadership, null, 2) : '{}';
+
+            openModal(`Edit Faction: ${faction.name}`);
+            document.getElementById('modal-body').innerHTML = `
+                <div class="form-group">
+                    <label>Name</label>
+                    <input type="text" id="edit-faction-name" value="${faction.name || ''}" />
+                </div>
+                <div class="form-group">
+                    <label>Ideology</label>
+                    <textarea id="edit-faction-ideology">${faction.ideology || ''}</textarea>
+                </div>
+                <div class="form-group">
+                    <label>Aesthetic</label>
+                    <textarea id="edit-faction-aesthetic">${faction.aesthetic || ''}</textarea>
+                </div>
+                <div class="form-group">
+                    <label>Power Level (1-100)</label>
+                    <input type="number" id="edit-faction-power" value="${faction.power_level || 50}" min="1" max="100" />
+                </div>
+                <div class="form-group">
+                    <label>Methods (comma-separated)</label>
+                    <input type="text" id="edit-faction-methods" value="${(faction.methods || []).join(', ')}" placeholder="e.g., espionage, diplomacy, trade" />
+                </div>
+                <div class="form-group">
+                    <label>Short-term Goals (comma-separated)</label>
+                    <input type="text" id="edit-faction-goals-short" value="${(faction.goals_short || []).join(', ')}" />
+                </div>
+                <div class="form-group">
+                    <label>Long-term Goals (comma-separated)</label>
+                    <input type="text" id="edit-faction-goals-long" value="${(faction.goals_long || []).join(', ')}" />
+                </div>
+                <div class="form-group">
+                    <label>Resources (JSON: {military, economic, influence})</label>
+                    <textarea id="edit-faction-resources" style="min-height: 80px; font-family: monospace;">${resourcesStr}</textarea>
+                </div>
+                <div class="form-group">
+                    <label>Leadership (JSON: {leader_name, structure_type})</label>
+                    <textarea id="edit-faction-leadership" style="min-height: 80px; font-family: monospace;">${leadershipStr}</textarea>
+                </div>
+                <div class="form-group">
+                    <label>Secrets (one per line)</label>
+                    <textarea id="edit-faction-secrets" style="min-height: 80px;" placeholder="Hidden faction truths...">${(faction.secrets || []).join('\n')}</textarea>
+                </div>
+                <div class="form-group">
+                    <label>History Notes (one per line)</label>
+                    <textarea id="edit-faction-history" style="min-height: 80px;" placeholder="Historical events...">${(faction.history_notes || []).join('\n')}</textarea>
+                </div>
+            `;
+            document.getElementById('modal-save-btn').onclick = () => saveFaction(id);
+        }
+
+        async function saveFaction(id) {
+            const shortStr = document.getElementById('edit-faction-goals-short').value;
+            const longStr = document.getElementById('edit-faction-goals-long').value;
+            const methodsStr = document.getElementById('edit-faction-methods').value;
+            const secretsStr = document.getElementById('edit-faction-secrets').value;
+            const historyStr = document.getElementById('edit-faction-history').value;
+
+            // Parse JSON fields with fallback
+            let resources = {};
+            let leadership = {};
+            try {
+                resources = JSON.parse(document.getElementById('edit-faction-resources').value || '{}');
+            } catch (e) {
+                alert('Invalid JSON in Resources field');
+                return;
+            }
+            try {
+                leadership = JSON.parse(document.getElementById('edit-faction-leadership').value || '{}');
+            } catch (e) {
+                alert('Invalid JSON in Leadership field');
+                return;
+            }
+
+            const data = {
+                name: document.getElementById('edit-faction-name').value,
+                ideology: document.getElementById('edit-faction-ideology').value,
+                aesthetic: document.getElementById('edit-faction-aesthetic').value,
+                power_level: parseInt(document.getElementById('edit-faction-power').value),
+                methods: methodsStr ? methodsStr.split(',').map(s => s.trim()).filter(s => s) : [],
+                goals_short: shortStr ? shortStr.split(',').map(s => s.trim()).filter(s => s) : [],
+                goals_long: longStr ? longStr.split(',').map(s => s.trim()).filter(s => s) : [],
+                resources: resources,
+                leadership: leadership,
+                secrets: secretsStr ? secretsStr.split('\n').map(s => s.trim()).filter(s => s) : [],
+                history_notes: historyStr ? historyStr.split('\n').map(s => s.trim()).filter(s => s) : [],
+            };
+            const res = await fetch(`/api/world/factions/${id}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data)
+            });
+            if ((await res.json()).success) {
+                closeModal();
+                loadFactions();
+            } else {
+                alert('Failed to save faction');
+            }
+        }
+
+        // Edit Quest
+        async function editQuest(id) {
+            await loadCaches();
+            const res = await fetch(`/api/world/quests/${id}`);
+            const quest = await res.json();
+            if (quest.error) { alert(quest.error); return; }
+
+            // Format rewards for display
+            const rewardsStr = quest.rewards ? JSON.stringify(quest.rewards, null, 2) : '{}';
+
+            openModal(`Edit Quest: ${quest.title}`);
+            document.getElementById('modal-body').innerHTML = `
+                <div class="form-group">
+                    <label>Title</label>
+                    <input type="text" id="edit-quest-title" value="${quest.title || ''}" />
+                </div>
+                <div class="form-group">
+                    <label>Description</label>
+                    <textarea id="edit-quest-desc" style="min-height: 120px;">${quest.description || ''}</textarea>
+                </div>
+                <div class="form-group">
+                    <label>Status</label>
+                    <select id="edit-quest-status">
+                        <option value="active" ${quest.status === 'active' ? 'selected' : ''}>Active</option>
+                        <option value="completed" ${quest.status === 'completed' ? 'selected' : ''}>Completed</option>
+                        <option value="failed" ${quest.status === 'failed' ? 'selected' : ''}>Failed</option>
+                        <option value="not_started" ${quest.status === 'not_started' ? 'selected' : ''}>Not Started</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Assigned By NPC</label>
+                    <select id="edit-quest-npc">
+                        <option value="">None</option>
+                        ${_npcsCache.map(n =>
+                            `<option value="${n.id}" ${n.id === quest.assigned_by_npc_id ? 'selected' : ''}>${n.name}</option>`
+                        ).join('')}
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Objectives (one per line)</label>
+                    <textarea id="edit-quest-objectives" style="min-height: 100px;">${(quest.objectives || []).join('\n')}</textarea>
+                </div>
+                <div class="form-group">
+                    <label>Rewards (JSON: {currency, items, reputation})</label>
+                    <textarea id="edit-quest-rewards" style="min-height: 80px; font-family: monospace;" placeholder='{"currency": 100, "items": ["sword"], "reputation": {"faction_id": 10}}'>${rewardsStr}</textarea>
+                </div>
+            `;
+            document.getElementById('modal-save-btn').onclick = () => saveQuest(id);
+        }
+
+        async function saveQuest(id) {
+            const objStr = document.getElementById('edit-quest-objectives').value;
+
+            // Parse rewards JSON
+            let rewards = {};
+            try {
+                rewards = JSON.parse(document.getElementById('edit-quest-rewards').value || '{}');
+            } catch (e) {
+                alert('Invalid JSON in Rewards field');
+                return;
+            }
+
+            const data = {
+                title: document.getElementById('edit-quest-title').value,
+                description: document.getElementById('edit-quest-desc').value,
+                status: document.getElementById('edit-quest-status').value,
+                assigned_by_npc_id: document.getElementById('edit-quest-npc').value,
+                objectives: objStr ? objStr.split('\n').map(s => s.trim()).filter(s => s) : [],
+                rewards: rewards,
+            };
+            const res = await fetch(`/api/world/quests/${id}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data)
+            });
+            if ((await res.json()).success) {
+                closeModal();
+                loadQuests();
+            } else {
+                alert('Failed to save quest');
+            }
+        }
+
+        // ===============================
+        // CREATE FUNCTIONS
+        // ===============================
+
+        async function createConnection() {
+            const fromId = document.getElementById('conn-from').value;
+            const toId = document.getElementById('conn-to').value;
+            const travelType = document.getElementById('conn-type').value;
+            const travelTime = parseFloat(document.getElementById('conn-time').value);
+            const bidirectional = document.getElementById('conn-bidir').checked;
+            const discovered = document.getElementById('conn-discovered').checked;
+
+            if (!fromId || !toId) {
+                alert('Please select both From and To locations');
+                return;
+            }
+            if (fromId === toId) {
+                alert('Cannot create connection from a location to itself');
+                return;
+            }
+
+            try {
+                const res = await fetch('/api/world/connections', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        from_location_id: fromId,
+                        to_location_id: toId,
+                        travel_type: travelType,
+                        travel_time_hours: travelTime,
+                        bidirectional: bidirectional,
+                        discovered: discovered,
+                    })
+                });
+                const result = await res.json();
+                if (result.success) {
+                    loadConnections();
+                    // Reset form
+                    document.getElementById('conn-time').value = '1';
+                    document.getElementById('conn-bidir').checked = true;
+                    document.getElementById('conn-discovered').checked = true;
+                } else {
+                    alert('Failed to create connection: ' + (result.error || 'Unknown error'));
+                }
+            } catch (e) {
+                alert('Failed to create connection: ' + e.message);
+            }
+        }
+
+        async function createQuest() {
+            const title = document.getElementById('quest-new-title').value.trim();
+            const description = document.getElementById('quest-new-desc').value.trim();
+            const objectivesText = document.getElementById('quest-new-objectives').value.trim();
+            const npcId = document.getElementById('quest-new-npc').value || null;
+            const status = document.getElementById('quest-new-status').value;
+
+            if (!title) {
+                alert('Quest title is required');
+                return;
+            }
+
+            const objectives = objectivesText ? objectivesText.split('\n').map(s => s.trim()).filter(s => s) : [];
+
+            try {
+                const res = await fetch('/api/world/quests', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        title: title,
+                        description: description,
+                        objectives: objectives,
+                        assigned_by_npc_id: npcId,
+                        status: status,
+                    })
+                });
+                const result = await res.json();
+                if (result.success) {
+                    loadQuests();
+                    // Reset form
+                    document.getElementById('quest-new-title').value = '';
+                    document.getElementById('quest-new-desc').value = '';
+                    document.getElementById('quest-new-objectives').value = '';
+                    document.getElementById('quest-new-status').value = 'not_started';
+                } else {
+                    alert('Failed to create quest: ' + (result.error || 'Unknown error'));
+                }
+            } catch (e) {
+                alert('Failed to create quest: ' + e.message);
+            }
+        }
+
+        // ===============================
+        // DELETE FUNCTIONS
+        // ===============================
+
+        async function deleteConnection(connectionId) {
+            if (!confirm('Are you sure you want to delete this connection?')) return;
+
+            try {
+                const response = await fetch(`/api/world/connections/${connectionId}`, {
+                    method: 'DELETE'
+                });
+                const result = await response.json();
+                if (result.success) {
+                    loadConnections();
+                } else {
+                    alert('Failed to delete connection: ' + (result.error || 'Unknown error'));
+                }
+            } catch (e) {
+                alert('Failed to delete connection: ' + e.message);
+            }
+        }
+
+        async function deleteQuest(questId) {
+            if (!confirm('Are you sure you want to delete this quest?')) return;
+
+            try {
+                const res = await fetch(`/api/world/quests/${questId}`, { method: 'DELETE' });
+                const result = await res.json();
+                if (result.success) {
+                    loadQuests();
+                } else {
+                    alert('Failed to delete quest: ' + (result.error || 'Unknown error'));
+                }
+            } catch (e) {
+                alert('Failed to delete quest: ' + e.message);
+            }
+        }
+
+        async function deleteLocation(locationId) {
+            if (!confirm('Are you sure you want to delete this location? This may affect NPCs and connections.')) return;
+
+            try {
+                const res = await fetch(`/api/world/locations/${locationId}`, { method: 'DELETE' });
+                const result = await res.json();
+                if (result.success) {
+                    loadLocations_WorldViewer();
+                    loadConnections();
+                } else {
+                    alert('Failed to delete location: ' + (result.error || 'Unknown error'));
+                }
+            } catch (e) {
+                alert('Failed to delete location: ' + e.message);
+            }
+        }
+
+        async function deleteFaction(factionId) {
+            if (!confirm('Are you sure you want to delete this faction?')) return;
+
+            try {
+                const res = await fetch(`/api/world/factions/${factionId}`, { method: 'DELETE' });
+                const result = await res.json();
+                if (result.success) {
+                    loadFactions();
+                } else {
+                    alert('Failed to delete faction: ' + (result.error || 'Unknown error'));
+                }
+            } catch (e) {
+                alert('Failed to delete faction: ' + e.message);
+            }
+        }
+
+        async function deletePlayer(playerId) {
+            if (!confirm('Are you sure you want to delete this player? This cannot be undone.')) return;
+
+            try {
+                const res = await fetch(`/api/world/players/${playerId}`, { method: 'DELETE' });
+                const result = await res.json();
+                if (result.success) {
+                    loadPlayers_WorldViewer();
+                } else {
+                    alert('Failed to delete player: ' + (result.error || 'Unknown error'));
+                }
+            } catch (e) {
+                alert('Failed to delete player: ' + e.message);
+            }
+        }
+
+        // ===============================
+        // WORLD FORGE
+        // ===============================
+        const forgeMessages = document.getElementById('forge-messages');
+        const forgeQuery = document.getElementById('forge-query');
+        const forgeSend = document.getElementById('forge-send');
+
+        forgeSend?.addEventListener('click', sendForgeQuery);
+        forgeQuery?.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendForgeQuery();
+            }
+        });
+
+        async function sendForgeQuery() {
+            const query = forgeQuery.value.trim();
+            if (!query) return;
+
+            // Add user message
+            forgeMessages.innerHTML += `<div class="forge-message user">${query}</div>`;
+            forgeQuery.value = '';
+            forgeMessages.scrollTop = forgeMessages.scrollHeight;
+
+            // Add thinking indicator
+            const thinkingEl = document.createElement('div');
+            thinkingEl.className = 'forge-message assistant';
+            thinkingEl.innerHTML = '<div class="thinking"><span></span><span></span><span></span></div>';
+            forgeMessages.appendChild(thinkingEl);
+
+            try {
+                const response = await fetch('/api/world/forge/query', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ query })
+                });
+
+                if (!response.ok) {
+                    thinkingEl.innerHTML = '<span style="color: var(--error);">World Forge API not yet implemented</span>';
+                    return;
+                }
+
+                // Handle SSE streaming
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+                let responseText = '';
+
+                thinkingEl.innerHTML = '';
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    buffer += decoder.decode(value, { stream: true });
+
+                    let boundary;
+                    while ((boundary = buffer.indexOf('\n\n')) !== -1) {
+                        const rawEvent = buffer.slice(0, boundary);
+                        buffer = buffer.slice(boundary + 2);
+
+                        for (const line of rawEvent.split('\n')) {
+                            if (line.startsWith('data:')) {
+                                try {
+                                    const payload = JSON.parse(line.slice(5).trim());
+                                    if (payload.type === 'token' && payload.data) {
+                                        responseText += payload.data;
+                                        thinkingEl.innerHTML = formatText(responseText);
+                                    } else if (payload.type === 'complete') {
+                                        // Done
+                                    }
+                                } catch (e) { /* ignore */ }
+                            }
+                        }
+                    }
+                }
+
+                forgeMessages.scrollTop = forgeMessages.scrollHeight;
+            } catch (e) {
+                thinkingEl.innerHTML = `<span style="color: var(--error);">Error: ${e.message}</span>`;
+            }
+        }
     </script>
 </body>
 </html>

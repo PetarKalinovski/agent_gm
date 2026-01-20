@@ -228,13 +228,18 @@ class GameRenderer {
             direction: playerData.direction || 'front',
             normalizedX: playerData.x,
             normalizedY: playerData.y,
+            scale: playerData.scale || 1.0,
+            status: playerData.status || 'healthy',
             sprites: {},
             walkSprites: {}
         };
 
+        // Check if player is dead
+        this.playerDead = (this.player.status === 'dead');
+
         const s = this.player.sprite;
         s.anchor.set(0.5, 1);
-        s.tint = 0x6366f1; // Purple
+        s.tint = 0x6366f1; // Purple (loading indicator)
         this.playerLayer.addChild(s);
 
         // Initial positioning
@@ -246,7 +251,15 @@ class GameRenderer {
         // Remove tint and force initial frame
         s.tint = 0xffffff;
         this.applyAnimationFrame();
-        console.log("Player initialization complete. Texture height check:", s.texture.height);
+
+        // Apply dead visual state if player is dead
+        if (this.playerDead) {
+            s.rotation = Math.PI / 2;
+            s.alpha = 0.5;
+            s.tint = 0x808080;
+        }
+
+        console.log("Player initialization complete. Status:", this.player.status);
     }
 
 
@@ -262,45 +275,121 @@ class GameRenderer {
 
                 // Setup Initial Scale & Pos
                 const targetHeight = this.worldHeight * 0.12;
-                sprite.scale.set(targetHeight / texture.height);
+                const baseScale = targetHeight / texture.height;
+                const npcScale = npcData.scale || 1.0;
+                sprite.scale.set(baseScale * npcScale);
                 sprite.anchor.set(0.5, 1);
                 sprite.x = this.normalizedToWorldX(npcData.x);
                 sprite.y = this.normalizedToWorldY(npcData.y);
 
-                sprite.eventMode = 'static';
-                sprite.cursor = 'pointer';
+                // Store status with NPC data
+                const npcStatus = npcData.status || 'alive';
 
-                // --- INTERACTION LOGIC ---
+                // Apply dead NPC visual state
+                if (npcStatus === 'dead') {
+                    sprite.rotation = Math.PI / 2;  // 90 degrees sideways
+                    sprite.alpha = 0.5;
+                    sprite.tint = 0x808080;  // Gray tint
+                    sprite.eventMode = 'none';  // Not interactive
+                    sprite.cursor = 'default';
+                } else {
+                    sprite.eventMode = 'static';
+                    sprite.cursor = 'pointer';
 
-                sprite.on('pointerdown', (e) => {
-                    // Left Click (0): Talk
-                    if (e.button === 0) {
-                        if (this.editingNpc) {
-                            this.saveAndExitTransform();
-                        } else {
-                            this.onNpcClick(npcData);
+                    // --- INTERACTION LOGIC (only for alive NPCs) ---
+                    sprite.on('pointerdown', (e) => {
+                        // Left Click (0): Talk
+                        if (e.button === 0) {
+                            if (this.editingNpc) {
+                                this.saveAndExitTransform();
+                            } else {
+                                this.onNpcClick(npcData);
+                            }
                         }
-                    }
-                });
+                    });
 
-                sprite.on('rightclick', (e) => {
-                    // Prevent bubbling and select for move
-                    e.stopPropagation();
-                    this.startTransform(sprite, npcData);
-                });
+                    sprite.on('rightclick', (e) => {
+                        // Prevent bubbling and select for move
+                        e.stopPropagation();
+                        this.startTransform(sprite, npcData);
+                    });
 
-                sprite.on('pointerover', () => { if(!this.editingNpc) sprite.tint = 0xaaaaff; });
-                sprite.on('pointerout', () => { if(!this.editingNpc) sprite.tint = 0xffffff; });
+                    sprite.on('pointerover', () => { if(!this.editingNpc) sprite.tint = 0xaaaaff; });
+                    sprite.on('pointerout', () => { if(!this.editingNpc) sprite.tint = 0xffffff; });
+                }
 
                 this.npcLayer.addChild(sprite);
-                this.npcs[npcData.id] = { sprite: sprite, data: npcData };
+                this.npcs[npcData.id] = { sprite: sprite, data: npcData, status: npcStatus, baseScale: baseScale };
 
             } catch (error) { console.error("NPC Load Error", error); }
         }
     }
 
+    /**
+     * Play Minecraft-style death animation for an NPC.
+     * Sprite rotates 90°, falls, fades to gray.
+     */
+    async playDeathAnimation(npcId) {
+        const npc = this.npcs[npcId];
+        if (!npc) return;
+
+        const sprite = npc.sprite;
+        const duration = 1000; // 1 second
+        const startTime = Date.now();
+        const originalY = sprite.y;
+
+        // Disable interaction immediately
+        sprite.eventMode = 'none';
+
+        const animate = () => {
+            const elapsed = Date.now() - startTime;
+            const progress = Math.min(elapsed / duration, 1);
+
+            // Rotate from 0 to 90 degrees
+            sprite.rotation = (Math.PI / 2) * progress;
+
+            // Fall down slightly
+            const fallDistance = sprite.height * 0.3;
+            sprite.y = originalY + (fallDistance * progress);
+
+            // Fade to 50% alpha
+            sprite.alpha = 1 - (0.5 * progress);
+
+            if (progress < 1) {
+                requestAnimationFrame(animate);
+            } else {
+                // Animation complete - apply final dead state
+                sprite.tint = 0x808080;
+                npc.status = 'dead';
+                console.log(`Death animation complete for NPC ${npcId}`);
+            }
+        };
+
+        animate();
+    }
+
+    /**
+     * Update NPC status and trigger death animation if needed.
+     */
+    updateNPCStatus(npcId, newStatus) {
+        const npc = this.npcs[npcId];
+        if (!npc) return;
+
+        const oldStatus = npc.status;
+        if (oldStatus === 'alive' && newStatus === 'dead') {
+            this.playDeathAnimation(npcId);
+        }
+        npc.status = newStatus;
+    }
+
     update() {
         if (!this.player || this.isLoading) return;
+
+        // Skip movement if player is dead
+        if (this.playerDead) {
+            this.updateCamera();
+            return;
+        }
 
         const deltaTime = this.app.ticker.deltaMS;
 
@@ -479,7 +568,10 @@ class GameRenderer {
         if (this.editingNpc) this.saveAndExitTransform();
 
         console.log("Picking up:", npcData.name);
-        this.editingNpc = { sprite, data: npcData };
+        // Get baseScale from stored NPC data
+        const storedNpc = this.npcs[npcData.id];
+        const baseScale = storedNpc ? storedNpc.baseScale : 1.0;
+        this.editingNpc = { sprite, data: npcData, baseScale };
 
         sprite.tint = 0xffaa00; // Orange
         sprite.alpha = 0.7;
@@ -503,13 +595,16 @@ class GameRenderer {
     async saveAndExitTransform() {
         if (!this.editingNpc) return;
 
-        const { sprite, data } = this.editingNpc;
+        const { sprite, data, baseScale } = this.editingNpc;
 
         // Convert screen pixels back to 0-100 for the DB
         const normX = this.worldToNormalizedX(sprite.x);
         const normY = this.worldToNormalizedY(sprite.y);
 
-        console.log(`Sending Save Request for ${data.name}...`);
+        // Extract just the user's scale multiplier (divide out the baseScale)
+        const userScale = baseScale > 0 ? sprite.scale.y / baseScale : 1.0;
+
+        console.log(`Sending Save Request for ${data.name}... scale=${userScale.toFixed(2)}`);
 
         // Immediate visual feedback
         sprite.tint = 0xffffff;
@@ -523,7 +618,7 @@ class GameRenderer {
                     npc_id: data.id,
                     x: normX,
                     y: normY,
-                    scale: sprite.scale.y
+                    scale: userScale
                 })
             });
             const result = await response.json();
@@ -563,6 +658,9 @@ class GameRenderer {
      applyAnimationFrame() {
         if (!this.player || !this.player.sprite) return;
 
+        // Skip animation updates if player is dead (keep dead appearance)
+        if (this.playerDead) return;
+
         const dir = this.player.direction;
         let tex = null;
 
@@ -593,10 +691,11 @@ class GameRenderer {
                 return;
             }
 
-            // Calculation check:
+            // Apply scale with player's scale multiplier
             const targetH = this.worldHeight * 0.15; // Slightly larger 15%
-            const scale = targetH / tex.height;
-            s.scale.set(scale);
+            const baseScale = targetH / tex.height;
+            const playerScale = this.player.scale || 1.0;
+            s.scale.set(baseScale * playerScale);
 
             // Force Alpha/Visible
             s.alpha = 1;

@@ -1,6 +1,6 @@
 """Database models for world state."""
 
-from src.models.base import Base, get_session, init_db, get_engine
+from src.models.base import Base, get_session, init_db, get_engine, reset_engine
 from src.models.location import Location, LocationType, Connection
 from src.models.npc import NPC, NPCTier
 from src.models.faction import Faction, FactionRelationship
@@ -14,6 +14,7 @@ __all__ = [
     "get_session",
     "init_db",
     "get_engine",
+    "reset_engine",
     "Location",
     "LocationType",
     "Connection",

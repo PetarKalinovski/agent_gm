@@ -1,4 +1,4 @@
-"""Core type definitions for Agent GM."""
+"""Core type definitions for Forge."""
 
 from dataclasses import dataclass, field
 from typing import Any, Callable

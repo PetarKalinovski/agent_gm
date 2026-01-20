@@ -1,1 +1,1 @@
-"""Agent GM - Multi-agent text game dungeon master."""
+"""Forge - Multi-agent text game dungeon master."""

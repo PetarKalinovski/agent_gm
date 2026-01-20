@@ -1,4 +1,4 @@
-"""Core types and utilities for Agent GM."""
+"""Core types and utilities for Forge."""
 
 from src.core.results import Result
 from src.core.types import AgentContext, ToolContext, EntityRef

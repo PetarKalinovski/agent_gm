@@ -1,4 +1,4 @@
-"""Web server module for Agent GM frontend."""
+"""Web server module for Forge frontend."""
 
 from src.web.server import app, run_server
 
