@@ -62,6 +62,7 @@ class Settings(BaseModel):
 # Global config instances
 _settings: Settings | None = None
 _agents_config: dict[str, AgentConfig] | None = None
+_runtime_db_path: str | None = None  # Runtime override for database path
 
 
 def get_config_path() -> Path:
@@ -180,3 +181,36 @@ def reload_config() -> None:
     global _settings, _agents_config
     _settings = None
     _agents_config = None
+
+
+def set_runtime_db_path(db_path: str | None) -> None:
+    """Set runtime database path override.
+
+    This allows switching databases without modifying settings.yaml.
+
+    Args:
+        db_path: Path to database file, or None to use settings.yaml default.
+    """
+    global _runtime_db_path
+    _runtime_db_path = db_path
+
+
+def get_runtime_db_path() -> str | None:
+    """Get the current runtime database path override.
+
+    Returns:
+        The runtime database path, or None if using settings.yaml default.
+    """
+    return _runtime_db_path
+
+
+def get_active_db_path() -> str:
+    """Get the active database path (runtime override or settings default).
+
+    Returns:
+        The database path to use.
+    """
+    if _runtime_db_path:
+        return _runtime_db_path
+    settings = load_settings()
+    return settings.database.path

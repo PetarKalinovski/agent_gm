@@ -24,6 +24,7 @@ class Player(Base):
     position_x: Mapped[float] = mapped_column(Float, default=50.0)
     position_y: Mapped[float] = mapped_column(Float, default=50.0)
     facing_direction: Mapped[str] = mapped_column(String(10), default="front")  # front, back, left, right
+    scale: Mapped[float] = mapped_column(Float, default=1.0)  # Visual scale multiplier
 
     # Visual assets
     sprite_base_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
@@ -48,7 +49,7 @@ class Player(Base):
 
     # Health (narrative)
     health_status: Mapped[str] = mapped_column(String(50), default="healthy")
-    # "healthy", "winded", "hurt", "badly_hurt", "critical"
+    # "healthy", "winded", "hurt", "badly_hurt", "critical", "dead"
 
     # Party members (NPC IDs)
     party_members: Mapped[list] = mapped_column(JSON, default=list)

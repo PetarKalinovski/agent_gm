@@ -60,3 +60,15 @@ def get_engine():
     if _engine is None:
         raise RuntimeError("Database not initialized. Call init_db() first.")
     return _engine
+
+
+def reset_engine() -> None:
+    """Reset the database engine to allow switching databases.
+
+    This must be called before init_db() when switching to a different database.
+    """
+    global _engine, _SessionLocal
+    if _engine is not None:
+        _engine.dispose()
+    _engine = None
+    _SessionLocal = None

@@ -1,4 +1,4 @@
-"""Agent GM - Multi-agent text game dungeon master."""
+"""Forge - Multi-agent text game dungeon master."""
 
 import argparse
 import sys
@@ -8,9 +8,9 @@ from src.config import load_settings
 load_dotenv()
 
 def main():
-    """Main entry point for Agent GM."""
+    """Main entry point for Forge."""
     parser = argparse.ArgumentParser(
-        description="Agent GM - A multi-agent text adventure game"
+        description="Forge - A multi-agent text adventure game"
     )
     parser.add_argument(
         "command",
@@ -65,7 +65,7 @@ def main():
     elif args.command == "web":
         # Run the web frontend
         from src.web import run_server
-        print("Starting Agent GM Web Frontend...")
+        print("Starting Forge Web Frontend...")
         print("Open http://localhost:8000 in your browser")
         run_server(host="0.0.0.0", port=8000)
 

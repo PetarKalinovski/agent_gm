@@ -288,6 +288,8 @@ class AssetManager:
                     "name": npc.name,
                     "x": npc.position_x,
                     "y": npc.position_y,
+                    "scale": getattr(npc, 'scale', 1.0) or 1.0,
+                    "status": npc.status,
                     "sprite_path": npc_paths[i],
                     "tier": npc.tier.value if hasattr(npc.tier, 'value') else str(npc.tier)
                 })
@@ -302,6 +304,8 @@ class AssetManager:
                     "name": player.name,
                     "x": player.position_x,
                     "y": player.position_y,
+                    "scale": getattr(player, 'scale', 1.0) or 1.0,
+                    "status": player.health_status,
                     "direction": player.facing_direction,
                     "sprite_path": player_sprite_path
                 },

@@ -45,6 +45,7 @@ class NPC(Base):
     # Position within the current location (for map display)
     position_x: Mapped[float] = mapped_column(Float, default=50.0)  # 0-100 normalized
     position_y: Mapped[float] = mapped_column(Float, default=50.0)  # 0-100 normalized
+    scale: Mapped[float] = mapped_column(Float, default=1.0)  # Visual scale multiplier
 
     # Visual assets (generated)
     sprite_path: Mapped[str | None] = mapped_column(String(500), nullable=True)  # Base sprite path

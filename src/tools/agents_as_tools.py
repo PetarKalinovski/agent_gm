@@ -70,20 +70,30 @@ def get_recent_dm_context(player_id: str, num_messages: int = 6) -> str:
 
 @tool
 def prompt_creator_agent(player_id: str, instruction: str) -> dict[str, str]:
-    """Create and return a CREATORAgent instance for the given player ID.
+    """Delegate world creation tasks to the Creator Agent.
+
+    Use this when you need to:
+    - Generate new locations when players explore ungenerated areas
+    - Create NPCs on-demand (any tier: major, minor, ambient)
+    - Add new factions or update faction relationships
+    - Create quests dynamically during gameplay
+    - Expand the world as the player explores
 
     Args:
         player_id: The player's ID in the database.
-        instruction: Instruction for the CREATOR agent.
+        instruction: Detailed instruction for what to create/update. Be specific about:
+            - What type of content to create (location, NPC, faction, quest)
+            - How it should connect to existing content
+            - Any specific requirements (tier, faction affiliation, etc.)
 
     Returns:
-        Dictionary with the agent's response.
+        Dictionary with the agent's response describing what was created.
     """
     # Import inside function to avoid circular imports
-    from src.agents.world_forge import WorldForge
+    from src.agents.creation_agent import CREATORAgent
 
-    agent = WorldForge(player_id)
-    result = agent.agent(instruction)
+    agent = CREATORAgent(player_id)
+    result = agent.process_input(instruction)
 
     return {"text_response": str(result)}
 

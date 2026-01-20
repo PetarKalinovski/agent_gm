@@ -123,6 +123,7 @@ def update_location(
     current_state: str | None = None,
     discovered: bool | None = None,
     visited: bool | None = None,
+    parent_id: str | None = None,
 ) -> dict[str, Any]:
     """Update an existing location's details.
 
@@ -188,6 +189,8 @@ def update_location(
             location.discovered = discovered
         if visited is not None:
             location.visited = visited
+        if parent_id is not None:
+            location.parent_id = parent_id
 
         session.commit()
 

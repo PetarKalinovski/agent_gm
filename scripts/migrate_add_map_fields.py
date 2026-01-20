@@ -39,6 +39,7 @@ def migrate(db_path: str = "data/sw.db"):
         ("portrait_path", "VARCHAR(500)"),
         ("position_x", "FLOAT DEFAULT 50.0"),
         ("position_y", "FLOAT DEFAULT 50.0"),
+        ("scale", "FLOAT DEFAULT 1.0"),
     ]
     add_columns("npcs", npc_cols)
 
@@ -59,6 +60,7 @@ def migrate(db_path: str = "data/sw.db"):
         ("position_x", "FLOAT DEFAULT 50.0"),
         ("position_y", "FLOAT DEFAULT 50.0"),
         ("facing_direction", "VARCHAR(10) DEFAULT 'front'"),
+        ("scale", "FLOAT DEFAULT 1.0"),
         ("sprite_base_path", "VARCHAR(500)"),
         ("portrait_path", "VARCHAR(500)"),
     ]
