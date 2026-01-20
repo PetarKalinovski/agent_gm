@@ -2,7 +2,7 @@
 
 database:
   # Path to SQLite database file (relative to project root)
-  path: "data/sw.db"
+  path: "data/game2.db"
   # Echo SQL queries for debugging
   echo: false
 

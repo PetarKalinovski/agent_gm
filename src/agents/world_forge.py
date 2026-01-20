@@ -17,21 +17,12 @@ Usage:
     )
 """
 
-from typing import Any
-from strands import Agent
+from typing import Any, Callable
 
-from strands_semantic_memory import (
-    SemanticSummarizingConversationManager,
-    SemanticMemoryHook,
-)
-
-from strands import Agent
-from strands.agent import AgentResult
-from strands.session import FileSessionManager
-from src.agents.base import create_agent
+from src.agents.core.base_agent import BaseGameAgent
+from src.core.types import AgentContext
 from src.tools import world_read
 from src.tools import world_write
-from src.tools.world_write import move_npc
 
 # Import all needed tools
 get_all_factions = world_read.get_all_factions
@@ -162,7 +153,7 @@ When you receive a generation request, work through each step methodically, crea
 
 
 # WorldForge tools
-WORLD_FORGE_TOOLS = [
+WORLD_FORGE_TOOLS: list[Callable] = [
     # Read tools
     get_world_bible,
     get_world_bible_for_generation,
@@ -187,26 +178,42 @@ WORLD_FORGE_TOOLS = [
 ]
 
 
-class WorldForge:
-    """Agent that generates entire game worlds from a premise."""
+class WorldForge(BaseGameAgent):
+    """Agent that generates entire game worlds from a premise.
 
-    def __init__(self, player_id: str | None = None):
-        """Initialize the WorldForge agent."""
-        # Create the Strands agent
-        conv_manager = SemanticSummarizingConversationManager(
-            embedding_model="all-MiniLM-L12-v2"
+    Inherits from BaseGameAgent for standardized initialization:
+    - Automatic FileSessionManager setup
+    - Automatic SemanticSummarizingConversationManager
+    - Automatic SemanticMemoryHook
+    """
+
+    AGENT_NAME = "world_forge"
+    DEFAULT_TOOLS = WORLD_FORGE_TOOLS
+
+    def __init__(self, player_id: str | None = None, callback_handler: Any = None):
+        """Initialize the WorldForge agent.
+
+        Args:
+            player_id: Optional player ID for session tracking.
+            callback_handler: Optional callback handler for tool tracking.
+        """
+        session_id = player_id or "world_forge_session"
+
+        context = AgentContext(
+            player_id=player_id or "world_forge",
+            session_id=session_id,
+            callback_handler=callback_handler,
         )
 
-        semantic_memory_hook = SemanticMemoryHook()
-        session = FileSessionManager(session_id=player_id or "world_forge_session")
-        self.agent = create_agent(
-            agent_name="world_forge",
-            system_prompt=WORLD_FORGE_SYSTEM_PROMPT,
-            tools=WORLD_FORGE_TOOLS,
-            session_manager=session,
-            conversation_manager=conv_manager,
-            hooks=[semantic_memory_hook]
-        )
+        super().__init__(context)
+
+    def _get_session_id(self) -> str:
+        """WorldForge uses context session_id directly."""
+        return self.context.session_id
+
+    def _build_system_prompt(self) -> str:
+        """Build the WorldForge system prompt."""
+        return WORLD_FORGE_SYSTEM_PROMPT
 
     def generate_world(
         self,
@@ -216,7 +223,7 @@ class WorldForge:
         num_factions: int = 6,
         num_major_npcs: int = 12,
         num_minor_npcs: int = 40,
-    ) -> AgentResult:
+    ) -> str:
         """Generate a complete game world.
 
         Args:
@@ -228,7 +235,7 @@ class WorldForge:
             num_minor_npcs: Number of minor NPCs (default 40)
 
         Returns:
-            AgentResult with generation summary
+            Agent response with generation summary.
         """
         prompt = f"""Generate a complete game world with the following specifications:
 
@@ -264,16 +271,16 @@ class WorldForge:
 Start now. Work through each step, creating entities one by one.
 Report your progress as you go.
 """
-        return self.agent(prompt)
+        return self.process(prompt)
 
-    def generate_factions(self, num_factions: int = 6) -> AgentResult:
+    def generate_factions(self, num_factions: int = 6) -> str:
         """Generate only factions (assumes World Bible exists).
 
         Args:
             num_factions: Number of factions to create
 
         Returns:
-            AgentResult with created factions
+            Agent response with created factions.
         """
         prompt = f"""Generate {num_factions} factions for this world.
 
@@ -293,9 +300,9 @@ For each new faction, use `create_faction` with:
 After creating all factions, create relationships between them with `create_faction_relationship`.
 Ensure at least one "war" relationship and several "rival" relationships for tension.
 """
-        return self.agent(prompt)
+        return self.process(prompt)
 
-    def generate_locations(self, region_count: int = 4, settlements_per_region: int = 3) -> AgentResult:
+    def generate_locations(self, region_count: int = 4, settlements_per_region: int = 3) -> str:
         """Generate location hierarchy (assumes World Bible exists).
 
         Args:
@@ -303,7 +310,7 @@ Ensure at least one "war" relationship and several "rival" relationships for ten
             settlements_per_region: Settlements per region
 
         Returns:
-            AgentResult with created locations
+            Agent response with created locations.
         """
         prompt = f"""Generate a location hierarchy for this world.
 
@@ -340,9 +347,9 @@ Use `add_location` for each, setting:
 - atmosphere_tags for mood
 - discovered=True for starting area locations
 """
-        return self.agent(prompt)
+        return self.process(prompt)
 
-    def generate_npcs(self, num_major: int = 12, num_minor: int = 40) -> AgentResult:
+    def generate_npcs(self, num_major: int = 12, num_minor: int = 40) -> str:
         """Generate NPCs (assumes World Bible, factions, locations exist).
 
         Args:
@@ -350,7 +357,7 @@ Use `add_location` for each, setting:
             num_minor: Number of minor NPCs
 
         Returns:
-            AgentResult with created NPCs
+            Agent response with created NPCs.
         """
         prompt = f"""Generate NPCs for this world.
 
@@ -382,16 +389,16 @@ Distribution guidelines:
 
 Use `add_npc` for each character.
 """
-        return self.agent(prompt)
+        return self.process(prompt)
 
-    def generate_history(self, num_events: int = 8) -> AgentResult:
+    def generate_history(self, num_events: int = 8) -> str:
         """Generate historical events (assumes World Bible and factions exist).
 
         Args:
             num_events: Number of historical events
 
         Returns:
-            AgentResult with created events
+            Agent response with created events.
         """
         prompt = f"""Generate {num_events} historical events that shaped this world.
 
@@ -419,8 +426,7 @@ Each event should:
 
 Use `create_historical_event` for each.
 """
-        return self.agent(prompt)
-
+        return self.process(prompt)
 
 
 def generate_quick_world(premise: str, genre: str, pc_concept: str) -> dict[str, Any]:
@@ -452,5 +458,3 @@ def generate_quick_world(premise: str, genre: str, pc_concept: str) -> dict[str,
             "historical_events": len(events),
         }
     }
-
-

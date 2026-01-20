@@ -14,7 +14,7 @@ from pathlib import Path
 # Add project root to path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
-
+from src.config import load_settings
 import streamlit as st
 
 # Must be first Streamlit command
@@ -35,7 +35,7 @@ from src.models.quests import Quest, QuestStatus
 
 # Initialize DB
 @st.cache_resource
-def init_database(db_path: str = "data/sw.db"):
+def init_database(db_path: str = load_settings().database.path):
     init_db(db_path)
     return True
 

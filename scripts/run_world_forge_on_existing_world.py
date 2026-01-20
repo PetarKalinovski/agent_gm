@@ -10,10 +10,10 @@ from src.models import init_db, get_session, WorldBible
 
 def main() -> None:
     """Main function to run the script."""
-    db_path = "data/sw.db"  # Path to your existing world database
+    db_path = "data/game2.db"  # Path to your existing world database
     init_db(db_path)
     session = get_session()
-    world_forge = WorldForge("existing_world_agent")
+    world_forge = WorldForge("existing_world_agent_game2")
     world_bible = session.query(WorldBible).first()
 
     if not world_bible:

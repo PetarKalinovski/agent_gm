@@ -1,14 +1,9 @@
 """NPC Agent - Handles NPC dialogue using Strands Agents with session management."""
 
-from typing import Any
+from typing import Any, Callable
 
-from strands import Agent
-from strands.session.file_session_manager import FileSessionManager
-from strands_semantic_memory import (
-    SemanticSummarizingConversationManager,
-    SemanticMemoryHook,
-)
-from src.agents.base import create_agent
+from src.agents.core.base_agent import BaseGameAgent
+from src.core.types import AgentContext
 from src.tools.world_read import get_npc, get_npc_relationship, get_world_clock, get_available_quests_for_npc, get_world_bible, get_active_quests, get_player
 from src.tools.world_write import update_npc_relationship, update_npc_mood, update_npc, activate_quest
 from src.tools.narration import speak, show_quest_update
@@ -92,7 +87,7 @@ You: Call speak(npc_name="{npc['name']}", text="Well met, traveler. What brings 
 
 
 # NPC tools - quest offering only, DM handles quest progress
-NPC_TOOLS = [
+NPC_TOOLS: list[Callable] = [
     speak,
     update_npc_relationship,
     update_npc_mood,
@@ -108,21 +103,50 @@ NPC_TOOLS = [
 ]
 
 
-class NPCAgent:
-    """Agent that handles NPC dialogue and personality using Strands."""
+class NPCAgent(BaseGameAgent):
+    """Agent that handles NPC dialogue and personality.
 
-    def __init__(self, player_id: str, npc_id: str):
+    Inherits from BaseGameAgent for standardized initialization.
+    Note: This agent has a unique flow where the system prompt
+    depends on NPC data loaded in start_conversation().
+    """
+
+    AGENT_NAME = "npc_agent"
+    DEFAULT_TOOLS = NPC_TOOLS
+
+    def __init__(self, player_id: str, npc_id: str, callback_handler: Any = None):
         """Initialize the NPC agent.
 
         Args:
             player_id: The player's ID.
             npc_id: The NPC's ID.
+            callback_handler: Optional callback handler for tool tracking.
         """
-        self.player_id = player_id
+        context = AgentContext(
+            player_id=player_id,
+            session_id=f"{player_id}_{npc_id}",
+            callback_handler=callback_handler,
+        )
+
         self.npc_id = npc_id
         self.npc: dict[str, Any] = {}
         self.relationship: dict[str, Any] = {}
-        self.agent: Agent | None = None
+        self._player_name: str = "Unknown"
+
+        # Don't call super().__init__ yet - we need NPC data first
+        # We'll initialize the base agent when start_conversation is called
+        self.context = context
+        self._agent = None
+
+    def _get_session_id(self) -> str:
+        """NPC agent uses player_id + npc_id for session."""
+        return f"{self.context.player_id}_{self.npc_id}"
+
+    def _build_system_prompt(self) -> str:
+        """Build system prompt from NPC and relationship data."""
+        prompt = build_npc_system_prompt(self.npc, self.relationship)
+        prompt += f"\nThe Player's Name is: {self._player_name}"
+        return prompt
 
     def start_conversation(
         self,
@@ -142,33 +166,17 @@ class NPCAgent:
         """
         # Get NPC and relationship data
         self.npc = npc or get_npc(self.npc_id)
-        self.relationship = relationship or get_npc_relationship(self.npc_id, self.player_id)
+        self.relationship = relationship or get_npc_relationship(self.npc_id, self.context.player_id)
 
         if "error" in self.npc:
             return "The person doesn't seem to want to talk."
 
-        # Build system prompt
-        system_prompt = build_npc_system_prompt(self.npc, self.relationship)
+        # Get player name for the prompt
+        player_data = get_player(self.context.player_id)
+        self._player_name = player_data.get("name", "Unknown") if player_data else "Unknown"
 
-        # Create session manager for this specific NPC conversation
-        session_manager = FileSessionManager(session_id=f"{self.player_id}_{self.npc_id}")
-
-        # Create the Strands agent with session management
-        conv_manager = SemanticSummarizingConversationManager(
-            embedding_model="all-MiniLM-L12-v2"
-        )
-
-        semantic_memory_hook = SemanticMemoryHook()
-
-        self.agent = create_agent(
-            agent_name="npc_agent",
-            system_prompt=system_prompt + f"The Player's Name is: {get_player(self.player_id).get("name")}",
-            tools=NPC_TOOLS,
-            session_manager=session_manager,
-            conversation_manager=conv_manager,
-            hooks=[semantic_memory_hook]
-        )
-
+        # Now create the agent (will call _build_system_prompt which uses self.npc)
+        self._agent = self._create_agent()
 
         # Generate greeting
         trust = self.relationship.get("trust_level", 50)
@@ -189,7 +197,7 @@ Use the speak tool to deliver your greeting."""
 
         # Call the agent - Strands handles conversation history automatically
         response = self.agent(greeting_prompt)
-        return response
+        return str(response)
 
     def respond(self, player_input: str, context: str = "") -> dict[str, Any]:
         """Generate NPC response to player input.
@@ -201,7 +209,7 @@ Use the speak tool to deliver your greeting."""
         Returns:
             Dictionary with response and any actions to take.
         """
-        if not self.agent:
+        if not self._agent:
             return {"response": "...", "conversation_ended": True}
 
         # Build the prompt with context if provided
@@ -232,9 +240,8 @@ Use the speak tool to deliver your greeting."""
 
         update_npc_relationship(
             npc_id=self.npc_id,
-            player_id=self.player_id,
+            player_id=self.context.player_id,
             add_key_moment=summary
         )
 
         # Session is automatically saved by FileSessionManager
-        # No need to manually persist messages

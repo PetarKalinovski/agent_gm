@@ -182,7 +182,17 @@ class SemanticSummarizingConversationManager(ConversationManager):
         Returns:
             Optionally returns the previous conversation summary if it exists.
         """
-        super().restore_from_session(state)
+        # Handle invalid/legacy state gracefully - reset instead of crashing
+        try:
+            super().restore_from_session(state)
+        except ValueError:
+            logger.warning(
+                "Invalid conversation manager state detected (likely from a previous version). "
+                "Resetting to fresh state."
+            )
+            self.removed_message_count = 0
+            return None
+
         self._summary_message = state.get("summary_message")
         self._message_id_counter = state.get("message_id_counter", 0)
 
