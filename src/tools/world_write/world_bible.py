@@ -7,6 +7,7 @@ from strands import tool
 from src.models import (
     HistoricalEvent,
     WorldBible,
+    WorldClock,
     get_session,
 )
 
@@ -105,6 +106,13 @@ def create_world_bible(
             pc_starting_situation=pc_starting_situation,
         )
         session.add(bible)
+
+        # Also create the world clock if it doesn't exist
+        clock = session.query(WorldClock).first()
+        if not clock:
+            clock = WorldClock(day=1, hour=8)
+            session.add(clock)
+
         session.commit()
 
         return {

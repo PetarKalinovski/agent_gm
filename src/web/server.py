@@ -173,6 +173,8 @@ async def get_chat_history(player_id: str, limit: int = 50):
     Returns:
         List of chat messages with role and content.
     """
+    import json
+
     session = get_or_create_session(player_id)
     dm: DMOrchestrator = session["dm"]
 
@@ -182,6 +184,8 @@ async def get_chat_history(player_id: str, limit: int = 50):
 
         # Convert to simple format for frontend
         chat_history = []
+        narration_tools = {"narrate", "describe_location"}
+
         for msg in messages[-limit:]:  # Get last N messages
             role = msg.get("role", "unknown")
             content_blocks = msg.get("content", [])
@@ -190,16 +194,57 @@ async def get_chat_history(player_id: str, limit: int = 50):
             text_content = ""
             for block in content_blocks:
                 if isinstance(block, dict):
-                    if block.get("type") == "text" or "text" in block:
+                    # Direct text content
+                    if "text" in block and "toolUse" not in block and "reasoningContent" not in block:
                         text_content += block.get("text", "")
+
+                    # Strands format: toolUse inside content blocks
+                    elif "toolUse" in block:
+                        tool_use = block["toolUse"]
+                        tool_name = tool_use.get("name", "")
+                        if tool_name in narration_tools:
+                            # Get input (Strands uses 'input', not 'arguments')
+                            tool_input = tool_use.get("input", {})
+                            narration_text = tool_input.get("text") or tool_input.get("description", "")
+                            if narration_text:
+                                text_content += narration_text + "\n"
+
                 elif isinstance(block, str):
                     text_content += block
 
-            # Skip empty messages or tool-only messages
+            # Also check old-style tool_calls field (for compatibility)
+            tool_calls = msg.get("tool_calls", [])
+            for tool_call in tool_calls:
+                if isinstance(tool_call, dict):
+                    func = tool_call.get("function", {})
+                    tool_name = func.get("name", "")
+                    if tool_name in narration_tools:
+                        try:
+                            args_str = func.get("arguments", "{}")
+                            if isinstance(args_str, str):
+                                args = json.loads(args_str)
+                            else:
+                                args = args_str
+                            narration_text = args.get("text") or args.get("description", "")
+                            if narration_text:
+                                text_content += narration_text + "\n"
+                        except (json.JSONDecodeError, TypeError):
+                            pass
+
+            # Skip empty messages
             if text_content.strip():
+                final_content = text_content.strip()
+
+                # For user messages, extract just the player's actual message
+                # The DM prepends context like "Current context:\n...\n\nPlayer says: <actual message>"
+                if role == "user" and "Player says:" in final_content:
+                    parts = final_content.split("Player says:", 1)
+                    if len(parts) > 1:
+                        final_content = parts[1].strip()
+
                 chat_history.append({
                     "role": role,
-                    "content": text_content.strip()
+                    "content": final_content
                 })
 
         return {"messages": chat_history}
@@ -207,6 +252,45 @@ async def get_chat_history(player_id: str, limit: int = 50):
     except Exception as e:
         logger.error(f"Error getting chat history: {e}", exc_info=True)
         return {"messages": [], "error": str(e)}
+
+
+@app.get("/api/debug/messages/{player_id}")
+async def debug_messages(player_id: str, limit: int = 10):
+    """Debug endpoint to see raw message structure."""
+    session = get_or_create_session(player_id)
+    dm: DMOrchestrator = session["dm"]
+
+    try:
+        messages = dm.agent.messages or []
+        # Return last N messages with their full structure
+        debug_data = []
+        for msg in messages[-limit:]:
+            content_blocks = msg.get("content", [])
+
+            # Extract block types and tool names from content
+            block_types = []
+            content_tool_names = []
+            for block in content_blocks:
+                if isinstance(block, dict):
+                    if "text" in block:
+                        block_types.append("text")
+                    if "toolUse" in block:
+                        block_types.append("toolUse")
+                        content_tool_names.append(block["toolUse"].get("name", "unknown"))
+                    if "reasoningContent" in block:
+                        block_types.append("reasoning")
+                    if "toolResult" in block:
+                        block_types.append("toolResult")
+
+            debug_data.append({
+                "role": msg.get("role"),
+                "block_types": block_types,
+                "content_tool_names": content_tool_names,
+                "content_preview": str(content_blocks)[:300] if content_blocks else "[]",
+            })
+        return {"messages": debug_data, "total_count": len(messages)}
+    except Exception as e:
+        return {"error": str(e)}
 
 
 @app.post("/api/play")
@@ -1771,8 +1855,16 @@ async def select_world(request: WorldSelectRequest):
     # Initialize the new database
     init_db(db_path)
 
-    # Ensure at least one player exists
+    # Ensure WorldClock and at least one player exists
     with get_session() as db:
+        # Create WorldClock if missing (for older worlds)
+        from src.models.world_state import WorldClock
+        clock = db.query(WorldClock).first()
+        if not clock:
+            clock = WorldClock(day=1, hour=8)
+            db.add(clock)
+            logger.info("Created WorldClock for existing world")
+
         players = db.query(Player).all()
         if not players:
             # Find a starting location (prefer settlements, cities, etc.)
@@ -1794,8 +1886,9 @@ async def select_world(request: WorldSelectRequest):
                 current_location_id=location.id if location else None,
             )
             db.add(player)
-            db.commit()
             logger.info(f"Created placeholder player: {player.id}")
+
+        db.commit()
 
     return {"success": True, "db_path": db_path}
 

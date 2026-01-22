@@ -1,10 +1,15 @@
 """Base agent class with standardized initialization."""
 
+import logging
+import shutil
+import tempfile
 from abc import ABC, abstractmethod
+from pathlib import Path
 from typing import Any, Callable
 
 from strands import Agent
 from strands.session.file_session_manager import FileSessionManager
+from strands.types.exceptions import SessionException
 from strands_semantic_memory import (
     SemanticSummarizingConversationManager,
     SemanticMemoryHook,
@@ -12,6 +17,8 @@ from strands_semantic_memory import (
 
 from src.agents.base import create_agent
 from src.core.types import AgentContext
+
+logger = logging.getLogger(__name__)
 
 
 class BaseGameAgent(ABC):
@@ -72,15 +79,43 @@ class BaseGameAgent(ABC):
         )
         semantic_hook = SemanticMemoryHook()
 
-        return create_agent(
-            agent_name=self.AGENT_NAME,
-            system_prompt=self._build_system_prompt(),
-            tools=self._get_tools(),
-            session_manager=session_manager,
-            conversation_manager=conv_manager,
-            hooks=[semantic_hook],
-            callback_handler=self.context.callback_handler,
-        )
+        try:
+            return create_agent(
+                agent_name=self.AGENT_NAME,
+                system_prompt=self._build_system_prompt(),
+                tools=self._get_tools(),
+                session_manager=session_manager,
+                conversation_manager=conv_manager,
+                hooks=[semantic_hook],
+                callback_handler=self.context.callback_handler,
+            )
+        except SessionException as e:
+            # Session is corrupted - delete it and retry
+            logger.warning(f"Corrupted session detected for {session_id}, resetting: {e}")
+            self._delete_corrupted_session(session_id)
+
+            # Create fresh session manager and retry
+            session_manager = FileSessionManager(session_id=session_id)
+            return create_agent(
+                agent_name=self.AGENT_NAME,
+                system_prompt=self._build_system_prompt(),
+                tools=self._get_tools(),
+                session_manager=session_manager,
+                conversation_manager=conv_manager,
+                hooks=[semantic_hook],
+                callback_handler=self.context.callback_handler,
+            )
+
+    def _delete_corrupted_session(self, session_id: str) -> None:
+        """Delete a corrupted session directory.
+
+        Args:
+            session_id: The session ID to delete.
+        """
+        storage_dir = Path(tempfile.gettempdir()) / "strands" / "sessions" / session_id
+        if storage_dir.exists():
+            logger.info(f"Deleting corrupted session: {storage_dir}")
+            shutil.rmtree(storage_dir, ignore_errors=True)
 
     def _get_session_id(self) -> str:
         """Build session ID for FileSessionManager.

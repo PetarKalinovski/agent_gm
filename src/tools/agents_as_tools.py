@@ -24,9 +24,18 @@ def get_recent_dm_context(player_id: str, num_messages: int = 6) -> str:
     Returns:
         Formatted string with recent conversation context.
     """
+    from pathlib import Path
+
     try:
         # DM uses player_id as session_id and "default" as agent_id
         storage_dir = os.path.join(tempfile.gettempdir(), "strands/sessions")
+
+        # Check if session actually exists with messages before creating manager
+        # This prevents creating empty/partial session directories
+        session_path = Path(storage_dir) / player_id / "default" / "messages"
+        if not session_path.exists():
+            return ""
+
         session_manager = FileSessionManager(session_id=player_id, storage_dir=storage_dir)
 
         # Get all messages
