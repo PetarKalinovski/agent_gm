@@ -59,7 +59,8 @@ cd agent_gm
 # Install dependencies
 uv sync
 
-# Set up environment variables
+# Set up environment variables. 
+# It doesn't have to be Openrouter. Any compatible provider with strands-agents will work
 export OPENROUTER_API_KEY=your_openrouter_api_key
 ```
 
@@ -227,12 +228,12 @@ Configure which LLM models power each agent:
 ```yaml
 agents:
   dm_orchestrator:
-    model: "openrouter/anthropic/claude-3.5-sonnet"
+    model: "openrouter/z-ai/glm-4.7"
     temperature: 0.7
     max_tokens: 2048
 
   npc_agent:
-    model: "openrouter/anthropic/claude-3.5-sonnet"
+    model: "openrouter/z-ai/glm-4.7"
     temperature: 0.8
     max_tokens: 1024
 
@@ -242,7 +243,7 @@ agents:
     max_tokens: 4096
 
   research_agent:
-    model: "openrouter/anthropic/claude-3.5-sonnet"
+    model: "openrouter/z-ai/glm-4.7"
     temperature: 0.5
     max_tokens: 4096
 ```
@@ -251,7 +252,7 @@ Models use LiteLLM format: `provider/model-name`
 
 Examples:
 - `openrouter/anthropic/claude-3.5-sonnet`
-- `openrouter/openai/gpt-4o`
+- `openrouter/z-ai/glm-4.7`
 - `openrouter/deepseek/deepseek-v3.2`
 - `anthropic/claude-3-sonnet-20240229`
 - `openai/gpt-4o`
