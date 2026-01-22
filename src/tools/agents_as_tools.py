@@ -184,3 +184,36 @@ def prompt_economy_agent(player_id: str, instruction: str) -> dict[str, str]:
     result = agent.process_input(instruction)
 
     return {"text_response": str(result)}
+
+
+@tool
+def prompt_research_agent(session_id: str, query: str) -> dict[str, str]:
+    """Delegate research tasks to the Research Agent for gathering reference material.
+
+    Use this when you need to:
+    - Research real-world history, mythology, or cultures for inspiration
+    - Look up details about existing fictional universes (Star Wars, D&D, etc.)
+    - Gather reference material for specific settings or time periods
+    - Find naming conventions, political structures, cultural details
+
+    The Research Agent will search the web (primarily Wikipedia and fan wikis)
+    and return comprehensive material you can mine for world-building ideas.
+
+    Args:
+        session_id: Session identifier for the research agent.
+        query: What to research. Be specific about what aspects you need.
+            Examples:
+            - "Research Roman Senate political structure and notable senators"
+            - "Research Clone Wars era Jedi Council members and their fates"
+            - "Research feudal Japan daimyo system and samurai culture"
+            - "Research deep sea bioluminescent creatures and coral reef ecosystems"
+
+    Returns:
+        Dictionary with comprehensive research findings organized by source.
+    """
+    from src.agents.research_agent import ResearchAgent
+
+    agent = ResearchAgent(session_id)
+    result = agent.research(query)
+
+    return {"text_response": str(result)}

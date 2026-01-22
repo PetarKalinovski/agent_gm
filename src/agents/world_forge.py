@@ -46,6 +46,9 @@ delete_location = world_write.delete_location
 move_npc = world_write.move_npc
 create_quest = world_write.create_quest
 
+# Agent delegation tools
+from src.tools.agents_as_tools import prompt_research_agent
+
 
 WORLD_FORGE_SYSTEM_PROMPT = """You are the World Forge - a specialized agent for creating rich, detailed game worlds for text-based RPGs.
 
@@ -148,6 +151,25 @@ Notice how both have clear direction but don't dictate exactly how the player so
 - Create at least one NPC who opposes the player
 - Make sure the player's starting location has relevant NPCs
 
+## RESEARCH AGENT
+
+You have access to a **research agent** that can search the web for reference material and inspiration.
+
+### When to Use
+Delegate to the research agent when you need to:
+- Research real-world mythology, history, or cultures to inspire factions/lore
+- Look up genre conventions (e.g., "common tropes in cyberpunk settings")
+- Find reference material for specific settings the user requested (e.g., "Star Wars Clone Wars era politics")
+- Verify details about existing IPs if the user wants a world based on one
+
+### How to Use
+Be specific about what you need:
+- ✅ "Research the political structure of the Roman Senate for faction inspiration"
+- ✅ "Find information about Clone Wars era Jedi Council members and their roles"
+- ✅ "Look up common noir detective story tropes for quest design"
+- ❌ "Research stuff for the world" (too vague)
+
+
 When you receive a generation request, work through each step methodically, creating all the required entities.
 """
 
@@ -175,6 +197,8 @@ WORLD_FORGE_TOOLS: list[Callable] = [
     move_npc,
     delete_location,
     create_quest,
+    # Agent delegation
+    prompt_research_agent,
 ]
 
 
