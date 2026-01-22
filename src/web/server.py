@@ -1,5 +1,6 @@
 """FastAPI server for Forge web frontend."""
 
+import hashlib
 import json
 import logging
 from pathlib import Path
@@ -159,6 +160,53 @@ async def get_session_info(player_id: str):
         "time_of_day": clock.get("time_of_day", "day"),
         "npcs_present": location.get("npcs_present", []),
     }
+
+
+@app.get("/api/chat-history/{player_id}")
+async def get_chat_history(player_id: str, limit: int = 50):
+    """Get chat history for a player from the DM's conversation.
+
+    Args:
+        player_id: The player's ID.
+        limit: Maximum number of messages to return (default 50).
+
+    Returns:
+        List of chat messages with role and content.
+    """
+    session = get_or_create_session(player_id)
+    dm: DMOrchestrator = session["dm"]
+
+    try:
+        # Access agent.messages which contains the conversation history
+        messages = dm.agent.messages or []
+
+        # Convert to simple format for frontend
+        chat_history = []
+        for msg in messages[-limit:]:  # Get last N messages
+            role = msg.get("role", "unknown")
+            content_blocks = msg.get("content", [])
+
+            # Extract text content from message blocks
+            text_content = ""
+            for block in content_blocks:
+                if isinstance(block, dict):
+                    if block.get("type") == "text" or "text" in block:
+                        text_content += block.get("text", "")
+                elif isinstance(block, str):
+                    text_content += block
+
+            # Skip empty messages or tool-only messages
+            if text_content.strip():
+                chat_history.append({
+                    "role": role,
+                    "content": text_content.strip()
+                })
+
+        return {"messages": chat_history}
+
+    except Exception as e:
+        logger.error(f"Error getting chat history: {e}", exc_info=True)
+        return {"messages": [], "error": str(e)}
 
 
 @app.post("/api/play")
@@ -1565,13 +1613,17 @@ async def world_forge_query(request: WorldForgeRequest):
     """Stream World Forge response via SSE."""
     settings = load_settings()
     setup_api_keys()
-    init_db(get_active_db_path())
+    db_path = get_active_db_path()
+    init_db(db_path)
+
+    # Create unique session ID based on database path
+    session_id = f"forge_{hashlib.md5(db_path.encode()).hexdigest()[:12]}"
 
     async def event_stream():
         try:
             from src.agents.world_forge import WorldForge
 
-            world_forge = WorldForge("existing_world_agent_game2")
+            world_forge = WorldForge(session_id)
 
             # Stream the response
             async for response in world_forge.agent.stream_async(request.query):
@@ -1719,6 +1771,32 @@ async def select_world(request: WorldSelectRequest):
     # Initialize the new database
     init_db(db_path)
 
+    # Ensure at least one player exists
+    with get_session() as db:
+        players = db.query(Player).all()
+        if not players:
+            # Find a starting location (prefer settlements, cities, etc.)
+            from src.models.location import LocationType
+            starting_types = [
+                LocationType.SETTLEMENT, LocationType.CITY, LocationType.TOWN,
+                LocationType.STATION, LocationType.POI, LocationType.DISTRICT
+            ]
+            location = db.query(Location).filter(
+                Location.type.in_(starting_types)
+            ).first()
+            if not location:
+                location = db.query(Location).first()
+
+            # Create placeholder player
+            player = Player(
+                name="Unnamed",
+                description="A mysterious figure awaiting their story.",
+                current_location_id=location.id if location else None,
+            )
+            db.add(player)
+            db.commit()
+            logger.info(f"Created placeholder player: {player.id}")
+
     return {"success": True, "db_path": db_path}
 
 
@@ -1753,7 +1831,9 @@ async def create_world(request: WorldCreateRequest):
     try:
         from src.agents.world_forge import WorldForge
 
-        forge = WorldForge()
+        # Unique session per world
+        session_id = f"forge_{hashlib.md5(db_path.encode()).hexdigest()[:12]}"
+        forge = WorldForge(session_id)
         result = forge.generate_world(
             premise=request.premise,
             genre=request.genre,
@@ -1815,7 +1895,9 @@ async def create_world_stream(request: WorldCreateRequest):
         try:
             from src.agents.world_forge import WorldForge
 
-            forge = WorldForge()
+            # Unique session per world
+            session_id = f"forge_{hashlib.md5(db_path.encode()).hexdigest()[:12]}"
+            forge = WorldForge(session_id)
 
             # Stream the generation
             prompt = f"""Generate a complete game world with the following specifications:

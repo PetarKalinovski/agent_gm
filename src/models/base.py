@@ -26,6 +26,8 @@ def init_db(db_path: str | Path = "data/game.db") -> None:
     db_path = Path(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
 
+    print(f"[init_db] Initializing database: {db_path}")
+
     # Create engine
     _engine = create_engine(f"sqlite:///{db_path}", echo=False)
     _SessionLocal = sessionmaker(bind=_engine)

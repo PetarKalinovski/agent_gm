@@ -69,6 +69,13 @@ class GameRenderer {
         this.app.stage.eventMode = 'static';
         this.app.stage.on('pointermove', (e) => this.onGlobalMouseMove(e));
 
+        // Clear NPC selection when clicking on empty space
+        this.app.stage.on('pointerdown', (e) => {
+            // Only fire if clicking directly on stage (not on an NPC)
+            if (e.target === this.app.stage) {
+                window.dispatchEvent(new CustomEvent('npc-deselect'));
+            }
+        });
 
         // Create world container (this moves with camera)
         this.worldContainer = new PIXI.Container();
@@ -264,6 +271,7 @@ class GameRenderer {
 
 
      async loadNPCs(npcsData) {
+        console.log(`loadNPCs called with ${npcsData?.length || 0} NPCs`, npcsData);
         this.npcLayer.removeChildren();
         this.npcs = {};
 
@@ -277,6 +285,7 @@ class GameRenderer {
                 const targetHeight = this.worldHeight * 0.12;
                 const baseScale = targetHeight / texture.height;
                 const npcScale = npcData.scale || 1.0;
+                console.log(`Loading NPC ${npcData.name}: received scale=${npcData.scale}, using npcScale=${npcScale}, baseScale=${baseScale}, final=${baseScale * npcScale}`);
                 sprite.scale.set(baseScale * npcScale);
                 sprite.anchor.set(0.5, 1);
                 sprite.x = this.normalizedToWorldX(npcData.x);

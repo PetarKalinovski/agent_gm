@@ -3,6 +3,7 @@
 Based on the ToolUsageTracker pattern from dnd_rpg template.
 """
 
+import ast
 import json
 import time
 from collections import OrderedDict
@@ -127,6 +128,35 @@ class ToolUsageTracker:
             if result.get("name"):
                 entry["name"] = result["name"]
             self._enqueue_notification(entry)
+
+            # Check for special game events in tool output
+            tool_content = result.get("content", [])
+            print(f"[DEBUG] Tool result content: {tool_content}")
+            for content_block in tool_content:
+                print(f"[DEBUG] Content block: {content_block}")
+                # Content blocks may be {'text': "..."} or {'type': 'text', 'text': "..."}
+                if isinstance(content_block, dict) and "text" in content_block:
+                    try:
+                        text_value = content_block.get("text", "{}")
+                        print(f"[DEBUG] Text value: {text_value}")
+                        # Try JSON first, then Python literal (single quotes)
+                        try:
+                            output_data = json.loads(text_value)
+                        except json.JSONDecodeError:
+                            # Tool results often come as Python dict strings with single quotes
+                            output_data = ast.literal_eval(text_value)
+                        print(f"[DEBUG] Parsed output: {output_data}")
+                        # Detect NPC death events
+                        if isinstance(output_data, dict) and output_data.get("event") == "npc_death":
+                            print(f"[DEBUG] NPC DEATH EVENT DETECTED: {output_data}")
+                            self._notifications.append({
+                                "type": "npc_death",
+                                "npc_id": output_data.get("npc_id"),
+                                "npc_name": output_data.get("npc_name"),
+                                "cause": output_data.get("cause_of_death"),
+                            })
+                    except (json.JSONDecodeError, TypeError, ValueError, SyntaxError) as e:
+                        print(f"[DEBUG] Parse error: {e}")
 
     def _handle_result(self, result: Any) -> None:
         """Emit a final summary once the agent completes its response."""

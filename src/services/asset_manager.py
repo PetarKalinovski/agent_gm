@@ -283,12 +283,14 @@ class AssetManager:
 
             npc_data = []
             for i, npc in enumerate(npcs):
+                npc_scale = getattr(npc, 'scale', 1.0) or 1.0
+                logger.info(f"Loading NPC {npc.name}: scale={npc_scale} (raw={npc.scale})")
                 npc_data.append({
                     "id": npc.id,
                     "name": npc.name,
                     "x": npc.position_x,
                     "y": npc.position_y,
-                    "scale": getattr(npc, 'scale', 1.0) or 1.0,
+                    "scale": npc_scale,
                     "status": npc.status,
                     "sprite_path": npc_paths[i],
                     "tier": npc.tier.value if hasattr(npc.tier, 'value') else str(npc.tier)

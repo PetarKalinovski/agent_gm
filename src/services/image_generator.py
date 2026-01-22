@@ -181,6 +181,7 @@ Requirements:
 - Isometric perspective, {view_desc}
 - Full body visible, standing idle pose
 - Solid bright green background (#00FF00) for easy removal
+- YOU MUST NOT HAVE ANYTHING EXCEPT THE CHARACTER IN THE IMAGE. NOTHING ELSE.
 - Clean edges, game-ready sprite
 - Character should be approximately 64-128 pixels tall in style
 - Consistent with art style: visual_style
@@ -194,26 +195,26 @@ Requirements:
         """Build prompt for NPC portrait generation."""
         visual_style = world_bible.visual_style if world_bible else "fantasy RPG game art"
 
-        return f"""Create a character portrait for an RPG dialogue box.
-Style: {visual_style}
+        return f"""Create a 2D hand-painted character portrait for an RPG dialogue box.
 
-
-It should be a head-and-shoulders portrait suitable for use in dialogue boxes.
+Style: {visual_style}, 2D illustration, digital painting with visible brushwork
+NOT photorealistic, NOT 3D rendered, NOT AI-generated look
 
 Character: {npc.name}
 Appearance: {npc.description_physical}
 Personality: {npc.description_personality}
 Current mood: {npc.current_mood}
 
-It should be a 2d painted style suitable for use in an RPG game.
-
 Requirements:
-- Head and shoulders portrait, close-up
-- Facing slightly toward viewer (3/4 view)
-- Expression matching mood: {npc.current_mood}
-- Square format, detailed face
-- Style: visual_style
-- Clean background, focus on the character"""
+- Head and shoulders portrait, close-up framing
+- 3/4 view angle, slightly facing viewer
+- Expressive face showing mood: {npc.current_mood}
+- Hand-painted illustration style with painterly texture
+- Bold linework and defined features
+- Rich colors, stylized shading (NOT realistic lighting)
+- Simple gradient or solid color background
+- Style inspired by: Baldur's Gate portraits, Pillars of Eternity, classic CRPG art
+- Square format, focus entirely on the character's face and expression"""
 
     def _remove_background(self, image_data: bytes) -> bytes:
         """Remove background from sprite image using rembg or color key."""

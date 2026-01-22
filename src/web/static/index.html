@@ -116,48 +116,102 @@
             border: none;
         }
 
-        .chat-header {
-            padding: 0.5rem 1rem;
-            background: var(--bg-tertiary);
+        /* Chat Panel Layout - CRPG style with left sidebar */
+        .chat-layout {
             display: flex;
+            flex: 1;
+            min-height: 0;
+            overflow: hidden;
+        }
+
+        /* Left sidebar with portrait */
+        .chat-sidebar {
+            width: 140px;
+            background: var(--bg-tertiary);
+            border-right: 1px solid rgba(99, 102, 241, 0.2);
+            display: flex;
+            flex-direction: column;
             align-items: center;
-            gap: 1rem;
+            padding: 1rem 0.75rem;
+            gap: 0.75rem;
             flex-shrink: 0;
         }
 
-        .location-info {
-            font-size: 0.85rem;
-            color: var(--text-secondary);
-        }
-
-        .location-info strong {
-            color: var(--accent);
-        }
-
-        /* NPC Portrait */
-        .npc-portrait-container {
-            display: none;
-            align-items: center;
-            gap: 0.5rem;
-        }
-
-        .npc-portrait-container.visible {
-            display: flex;
-        }
-
         .npc-portrait {
-            width: 48px;
-            height: 48px;
-            border-radius: 50%;
+            width: 110px;
+            height: 110px;
+            border-radius: 8px;
             border: 2px solid var(--accent);
             object-fit: cover;
-            background: var(--bg-tertiary);
+            background: var(--bg-secondary);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+        }
+
+        .npc-portrait.hidden {
+            display: none;
         }
 
         .npc-name {
             font-weight: 600;
             color: var(--accent);
-            font-size: 0.9rem;
+            font-size: 0.95rem;
+            text-align: center;
+            word-wrap: break-word;
+            max-width: 100%;
+        }
+
+        .sidebar-location {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            text-align: center;
+            margin-top: auto;
+            padding-top: 0.5rem;
+            border-top: 1px solid rgba(255,255,255,0.1);
+            width: 100%;
+        }
+
+        .sidebar-location strong {
+            color: var(--accent);
+            display: block;
+            margin-bottom: 0.25rem;
+        }
+
+        /* Chat main area */
+        .chat-main {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+        }
+
+        /* Resize Handle */
+        .resize-handle {
+            height: 6px;
+            background: var(--bg-tertiary);
+            cursor: ns-resize;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            transition: background 0.2s;
+        }
+
+        .resize-handle:hover,
+        .resize-handle.dragging {
+            background: var(--accent-dim);
+        }
+
+        .resize-handle::after {
+            content: '';
+            width: 40px;
+            height: 3px;
+            background: var(--text-secondary);
+            border-radius: 2px;
+            opacity: 0.5;
+        }
+
+        .resize-handle:hover::after {
+            opacity: 1;
         }
 
         /* Chat Messages */
@@ -171,7 +225,7 @@
         }
 
         .message {
-            max-width: 85%;
+            max-width: 90%;
             animation: fadeIn 0.3s ease;
         }
 
@@ -202,7 +256,7 @@
         }
 
         .message.assistant .message-content {
-            background: var(--bg-tertiary);
+            background: var(--bg-primary);
             border: 1px solid rgba(99, 102, 241, 0.2);
             border-bottom-left-radius: 4px;
         }
@@ -589,13 +643,16 @@
         display: flex;
         flex-direction: column;
         flex: 1;
+        min-height: 0;
         max-width: 900px;
         margin: 0 auto;
         padding: 1rem;
+        height: 100%;
     }
 
     .forge-messages {
         flex: 1;
+        min-height: 0;
         overflow-y: auto;
         padding: 1rem;
         background: var(--bg-secondary);
@@ -1029,28 +1086,35 @@
     <!-- Chat Toggle -->
     <button id="toggle-chat">Chat</button>
 
+    <!-- Resize Handle -->
+    <div class="resize-handle" id="resize-handle"></div>
+
     <!-- Chat Panel -->
     <div id="chat-panel">
-        <div class="chat-header">
-            <div class="location-info">
-                <strong id="chat-location">Unknown</strong>
-                <span id="chat-time"></span>
-            </div>
-            <div class="npc-portrait-container" id="npc-portrait-container">
-                <img class="npc-portrait" id="npc-portrait" src="" alt="">
+        <div class="chat-layout">
+            <!-- Left sidebar with portrait and info -->
+            <div class="chat-sidebar">
+                <img class="npc-portrait hidden" id="npc-portrait" src="" alt="">
                 <span class="npc-name" id="npc-name"></span>
-            </div>
-        </div>
-        <div class="chat-messages" id="chat-messages">
-            <div class="message assistant">
-                <div class="message-content">
-                    Welcome! Select a player to begin your adventure. Use WASD to move around, and click on NPCs to interact with them.
+                <div class="sidebar-location">
+                    <strong id="chat-location">Unknown</strong>
+                    <span id="chat-time"></span>
                 </div>
             </div>
-        </div>
-        <div class="chat-input">
-            <input type="text" id="user-input" placeholder="What do you do?" disabled>
-            <button id="send-btn" disabled>Send</button>
+            <!-- Main chat area -->
+            <div class="chat-main">
+                <div class="chat-messages" id="chat-messages">
+                    <div class="message assistant">
+                        <div class="message-content">
+                            Welcome! Select a player to begin your adventure. Use WASD to move around, and click on NPCs to interact with them.
+                        </div>
+                    </div>
+                </div>
+                <div class="chat-input">
+                    <input type="text" id="user-input" placeholder="What do you do?" disabled>
+                    <button id="send-btn" disabled>Send</button>
+                </div>
+            </div>
         </div>
     </div>
     </div><!-- End Tab: Game -->
@@ -1339,6 +1403,22 @@
             <div class="modal-footer">
                 <button class="action-btn secondary" onclick="closeModal()">Cancel</button>
                 <button class="action-btn primary" id="modal-save-btn">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Player Name Modal -->
+    <div id="name-modal" class="modal" style="display: none;">
+        <div class="modal-content" style="max-width: 400px;">
+            <div class="modal-header">
+                <h3>Name Your Character</h3>
+            </div>
+            <div class="modal-body">
+                <p style="color: var(--text-secondary); margin-bottom: 1rem;">Your character awaits. What shall they be called?</p>
+                <input type="text" id="player-name-input" class="form-input" placeholder="Enter name..." style="width: 100%; font-size: 1.1rem; padding: 0.75rem;">
+            </div>
+            <div class="modal-footer">
+                <button class="action-btn primary" id="confirm-name-btn">Begin Adventure</button>
             </div>
         </div>
     </div>
@@ -1649,7 +1729,6 @@
         const gameTime = document.getElementById('game-time');
         const chatLocation = document.getElementById('chat-location');
         const chatTime = document.getElementById('chat-time');
-        const npcPortraitContainer = document.getElementById('npc-portrait-container');
         const npcPortrait = document.getElementById('npc-portrait');
         const npcName = document.getElementById('npc-name');
 
@@ -1664,14 +1743,75 @@
             try {
                 const response = await fetch('/api/players');
                 const players = await response.json();
-                playerSelect.innerHTML = '<option value="">Select Player...</option>';
-                players.forEach(p => {
-                    const option = document.createElement('option');
-                    option.value = p.id;
-                    option.textContent = p.name;
-                    playerSelect.appendChild(option);
-                });
+
+                // Check if any player needs a name
+                const needsName = players.find(p => !p.name || p.name === 'Player' || p.name === 'Unnamed' || p.name.startsWith('Player_'));
+                if (needsName) {
+                    await showNameModal(needsName.id);
+                    // Reload after naming
+                    const res = await fetch('/api/players');
+                    const updatedPlayers = await res.json();
+                    populatePlayerSelect(updatedPlayers);
+                } else if (players.length === 0) {
+                    console.warn('No players in this world');
+                } else {
+                    populatePlayerSelect(players);
+                }
             } catch (error) { console.error('Failed to load players:', error); }
+        }
+
+        function populatePlayerSelect(players) {
+            playerSelect.innerHTML = '<option value="">Select Player...</option>';
+            players.forEach(p => {
+                const option = document.createElement('option');
+                option.value = p.id;
+                option.textContent = p.name;
+                playerSelect.appendChild(option);
+            });
+            // Auto-select if only one player
+            if (players.length === 1) {
+                playerSelect.value = players[0].id;
+                playerSelect.dispatchEvent(new Event('change'));
+            }
+        }
+
+        function showNameModal(playerId) {
+            return new Promise((resolve) => {
+                const modal = document.getElementById('name-modal');
+                const input = document.getElementById('player-name-input');
+                const confirmBtn = document.getElementById('confirm-name-btn');
+
+                modal.style.display = 'flex';
+                input.value = '';
+                input.focus();
+
+                const submit = async () => {
+                    const name = input.value.trim();
+                    if (!name) {
+                        input.style.borderColor = 'var(--error)';
+                        return;
+                    }
+                    confirmBtn.disabled = true;
+                    confirmBtn.textContent = 'Saving...';
+
+                    try {
+                        await fetch(`/api/world/players/${playerId}`, {
+                            method: 'PUT',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ name })
+                        });
+                        modal.style.display = 'none';
+                        resolve();
+                    } catch (e) {
+                        console.error('Failed to save name:', e);
+                        confirmBtn.disabled = false;
+                        confirmBtn.textContent = 'Begin Adventure';
+                    }
+                };
+
+                confirmBtn.onclick = submit;
+                input.onkeydown = (e) => { if (e.key === 'Enter') submit(); };
+            });
         }
 
         // UPDATED: Simple function to get data and update text labels
@@ -1718,7 +1858,23 @@
                 console.error("Critical Error: Session response missing location_id");
             }
 
-            addMessage('assistant', `Welcome back! You are at the ${session.location}.`);
+            // 3. Load chat history from previous sessions
+            try {
+                const historyRes = await fetch(`/api/chat-history/${playerId}?limit=50`);
+                const historyData = await historyRes.json();
+                if (historyData.messages && historyData.messages.length > 0) {
+                    console.log(`Loading ${historyData.messages.length} messages from history`);
+                    for (const msg of historyData.messages) {
+                        addMessage(msg.role === 'user' ? 'user' : 'assistant', msg.content);
+                    }
+                } else {
+                    // No history, show welcome message
+                    addMessage('assistant', `Welcome back! You are at the ${session.location}.`);
+                }
+            } catch (e) {
+                console.error('Failed to load chat history:', e);
+                addMessage('assistant', `Welcome back! You are at the ${session.location}.`);
+            }
         });
 
         // --- UI and Chat Logic ---
@@ -1728,26 +1884,68 @@
             setTimeout(() => { if (game && game.app) { game.app.resize(); game.onResize(); } }, 300);
         });
 
+        // Resize handle for game/chat split
+        const resizeHandle = document.getElementById('resize-handle');
+        let isResizing = false;
+        let startY = 0;
+        let startChatHeight = 0;
+
+        resizeHandle.addEventListener('mousedown', (e) => {
+            isResizing = true;
+            startY = e.clientY;
+            startChatHeight = chatPanel.offsetHeight;
+            resizeHandle.classList.add('dragging');
+            document.body.style.cursor = 'ns-resize';
+            document.body.style.userSelect = 'none';
+            e.preventDefault();
+        });
+
+        document.addEventListener('mousemove', (e) => {
+            if (!isResizing) return;
+            const deltaY = startY - e.clientY;
+            const newHeight = Math.max(100, Math.min(window.innerHeight - 150, startChatHeight + deltaY));
+            chatPanel.style.height = newHeight + 'px';
+            if (game && game.app) {
+                game.app.resize();
+                game.onResize();
+            }
+        });
+
+        document.addEventListener('mouseup', () => {
+            if (isResizing) {
+                isResizing = false;
+                resizeHandle.classList.remove('dragging');
+                document.body.style.cursor = '';
+                document.body.style.userSelect = '';
+            }
+        });
+
         window.addEventListener('npc-interact', async (e) => {
             const { npcId, npcName: name } = e.detail;
             currentNpcId = npcId;
 
-            // Show NPC portrait
-            npcPortraitContainer.classList.add('visible');
+            // Show NPC portrait in sidebar
+            npcPortrait.classList.remove('hidden');
             npcPortrait.src = `/api/assets/portrait/${npcId}`;
-            document.getElementById('npc-name').textContent = name;
+            npcName.textContent = name;
 
             // Expand chat if collapsed
             if (chatPanel.classList.contains('collapsed')) {
                 toggleBtn.click();
             }
 
-            // Focus input and add hint - but DON'T auto-send
+            // Focus input and update placeholder
             userInput.placeholder = `Talk to ${name}...`;
             userInput.focus();
+        });
 
-            // Add a system hint message
-            addMessage('assistant', `*You approach ${name}. What do you say?*`);
+        // Clear NPC selection when clicking on empty space
+        window.addEventListener('npc-deselect', () => {
+            currentNpcId = null;
+            npcPortrait.classList.add('hidden');
+            npcPortrait.src = '';
+            npcName.textContent = '';
+            userInput.placeholder = 'What do you do?';
         });
 
         function addMessage(role, content) {
@@ -1827,6 +2025,12 @@
                                     } else if (payload.type === 'narration' && payload.content) {
                                         textBuffer += payload.content;
                                         contentEl.innerHTML = formatText(textBuffer);
+                                    } else if (payload.type === 'npc_death' && payload.npc_id) {
+                                        // Trigger death animation on the game canvas
+                                        console.log(`NPC Death Event: ${payload.npc_name} (${payload.npc_id})`);
+                                        if (game && game.playDeathAnimation) {
+                                            game.playDeathAnimation(payload.npc_id);
+                                        }
                                     }
                                     chatMessages.scrollTop = chatMessages.scrollHeight;
                                 } catch (e) { /* ignore parse errors */ }
