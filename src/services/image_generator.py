@@ -134,8 +134,12 @@ Type: {location.type.value if hasattr(location.type, 'value') else location.type
 Description: {location.description}
 Atmosphere: {atmosphere}
 
+Avoid creating small indoor rooms. Beause they are zoomed in too much and the player and npc sprites will not fit well. They will look awkwardly small compared to the environment.
+But if you must, and you can't make it an open area, create that small room but make it zoomed out enough, and everything not in the room just make it black. (like a large walkable area but everything outside the room is just black).
+
 Requirements:
-- Top-down perspective, looking straight down at the floor/ground
+- Isometric top-down perspective
+- Wide view, suitable for use as a background
 - No characters, people, or creatures in the scene
 - Clear walkable floor area in the center
 - Detailed environment matching the description

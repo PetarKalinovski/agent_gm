@@ -77,18 +77,24 @@ Open http://localhost:8000 in your browser.
 ### Create Your First World
 
 1. Click **"Create New World"** in the world selector
-2. Enter a **World Name** (e.g., "Los Alamos 1943")
+2. Enter a **World Name** (e.g., "Cogsworth City")
 3. Enter a **World Premise**:
    ```
-   The Manhattan Project at Los Alamos, 1943. The greatest scientific minds
-   of a generation gathered in secret to build the atomic bomb. Politics,
-   espionage, moral dilemmas, and the weight of history.
+   A noir detective story set in a 1920s-inspired steampunk metropolis.
+   Brass gears turn the city's machinery, airships dock at sky-harbor towers,
+   and the wealthy elite live in clock-tower penthouses while the poor toil
+   in smoke-choked factory districts. Corruption runs deep, from the
+   clockwork police force to the mysterious Artificers' Guild that controls
+   all steam-tech patents. Something sinister stirs in the fog-shrouded streets.
    ```
-4. Enter **Genre** (e.g., "historical thriller")
+4. Enter **Genre** (e.g., "steampunk noir")
 5. Enter **Player Character Concept**:
    ```
-   A Jewish physicist who fled Nazi Germany, haunted by what they left
-   behind and conflicted about what they're building.
+   A disgraced former detective turned private investigator, kicked off the
+   Clockwork Constabulary for asking too many questions about the wrong people.
+   Now scraping by in a cramped office above a gear-grinding shop, taking cases
+   the police won't touch. Has a mechanical arm - a reminder of the case that
+   cost them everything.
    ```
 6. Click **"Create World"** and wait for WorldForge to generate everything
 
@@ -151,6 +157,15 @@ World Forge (world generation)
 - **Major**: Fully fleshed out with multiple goals, secrets, and relationships. Key story characters.
 - **Minor**: Role, faction, one goal, one secret. Shopkeepers, guards, contacts.
 - **Ambient**: Name, profession, one quirk. Generated on-demand as background characters.
+
+### Conversation Memory
+
+Agent GM uses [strands-agents-semantic-summarizing-conversation-manager](https://github.com/danilop/strands-agents-semantic-summarizing-conversation-manager) for intelligent session management. This combines:
+
+- **Summarization**: Long conversations are automatically compressed into summaries to stay within context limits
+- **Semantic Search**: Relevant past conversation snippets are retrieved based on semantic similarity to the current context
+
+This allows NPCs to "remember" important details from past conversations even across long play sessions, while keeping token usage efficient.
 
 ## Web Interface
 
