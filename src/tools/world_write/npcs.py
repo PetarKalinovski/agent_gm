@@ -341,6 +341,42 @@ def update_npc_relationship(
 
 
 @tool
+def kill_npc(npc_id: str, cause_of_death: str = "unknown") -> dict[str, Any]:
+    """Kill an NPC, setting their status to dead.
+
+    Use this when an NPC dies in combat, from an accident, assassination, or any other cause.
+    The frontend will play a death animation when this is called.
+
+    Args:
+        npc_id: The NPC's ID.
+        cause_of_death: Description of how the NPC died.
+
+    Returns:
+        Dictionary with death details and a trigger for frontend animation.
+    """
+    with get_session() as session:
+        npc = session.get(NPC, npc_id)
+        if not npc:
+            return {"error": "NPC not found"}
+
+        if npc.status == "dead":
+            return {"error": f"{npc.name} is already dead"}
+
+        # Set status to dead
+        npc.status = "dead"
+        session.commit()
+
+        return {
+            "success": True,
+            "event": "npc_death",  # Special event type for frontend
+            "npc_id": npc.id,
+            "npc_name": npc.name,
+            "cause_of_death": cause_of_death,
+            "message": f"{npc.name} has died. Cause: {cause_of_death}",
+        }
+
+
+@tool
 def reveal_secret(npc_id: str, player_id: str, secret_index: int) -> dict[str, Any]:
     """Mark a secret as revealed to the player.
 

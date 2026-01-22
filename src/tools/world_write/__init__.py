@@ -14,6 +14,7 @@ from src.tools.world_write.locations import (
 from src.tools.world_write.npcs import (
     add_npc,
     delete_npc,
+    kill_npc,
     move_npc,
     reveal_secret,
     update_npc,
@@ -79,6 +80,7 @@ __all__ = [
     "add_npc",
     "update_npc",
     "delete_npc",
+    "kill_npc",
     "move_npc",
     "update_npc_mood",
     "update_npc_relationship",

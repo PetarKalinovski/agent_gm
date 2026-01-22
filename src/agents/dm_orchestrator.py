@@ -25,6 +25,7 @@ from src.tools.world_write import (
     advance_time,
     add_location,
     add_npc,
+    kill_npc,
     update_npc_relationship,
     update_npc,
     create_event,
@@ -102,6 +103,7 @@ DM_SYSTEM_PROMPT = """You are the Dungeon Master (DM) for an immersive, dynamic 
 - If a player attacks, determine the outcome based on logic.
 - Use `show_combat_action` to display the strike.
 - Use `update_player_health` if they take damage.
+- Use `kill_npc` when an NPC dies (combat, assassination, accident, etc.) - this triggers a death animation.
 - Use `update_npc_mood` or `update_npc_relationship` (hostile) immediately.
 
 ### TONE & STYLE
@@ -144,6 +146,7 @@ DM_TOOLS: list[Callable] = [
     # Write tools
     move_player,
     move_npc,
+    kill_npc,
     advance_time,
     update_quest_status,
     update_quest_objectives,
