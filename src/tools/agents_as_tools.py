@@ -32,7 +32,8 @@ def get_recent_dm_context(player_id: str, num_messages: int = 6) -> str:
 
         # Check if session actually exists with messages before creating manager
         # This prevents creating empty/partial session directories
-        session_path = Path(storage_dir) / player_id / "default" / "messages"
+        # FileSessionManager uses session_<id>/agents/agent_<agent_id>/messages/ structure
+        session_path = Path(storage_dir) / f"session_{player_id}" / "agents" / "agent_default" / "messages"
         if not session_path.exists():
             return ""
 
@@ -127,6 +128,7 @@ def prompt_npc_agent(player_id: str, npc_id: str, player_input: str, is_first_in
     # Import inside function to avoid circular imports
     from src.repositories.unit_of_work import unit_of_work
     from src.agents.npc_agent import NPCAgent
+    from src.tools.world_read.player import get_player
 
     # Validate NPC exists before creating agent (fixes "nothing to say" bug)
     with unit_of_work() as uow:
@@ -161,9 +163,23 @@ def prompt_npc_agent(player_id: str, npc_id: str, player_input: str, is_first_in
 
     combined_context = "\n\n".join(combined_context_parts)
 
-    # Create NPC agent and start conversation with validated data
+    # Create NPC agent with validated data
     agent = NPCAgent(player_id, npc_id)
-    response = agent.start_conversation(npc=npc_data, relationship=relationship_dict, context=combined_context)
+
+    if is_first_interaction:
+        # First interaction - start a new conversation with greeting
+        response = agent.start_conversation(npc=npc_data, relationship=relationship_dict, context=combined_context)
+    else:
+        # Continuing conversation - pass the player's actual words
+        # Still need to initialize the agent with NPC data before responding
+        agent.npc = npc_data
+        agent.relationship = relationship_dict
+        player_data = get_player(player_id)
+        agent._player_name = player_data.get("name", "Unknown") if player_data else "Unknown"
+        agent._agent = agent._create_agent()
+
+        result = agent.respond(player_input, context=combined_context)
+        response = result.get("response", "...")
 
     return {"text_response": str(response)}
 

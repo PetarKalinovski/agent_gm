@@ -112,7 +112,8 @@ class BaseGameAgent(ABC):
         Args:
             session_id: The session ID to delete.
         """
-        storage_dir = Path(tempfile.gettempdir()) / "strands" / "sessions" / session_id
+        # FileSessionManager stores sessions at session_<id>/ under the storage dir
+        storage_dir = Path(tempfile.gettempdir()) / "strands" / "sessions" / f"session_{session_id}"
         if storage_dir.exists():
             logger.info(f"Deleting corrupted session: {storage_dir}")
             shutil.rmtree(storage_dir, ignore_errors=True)

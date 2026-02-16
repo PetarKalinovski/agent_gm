@@ -4,7 +4,7 @@ from typing import Any, Callable
 
 from src.agents.core.base_agent import BaseGameAgent
 from src.core.types import AgentContext
-from src.tools.world_read import get_npc, get_npc_relationship, get_world_clock, get_available_quests_for_npc, get_world_bible, get_active_quests, get_player
+from src.tools.world_read import get_npc, get_npc_relationship, get_world_clock, get_available_quests_for_npc, get_world_bible, get_active_quests, get_player, get_recent_events
 from src.tools.world_write import update_npc_relationship, update_npc_mood, update_npc, activate_quest
 from src.tools.narration import speak, show_quest_update
 
@@ -100,6 +100,7 @@ NPC_TOOLS: list[Callable] = [
     activate_quest,
     show_quest_update,
     get_player,
+    get_recent_events,
 ]
 
 

@@ -18,6 +18,7 @@ from src.tools.world_read import (
     get_active_quests,
     get_world_bible_for_dm,
     get_all_quests,
+    get_recent_events,
 )
 from src.tools.world_write import (
     move_player,
@@ -127,6 +128,20 @@ Use the `journal` tool to log important narrative developments, world changes, a
 - Track quest progress naturally through play - update objectives as they're completed.
 - Remind the player of relevant active quests when appropriate (e.g., when they encounter a quest-related NPC or location).
 - Don't spam quest updates - weave them into narration.
+
+### WORLD EVENTS
+Use `create_event` to record significant things that happen in the world:
+- Combat encounters, NPC deaths, crimes committed
+- Major discoveries, quest completions, faction conflicts
+- Set `event_type` to "player" for player actions, "meso" for local events, "macro" for faction-level
+- Tag relevant `npcs_involved`, `locations_involved`, `factions_involved`
+- Set `player_witnessed=True` if the player saw it happen
+
+Use `get_recent_events` to check what has happened recently when:
+- Arriving at a new location (what happened here while the player was away?)
+- Talking to NPCs (what do they know about recent events?)
+- Making decisions that might be affected by recent history
+- Pass relevant events as context when delegating to `prompt_npc_agent`
 """
 
 
@@ -143,11 +158,13 @@ DM_TOOLS: list[Callable] = [
     get_active_quests,
     get_world_state_summary,
     get_all_quests,
+    get_recent_events,
     # Write tools
     move_player,
     move_npc,
     kill_npc,
     advance_time,
+    create_event,
     update_quest_status,
     update_quest_objectives,
     # Narration tools
