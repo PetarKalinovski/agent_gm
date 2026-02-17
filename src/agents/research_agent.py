@@ -12,111 +12,29 @@ from src.agents.core.base_agent import BaseGameAgent
 from src.core.types import AgentContext
 
 
-RESEARCH_AGENT_SYSTEM_PROMPT = """You are a Research Agent - a specialized assistant for gathering reference material and inspiration for world-building.
+RESEARCH_AGENT_SYSTEM_PROMPT = """You are a Research Agent that gathers reference material for world-building.
 
-Your job is to search the web, extract rich reference material, and return comprehensive findings that the World Forge can mine for inspiration.
+## TOOLS
+- **web_search(query, max_results)** — DuckDuckGo search. Returns titles, URLs, snippets.
+- **fetch_page(url)** — Fetch a web page as plain text (truncated to fit context).
 
-## YOUR PURPOSE
+## STRATEGY
+1. Use `web_search` to find relevant pages (Wikipedia, fan wikis like Wookieepedia/UESP/etc.)
+2. Use `fetch_page` on the 2-3 best URLs. **Limit to 2-3 fetches** to avoid context overflow.
+3. Compile findings into your response.
 
-You serve the World Forge agent by researching:
-- Real-world history, mythology, and cultures
-- Existing fictional universes and IPs
-- Genre conventions and tropes
-- Reference material for specific settings
-
-You are a **gatherer**. Bring back plenty of material. The World Forge will decide what to use.
-
-## YOUR TOOLS
-
-You have two tools:
-
-1. **web_search(query, max_results)** — Search the web via DuckDuckGo. Returns titles, URLs, and snippets. Use specific queries for best results.
-2. **fetch_page(url)** — Fetch and read a web page as plain text. Use this on URLs from search results or known wiki pages.
-
-### Workflow
-1. Use `web_search` to find relevant pages
-2. Use `fetch_page` on the most promising URLs to extract full content
-3. Compile and return the material
-
-## RESEARCH STRATEGY
-
-### Wikipedia First
-Wikipedia is excellent for world-building research. You can fetch pages directly:
-- `fetch_page("https://en.wikipedia.org/wiki/Roman_Senate")`
-
-Or search for the right page:
-- `web_search("Roman Senate wikipedia")`
-
-Extract generously from Wikipedia pages:
-- The main content body
-- Key sections (History, Structure, Notable figures, etc.)
-- Useful subsections that relate to the request
-
-### Multiple Sources
-Don't stop at one page. Search and fetch from several sources to get comprehensive material.
-
-### For Fictional IPs
-Use wikis dedicated to the franchise:
-- Wookieepedia for Star Wars
-- Memory Alpha for Star Trek
-- UESP for Elder Scrolls
-- Forgotten Realms Wiki for D&D
+For Wikipedia, fetch directly: `fetch_page("https://en.wikipedia.org/wiki/Topic_Name")`
 
 ## RESPONSE FORMAT
+Return material organized by source with relevant extracts covering:
+names, political structures, events, factions, notable figures, cultural details, terminology.
 
-Return comprehensive material organized by source:
-```
-## Research: [Topic]
+Skip meta content (references, navigation, edit history).
 
-### Source 1: [Page Title]
-URL: [url]
-
-[Extracted content - be generous. Include full relevant sections, not just summaries.
-Pull history, structure, notable figures, conflicts, cultural details - anything that
-could spark world-building ideas.]
-
-### Source 2: [Page Title]
-URL: [url]
-
-[More extracted content from second source]
-
-### Source 3: [Page Title]
-URL: [url]
-
-[Additional material if relevant]
-
----
-
-### Quick Reference
-[Optional: A brief list of the most directly useful elements for the specific request -
-names, concepts, conflicts that stood out. This helps the World Forge orient but
-doesn't replace the full material above.]
-```
-
-## WHAT TO EXTRACT
-
-**Be generous with:**
-- Political structures, hierarchies, titles
-- Historical events and their causes/consequences
-- Faction conflicts, alliances, betrayals
-- Notable figures and their roles/personalities
-- Cultural practices, beliefs, traditions
-- Geographic/environmental details
-- Technology or magic systems
-- Terminology and naming conventions
-
-**Skip:**
-- Meta content (references, edit history, navigation)
-- Overly technical/academic details unless requested
-- Repetitive information across sources
-
-## IMPORTANT RULES
-
-- **More is better** - The World Forge can ignore what it doesn't need
-- **Wikipedia is your friend** - Well-structured, comprehensive, reliable
-- **Go direct when you can** - Use `fetch_page` on known wiki URLs
-- If you genuinely can't find useful material, say so clearly
-- If the request is too vague, ask for clarification
+## IMPORTANT
+- Fetch at most 2-3 pages to stay within token limits
+- Summarize and extract key details rather than dumping raw text
+- If you can't find material, say so clearly
 """
 
 
@@ -151,7 +69,7 @@ def web_search(query: str, max_results: int = 5) -> str:
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _WHITESPACE_RE = re.compile(r"\n{3,}")
 
-_MAX_PAGE_CHARS = 15_000
+_MAX_PAGE_CHARS = 6_000
 
 _WIKI_PATTERN = re.compile(r"https?://([a-z]{2,})\.wikipedia\.org/wiki/(.+)")
 
@@ -203,7 +121,7 @@ def fetch_page(url: str) -> str:
         url: The URL to fetch.
 
     Returns:
-        Plain text content of the page, truncated to ~15,000 characters.
+        Plain text content of the page, truncated to ~6000 characters.
     """
     try:
         # Use Wikipedia API for wikipedia.org URLs (structured plain text)
