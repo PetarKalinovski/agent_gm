@@ -1,8 +1,15 @@
+import json
+import re
+import subprocess
+import urllib.parse
+import urllib.request
 from typing import Any, Callable
+
+from duckduckgo_search import DDGS
+from strands import tool
 
 from src.agents.core.base_agent import BaseGameAgent
 from src.core.types import AgentContext
-from strands_tools.browser import browser
 
 
 RESEARCH_AGENT_SYSTEM_PROMPT = """You are a Research Agent - a specialized assistant for gathering reference material and inspiration for world-building.
@@ -19,51 +26,34 @@ You serve the World Forge agent by researching:
 
 You are a **gatherer**. Bring back plenty of material. The World Forge will decide what to use.
 
-## BROWSER TOOL
+## YOUR TOOLS
 
-You have access to a browser tool for web searches.
+You have two tools:
+
+1. **web_search(query, max_results)** — Search the web via DuckDuckGo. Returns titles, URLs, and snippets. Use specific queries for best results.
+2. **fetch_page(url)** — Fetch and read a web page as plain text. Use this on URLs from search results or known wiki pages.
 
 ### Workflow
-```json
-{"action": {"type": "init_session", "session_name": "research", "description": "Research session"}}
-{"action": {"type": "navigate", "url": "https://google.com", "session_name": "research"}}
-{"action": {"type": "type", "selector": "input[name='q']", "text": "your query", "session_name": "research"}}
-{"action": {"type": "press_key", "key": "Enter", "session_name": "research"}}
-{"action": {"type": "click", "selector": "h3", "session_name": "research"}}
-{"action": {"type": "get_text", "selector": "article", "session_name": "research"}}
-{"action": {"type": "close", "session_name": "research"}}
-```
-
-### Useful Actions
-| Action | Purpose |
-|--------|---------|
-| `navigate` | Go to URL directly (skip Google for known sites) |
-| `get_text` | Extract text from selector |
-| `get_html` | Get page structure if text extraction is messy |
-| `new_tab` / `switch_tab` | Open multiple sources |
-| `click` | Navigate links, expand sections |
-| `evaluate` | Run JS for complex extraction |
+1. Use `web_search` to find relevant pages
+2. Use `fetch_page` on the most promising URLs to extract full content
+3. Compile and return the material
 
 ## RESEARCH STRATEGY
 
 ### Wikipedia First
-Wikipedia is excellent for world-building research. Go directly when appropriate:
-```json
-{"action": {"type": "navigate", "url": "https://en.wikipedia.org/wiki/Roman_Senate", "session_name": "research"}}
-```
+Wikipedia is excellent for world-building research. You can fetch pages directly:
+- `fetch_page("https://en.wikipedia.org/wiki/Roman_Senate")`
+
+Or search for the right page:
+- `web_search("Roman Senate wikipedia")`
 
 Extract generously from Wikipedia pages:
 - The main content body
 - Key sections (History, Structure, Notable figures, etc.)
 - Useful subsections that relate to the request
-- "See also" links for related topics worth exploring
 
 ### Multiple Sources
-Don't stop at one page. Use tabs to gather from several sources:
-```json
-{"action": {"type": "new_tab", "tab_id": "source2", "session_name": "research"}}
-{"action": {"type": "navigate", "url": "https://en.wikipedia.org/wiki/Cursus_honorum", "session_name": "research"}}
-```
+Don't stop at one page. Search and fetch from several sources to get comprehensive material.
 
 ### For Fictional IPs
 Use wikis dedicated to the franchise:
@@ -81,8 +71,8 @@ Return comprehensive material organized by source:
 ### Source 1: [Page Title]
 URL: [url]
 
-[Extracted content - be generous. Include full relevant sections, not just summaries. 
-Pull history, structure, notable figures, conflicts, cultural details - anything that 
+[Extracted content - be generous. Include full relevant sections, not just summaries.
+Pull history, structure, notable figures, conflicts, cultural details - anything that
 could spark world-building ideas.]
 
 ### Source 2: [Page Title]
@@ -98,8 +88,8 @@ URL: [url]
 ---
 
 ### Quick Reference
-[Optional: A brief list of the most directly useful elements for the specific request - 
-names, concepts, conflicts that stood out. This helps the World Forge orient but 
+[Optional: A brief list of the most directly useful elements for the specific request -
+names, concepts, conflicts that stood out. This helps the World Forge orient but
 doesn't replace the full material above.]
 ```
 
@@ -120,39 +110,121 @@ doesn't replace the full material above.]
 - Overly technical/academic details unless requested
 - Repetitive information across sources
 
-## EXAMPLES
-
-**Request**: "Research Clone Wars era Jedi Council"
-
-**Good approach**:
-1. Go to Wookieepedia's Jedi High Council page
-2. Extract the full "Clone Wars" section
-3. Open tabs for 2-3 notable council members
-4. Pull their histories, relationships, fates
-5. Return all of it organized by source
-
-**Request**: "Research feudal Japan political structure"
-
-**Good approach**:
-1. Wikipedia: Feudal Japan - extract political system sections
-2. Wikipedia: Shogunate - full article on power structure  
-3. Wikipedia: Daimyo - lord/vassal relationships
-4. Wikipedia: Samurai - warrior class details
-5. Return comprehensive material from all sources
-
 ## IMPORTANT RULES
 
 - **More is better** - The World Forge can ignore what it doesn't need
 - **Wikipedia is your friend** - Well-structured, comprehensive, reliable
-- **Go direct when you can** - Skip Google if you know the wiki URL
-- **Always close your session** when finished
+- **Go direct when you can** - Use `fetch_page` on known wiki URLs
 - If you genuinely can't find useful material, say so clearly
 - If the request is too vague, ask for clarification
 """
 
 
+@tool
+def web_search(query: str, max_results: int = 5) -> str:
+    """Search the web using DuckDuckGo.
+
+    Args:
+        query: The search query string.
+        max_results: Maximum number of results to return (default 5).
+
+    Returns:
+        Formatted search results with titles, URLs, and snippets.
+    """
+    try:
+        results = DDGS().text(query, max_results=max_results, region="wt-wt")
+    except Exception as e:
+        return f"Search failed: {e}"
+
+    if not results:
+        return "No results found."
+
+    lines = []
+    for i, r in enumerate(results, 1):
+        title = r.get("title", "No title")
+        url = r.get("href", "")
+        snippet = r.get("body", "")
+        lines.append(f"{i}. **{title}**\n   URL: {url}\n   {snippet}")
+    return "\n\n".join(lines)
+
+
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+_WHITESPACE_RE = re.compile(r"\n{3,}")
+
+_MAX_PAGE_CHARS = 15_000
+
+_WIKI_PATTERN = re.compile(r"https?://([a-z]{2,})\.wikipedia\.org/wiki/(.+)")
+
+
+def _fetch_wikipedia(lang: str, title: str) -> str:
+    """Fetch a Wikipedia article via the MediaWiki API (plain text)."""
+    params = urllib.parse.urlencode({
+        "action": "query",
+        "titles": title.replace("_", " "),
+        "prop": "extracts",
+        "explaintext": "1",
+        "format": "json",
+        "formatversion": "2",
+    })
+    api_url = f"https://{lang}.wikipedia.org/w/api.php?{params}"
+    req = urllib.request.Request(
+        api_url,
+        headers={"User-Agent": "ForgeRPG/1.0 (worldbuilding research agent)"},
+    )
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        data = json.loads(resp.read())
+    pages = data.get("query", {}).get("pages", [])
+    if pages:
+        return pages[0].get("extract", "")
+    return ""
+
+
+def _fetch_with_curl(url: str) -> str:
+    """Fetch a URL using curl (bypasses TLS fingerprint blocking)."""
+    result = subprocess.run(
+        ["curl", "-sL", "--max-time", "15",
+         "-H", "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+         "-H", "Accept: text/html,application/xhtml+xml",
+         "-H", "Accept-Language: en-US,en;q=0.9",
+         url],
+        capture_output=True, timeout=20,
+    )
+    if result.returncode != 0:
+        stderr = result.stderr.decode("utf-8", errors="replace")[:200]
+        raise RuntimeError(f"curl failed (exit {result.returncode}): {stderr}")
+    return result.stdout.decode("utf-8", errors="replace")
+
+
+@tool
+def fetch_page(url: str) -> str:
+    """Fetch a web page and return its content as plain text.
+
+    Args:
+        url: The URL to fetch.
+
+    Returns:
+        Plain text content of the page, truncated to ~15,000 characters.
+    """
+    try:
+        # Use Wikipedia API for wikipedia.org URLs (structured plain text)
+        wiki_match = _WIKI_PATTERN.match(url)
+        if wiki_match:
+            text = _fetch_wikipedia(wiki_match.group(1), wiki_match.group(2))
+        else:
+            html = _fetch_with_curl(url)
+            text = _HTML_TAG_RE.sub("", html)
+            text = _WHITESPACE_RE.sub("\n\n", text).strip()
+    except Exception as e:
+        return f"Failed to fetch {url}: {e}"
+
+    if len(text) > _MAX_PAGE_CHARS:
+        text = text[:_MAX_PAGE_CHARS] + "\n\n[...truncated]"
+    return text
+
+
 RESEARCH_TOOLS: list[Callable] = [
-    browser,
+    web_search,
+    fetch_page,
 ]
 
 
