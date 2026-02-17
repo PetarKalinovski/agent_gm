@@ -761,6 +761,11 @@ async def get_world_bible():
             "dialogue_style": bible.dialogue_style,
             "visual_style": bible.visual_style,
             "color_palette": bible.color_palette,
+            "pc_guidelines": bible.pc_guidelines,
+            "pc_starting_situation": bible.pc_starting_situation,
+            "pc_suggested_name": getattr(bible, "pc_suggested_name", ""),
+            "pc_suggested_description": getattr(bible, "pc_suggested_description", ""),
+            "pc_suggested_background": getattr(bible, "pc_suggested_background", ""),
         }
 
 
@@ -1707,18 +1712,32 @@ async def world_forge_query(request: WorldForgeRequest):
         try:
             from src.agents.world_forge import WorldForge
 
+            tool_tracker = ToolUsageTracker()
             world_forge = WorldForge(session_id)
 
             # Stream the response
             async for response in world_forge.agent.stream_async(request.query):
+                # Process through tool tracker
+                tool_tracker.process_stream_payload(response)
+
+                # Yield tool notifications
+                for notification in tool_tracker.drain_notifications():
+                    encoded = json.dumps(notification, ensure_ascii=False, default=str)
+                    yield f"data: {encoded}\n\n"
+
                 if isinstance(response, dict) and "data" in response:
                     token_data = response["data"]
                     if token_data:
                         token_event = {"type": "token", "data": token_data}
                         yield f"data: {json.dumps(token_event)}\n\n"
 
-            # Final event
-            yield f"data: {json.dumps({'type': 'complete'})}\n\n"
+            # Drain any remaining notifications
+            for notification in tool_tracker.drain_notifications():
+                encoded = json.dumps(notification, ensure_ascii=False, default=str)
+                yield f"data: {encoded}\n\n"
+
+            # Final event with tool summary
+            yield f"data: {json.dumps({'type': 'complete', 'tools': tool_tracker.snapshot()})}\n\n"
 
         except Exception as e:
             logger.error(f"World Forge error: {e}", exc_info=True)
@@ -1759,26 +1778,18 @@ async def list_worlds():
             "has_world_bible": False,
         }
 
-        # Try to get world bible info
+        # Try to get world bible info (raw SQL to avoid ORM column mismatch on old DBs)
         try:
-            from sqlalchemy import create_engine
-            from sqlalchemy.orm import sessionmaker
+            from sqlalchemy import create_engine, text as sa_text
             engine = create_engine(f"sqlite:///{db_file}", echo=False)
-            SessionLocal = sessionmaker(bind=engine)
-            session = SessionLocal()
-            try:
-                from src.models.world_bible import WorldBible
-                bible = session.query(WorldBible).first()
-                if bible:
+            with engine.connect() as conn:
+                row = conn.execute(sa_text("SELECT name, tagline, setting_description, genre FROM world_bible LIMIT 1")).first()
+                if row:
                     world_info["has_world_bible"] = True
-                    world_info["description"] = bible.tagline or bible.setting_description[:200] if bible.setting_description else None
-                    world_info["genre"] = bible.genre
-                    world_info["world_name"] = bible.name
-            except Exception:
-                pass
-            finally:
-                session.close()
-                engine.dispose()
+                    world_info["world_name"] = row[0]
+                    world_info["description"] = row[1] or (row[2][:200] if row[2] else None)
+                    world_info["genre"] = row[3]
+            engine.dispose()
         except Exception:
             pass
 
@@ -1991,6 +2002,7 @@ async def create_world_stream(request: WorldCreateRequest):
             # Unique session per world
             session_id = f"forge_{hashlib.md5(db_path.encode()).hexdigest()[:12]}"
             forge = WorldForge(session_id)
+            tool_tracker = ToolUsageTracker()
 
             # Stream the generation
             prompt = f"""Generate a complete game world with the following specifications:
@@ -2013,12 +2025,25 @@ Start now. Work through each step.
 """
 
             async for response in forge.agent.stream_async(prompt):
+                # Process through tool tracker
+                tool_tracker.process_stream_payload(response)
+
+                # Yield tool notifications
+                for notification in tool_tracker.drain_notifications():
+                    encoded = json.dumps(notification, ensure_ascii=False, default=str)
+                    yield f"data: {encoded}\n\n"
+
                 if isinstance(response, dict) and "data" in response:
                     token_data = response["data"]
                     if token_data:
                         yield f"data: {json.dumps({'type': 'token', 'data': token_data})}\n\n"
 
-            yield f"data: {json.dumps({'type': 'complete', 'db_path': db_path, 'message': f'World {safe_name} created!'})}\n\n"
+            # Drain any remaining notifications
+            for notification in tool_tracker.drain_notifications():
+                encoded = json.dumps(notification, ensure_ascii=False, default=str)
+                yield f"data: {encoded}\n\n"
+
+            yield f"data: {json.dumps({'type': 'complete', 'db_path': db_path, 'message': f'World {safe_name} created!', 'tools': tool_tracker.snapshot()})}\n\n"
 
         except Exception as e:
             logger.error(f"World creation failed: {e}", exc_info=True)

@@ -38,6 +38,9 @@ def create_world_bible(
     color_palette: list[str] | None = None,
     pc_guidelines: str = "",
     pc_starting_situation: str = "",
+    pc_suggested_name: str = "",
+    pc_suggested_description: str = "",
+    pc_suggested_background: str = "",
 ) -> dict[str, Any]:
     """Create the World Bible - the static configuration for the game world.
 
@@ -69,6 +72,9 @@ def create_world_bible(
         color_palette: List of colors for the world.
         pc_guidelines: Guidelines for player character.
         pc_starting_situation: Where/how the PC starts.
+        pc_suggested_name: Suggested name for the player character (e.g., "Kael Dorne").
+        pc_suggested_description: Suggested physical appearance for the player character. This is used for sprite generation so be detailed about clothing, build, hair, distinguishing features.
+        pc_suggested_background: Suggested backstory for the player character.
 
     Returns:
         Dictionary with the created World Bible's details.
@@ -104,6 +110,9 @@ def create_world_bible(
             color_palette=color_palette or [],
             pc_guidelines=pc_guidelines,
             pc_starting_situation=pc_starting_situation,
+            pc_suggested_name=pc_suggested_name,
+            pc_suggested_description=pc_suggested_description,
+            pc_suggested_background=pc_suggested_background,
         )
         session.add(bible)
 

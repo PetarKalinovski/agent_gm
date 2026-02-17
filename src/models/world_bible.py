@@ -77,6 +77,11 @@ class WorldBible(Base):
     pc_guidelines: Mapped[str] = mapped_column(Text, default="")  # "PC is a bounty hunter with a hidden past"
     pc_starting_situation: Mapped[str] = mapped_column(Text, default="")  # "Starting on Tatooine, owes money to Jabba"
 
+    # Suggested PC (WorldForge generates these for the character creation modal)
+    pc_suggested_name: Mapped[str] = mapped_column(Text, default="")
+    pc_suggested_description: Mapped[str] = mapped_column(Text, default="")  # Physical appearance
+    pc_suggested_background: Mapped[str] = mapped_column(Text, default="")  # Backstory
+
     # Metadata
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     version: Mapped[int] = mapped_column(default=1)
