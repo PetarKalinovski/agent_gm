@@ -28,6 +28,7 @@ dependencies = [
     "numba>=0.63.1",
     "rembg[cpu]>=2.0.69",
     "loguru>=0.7.3",
+    "duckduckgo-search>=7.0,<8.0",
 ]
 
 [project.scripts]
