@@ -133,7 +133,7 @@ Notice how both have clear direction but don't dictate exactly how the player so
 
 ## TOOL USAGE
 
-- Use `create_world_bible` FIRST to establish the foundation
+- Use `create_world_bible` FIRST to establish the foundation. IMPORTANT: Always fill in `pc_suggested_name`, `pc_suggested_description`, and `pc_suggested_background` based on the PC concept. The suggested description should be a detailed physical appearance (build, hair, clothing, distinguishing features) since it drives sprite/image generation. The suggested name should be a fitting character name for the setting.
 - Use `create_faction` for each faction
 - Use `create_faction_relationship` to connect factions (do this AFTER all factions exist)
 - Use `create_historical_event` for lore events
