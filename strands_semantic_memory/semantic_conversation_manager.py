@@ -65,7 +65,7 @@ class SemanticSummarizingConversationManager(ConversationManager):
     def __init__(
         self,
         summary_ratio: float = 0.3,
-        preserve_recent_messages: int = 40,
+        preserve_recent_messages: int = 100,
         summarization_agent: Optional["Agent"] = None,
         summarization_system_prompt: Optional[str] = None,
         message_context_radius: int = 3,

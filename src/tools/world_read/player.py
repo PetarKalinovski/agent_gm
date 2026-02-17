@@ -30,6 +30,7 @@ def get_player(player_id: str) -> dict[str, Any]:
             "id": player.id,
             "name": player.name,
             "description": player.description,
+            "background": player.background,
             "traits": player.traits,
             "health_status": player.health_status,
             "inventory": player.inventory,

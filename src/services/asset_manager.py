@@ -10,6 +10,7 @@ from src.models.npc import NPC
 from src.models.player import Player
 from src.models.world_bible import WorldBible
 from src.services.image_generator import ImageGenerator
+from src.services.reference_search import ReferenceImageSearch
 from loguru import logger
 
 if TYPE_CHECKING:
@@ -26,6 +27,7 @@ class AssetManager:
 
     def __init__(self):
         self.image_gen = ImageGenerator()
+        self.ref_search = ReferenceImageSearch()
         self.assets_dir = Path("data/assets")
 
     def _get_world_bible(self, db_session) -> WorldBible | None:
@@ -54,7 +56,12 @@ class AssetManager:
 
             # Generate new background
             world_bible = self._get_world_bible(db)
-            path = await self.image_gen.generate_location_background(location, world_bible)
+            ref = await self.ref_search.find_location_reference(
+                location.name,
+                location.type.value if hasattr(location.type, 'value') else str(location.type),
+                world_bible.name if world_bible else ""
+            )
+            path = await self.image_gen.generate_location_background(location, world_bible, reference_image=ref)
 
             # Cache path in database
             location.background_image_path = path
@@ -105,10 +112,14 @@ class AssetManager:
             with get_session() as db:
                 character = db.query(NPC).filter(NPC.id == character_id).first()
                 world_bible = self._get_world_bible(db)
-                # Call generator with specific front-only flags
-                paths = await self.image_gen.generate_all_sprites_for_character(
-                    character, world_bible, include_walk_frames=False, only_front=True
+                # Search for a web reference image before generating
+                ref = await self.ref_search.find_character_reference(
+                    character.name, world_bible.name if world_bible else ""
                 )
+                path = await self.image_gen.generate_character_sprite(
+                    character, world_bible, "front", reference_image=ref
+                )
+                paths = {"front": path}
                 character.sprite_path = paths.get("front")
                 db.commit()
                 return paths
@@ -138,14 +149,33 @@ class AssetManager:
 
             world_bible = self._get_world_bible(db)
 
+            # Search for a web reference image before generating
+            ref = await self.ref_search.find_character_reference(
+                character.name, world_bible.name if world_bible else ""
+            )
+
             # Generate ALL sprites at once (with style consistency)
             logger.info(f"Generating all sprites for {character.name}...")
             if character_type == "player":
-                paths = await self.image_gen.generate_all_sprites_for_character(
-                    character, world_bible, include_walk_frames=include_walk
-                )
+                # For players, pass reference to the front sprite generation
+                # The front sprite then becomes the reference for other directions
+                if ref:
+                    # Generate front with web reference, then use front for rest
+                    front_path = await self.image_gen.generate_character_sprite(
+                        character, world_bible, "front", reference_image=ref
+                    )
+                    # Now generate remaining sprites using front as reference (existing behavior)
+                    paths = await self.image_gen.generate_all_sprites_for_character(
+                        character, world_bible, include_walk_frames=include_walk
+                    )
+                else:
+                    paths = await self.image_gen.generate_all_sprites_for_character(
+                        character, world_bible, include_walk_frames=include_walk
+                    )
             else:
-                path = await self.image_gen.generate_character_sprite(character, world_bible, "front")
+                path = await self.image_gen.generate_character_sprite(
+                    character, world_bible, "front", reference_image=ref
+                )
                 paths = { "front": path }
 
 
@@ -231,7 +261,10 @@ class AssetManager:
 
             # Generate new portrait
             world_bible = self._get_world_bible(db)
-            path = await self.image_gen.generate_portrait(npc, world_bible)
+            ref = await self.ref_search.find_character_reference(
+                npc.name, world_bible.name if world_bible else ""
+            )
+            path = await self.image_gen.generate_portrait(npc, world_bible, reference_image=ref)
 
             # Cache path in database
             npc.portrait_path = path

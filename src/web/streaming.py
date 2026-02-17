@@ -12,6 +12,14 @@ from dataclasses import dataclass, field
 from typing import Any, Generator
 
 
+SUBAGENT_TOOLS = frozenset({
+    "prompt_npc_agent",
+    "prompt_creator_agent",
+    "prompt_economy_agent",
+    "prompt_research_agent",
+})
+
+
 @dataclass
 class StreamEvent:
     """A streaming event to send to the client."""
@@ -97,12 +105,15 @@ class ToolUsageTracker:
         if not tool_use_id or not tool_name:
             return
         tool_id = str(tool_use_id)
+        is_subagent = tool_name in SUBAGENT_TOOLS
         entry = self._tools.setdefault(
             tool_id,
             {"id": tool_id, "name": tool_name, "status": "running"},
         )
         entry["name"] = tool_name or entry["name"]
         entry["status"] = entry.get("status") or "running"
+        if is_subagent:
+            entry["is_subagent"] = True
         self._enqueue_notification(entry)
 
     def _handle_tool_result_message(self, message: Any) -> None:
@@ -142,6 +153,24 @@ class ToolUsageTracker:
             entry["status"] = result.get("status") or "success"
             if result.get("name"):
                 entry["name"] = result["name"]
+            if entry.get("name") in SUBAGENT_TOOLS:
+                entry["is_subagent"] = True
+
+            # Extract text_response from sub-agent tool results
+            if entry.get("is_subagent"):
+                tool_content = result.get("content", [])
+                for content_block in tool_content:
+                    if isinstance(content_block, dict) and "text" in content_block:
+                        try:
+                            try:
+                                parsed = json.loads(content_block["text"])
+                            except json.JSONDecodeError:
+                                parsed = ast.literal_eval(content_block["text"])
+                            if isinstance(parsed, dict) and "text_response" in parsed:
+                                entry["output"] = parsed["text_response"]
+                        except (json.JSONDecodeError, TypeError, ValueError, SyntaxError):
+                            pass
+
             self._enqueue_notification(entry)
 
             # Check for special game events in tool output
@@ -199,9 +228,11 @@ class ToolUsageTracker:
         """Remove noisy fields from tool payloads prior to serialization."""
         normalized = deepcopy(entry)
         normalized.pop("input", None)
-        normalized.pop("output", None)
         normalized.pop("raw_output", None)
         normalized.pop("error", None)
+        # Preserve output only for sub-agent tools (contains the response text)
+        if not normalized.get("is_subagent"):
+            normalized.pop("output", None)
         return normalized
 
 

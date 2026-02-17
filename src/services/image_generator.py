@@ -283,21 +283,25 @@ Requirements:
     async def generate_location_background(
         self,
         location: "Location",
-        world_bible: "WorldBible"
+        world_bible: "WorldBible",
+        reference_image: bytes | None = None
     ) -> str:
         """Generate top-down location background.
 
         Args:
             location: The location to generate background for
             world_bible: World configuration for style consistency
+            reference_image: Optional web reference image for known IPs
 
         Returns:
             Path to saved image file
         """
         prompt = self._build_location_prompt(location, world_bible)
+        if reference_image:
+            prompt += "\n\nA reference image of this location is provided. Use it to match the location's appearance and atmosphere."
         logger.info(f"Generating location background for: {location.name}")
 
-        image_data = await self._call_api(prompt, aspect_ratio="16:9")
+        image_data = await self._call_api(prompt, aspect_ratio="16:9", reference_image=reference_image)
         path = self._save_image(image_data, f"locations/{location.id}.png")
         return path
 
@@ -305,7 +309,8 @@ Requirements:
         self,
         character: "NPC | Player",
         world_bible: "WorldBible",
-        direction: str = "front"
+        direction: str = "front",
+        reference_image: bytes | None = None
     ) -> str:
         """Generate isometric character sprite.
 
@@ -313,14 +318,17 @@ Requirements:
             character: The NPC or Player to generate sprite for
             world_bible: World configuration for style consistency
             direction: Facing direction (front, back, left, right)
+            reference_image: Optional web reference image for known IPs
 
         Returns:
             Path to saved image file (transparent background)
         """
         prompt = self._build_sprite_prompt(character, world_bible, direction)
+        if reference_image:
+            prompt += "\n\nA reference image of this character is provided. Use it to match the character's appearance."
         logger.info(f"Generating sprite for {character.name} ({direction})")
 
-        image_data = await self._call_api(prompt, aspect_ratio="1:1", image_size="1K")
+        image_data = await self._call_api(prompt, aspect_ratio="1:1", image_size="1K", reference_image=reference_image)
 
         # Remove background for transparency
         image_data = self._remove_background(image_data)
@@ -331,21 +339,25 @@ Requirements:
     async def generate_portrait(
         self,
         npc: "NPC",
-        world_bible: "WorldBible"
+        world_bible: "WorldBible",
+        reference_image: bytes | None = None
     ) -> str:
         """Generate NPC portrait for dialogue.
 
         Args:
             npc: The NPC to generate portrait for
             world_bible: World configuration for style consistency
+            reference_image: Optional web reference image for known IPs
 
         Returns:
             Path to saved image file
         """
         prompt = self._build_portrait_prompt(npc, world_bible)
+        if reference_image:
+            prompt += "\n\nA reference image of this character is provided. Create a portrait matching their appearance."
         logger.info(f"Generating portrait for: {npc.name}")
 
-        image_data = await self._call_api(prompt, aspect_ratio="1:1", image_size="1K")
+        image_data = await self._call_api(prompt, aspect_ratio="1:1", image_size="1K", reference_image=reference_image)
         path = self._save_image(image_data, f"portraits/{npc.id}.png")
         return path
 

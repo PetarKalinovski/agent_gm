@@ -10,31 +10,31 @@
 
 agents:
   dm_orchestrator:
-    model: "openrouter/z-ai/glm-4.7"
+    model: "openrouter/moonshotai/kimi-k2.5"
     temperature: 0.7
-    max_tokens: 2048
+    max_tokens: 4096
     description: "Main dungeon master agent that narrates the world"
 
   npc_agent:
-    model: "openrouter/z-ai/glm-4.7"
+    model: "openrouter/moonshotai/kimi-k2.5"
     temperature: 0.8
-    max_tokens: 1024
+    max_tokens: 4096
     description: "Handles NPC dialogue and personality"
 
   economy_agent:
-    model: "openrouter/z-ai/glm-4.7"
+    model: "openrouter/moonshotai/kimi-k2.5"
     temperature: 0.5
     max_tokens: 1024
     description: "Manages inventory, items, shops, and transactions"
 
   combat_agent:
-    model: "openrouter/z-ai/glm-4.7"
+    model: "openrouter/moonshotai/kimi-k2.5"
     temperature: 0.5
     max_tokens: 1024
     description: "Manages combat encounters and narration"
 
   creator_agent:
-    model: "openrouter/z-ai/glm-4.7"
+    model: "openrouter/moonshotai/kimi-k2.5"
     temperature: 0.8
     max_tokens: 4096
     description: "On-demand world expansion during gameplay - lazy loading of locations, NPCs, quests"
@@ -47,7 +47,7 @@ agents:
     description: "Master agent that generates entire game worlds from a premise"
 
   research_agent:
-    model: "openrouter/glm/z-ai-glm-4.7"
+    model: "openrouter/moonshotai/kimi-k2.5"
     temperature: 0.5
     max_tokens: 4096
     description: "Research agent for gathering reference material from the web"
