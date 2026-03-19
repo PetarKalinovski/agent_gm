@@ -51,12 +51,20 @@ class DisplayConfig(BaseModel):
     theme: str = "monokai"
 
 
+class ImageGenerationConfig(BaseModel):
+    """Image generation configuration."""
+    provider: str = "openrouter"
+    openrouter_model: str = "google/gemini-2.5-pro-image"
+    gemini_model: str = "gemini-2.5-pro-preview-06-05"
+
+
 class Settings(BaseModel):
     """Full application settings."""
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)
     game: GameConfig = Field(default_factory=GameConfig)
     api: ApiConfig = Field(default_factory=ApiConfig)
     display: DisplayConfig = Field(default_factory=DisplayConfig)
+    image_generation: ImageGenerationConfig = Field(default_factory=ImageGenerationConfig)
 
 
 # Global config instances

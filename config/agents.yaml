@@ -1,12 +1,18 @@
 # Agent-specific LLM configuration
 # Models use LiteLLM format: provider/model-name
+#
+# Provider routing (detected from model prefix):
+#   openrouter/...  → routes through OpenRouter (needs OPENROUTER_API_KEY)
+#   anthropic/...   → direct Anthropic API (needs ANTHROPIC_API_KEY or setup-token)
+#   openai/...      → direct OpenAI API (needs OPENAI_API_KEY)
+#
 # Examples:
-#   - openrouter/anthropic/claude-3.5-sonnet
-#   - openrouter/openai/gpt-4o
-#   - anthropic/claude-3-sonnet-20240229
-#   - openai/gpt-4o
-#   openrouter/z-ai/glm-4.7
-#   openrouter/deepseek/deepseek-v3.2
+#   - openrouter/anthropic/claude-sonnet-4-20250514   (Anthropic via OpenRouter)
+#   - anthropic/claude-sonnet-4-20250514              (Anthropic direct)
+#   - anthropic/claude-opus-4-6                       (Anthropic direct)
+#   - openrouter/openai/gpt-4o                        (OpenAI via OpenRouter)
+#   - openai/gpt-4o                                   (OpenAI direct)
+#   - openrouter/deepseek/deepseek-v3.2               (DeepSeek via OpenRouter)
 
 agents:
   dm_orchestrator:

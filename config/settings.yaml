@@ -28,6 +28,14 @@ api:
   anthropic_key_env: "ANTHROPIC_API_KEY"
   openai_key_env: "OPENAI_API_KEY"
 
+# Image generation configuration
+image_generation:
+  # Provider: "openrouter" or "gemini"
+  provider: "gemini"
+  # Model names per provider
+  openrouter_model: "google/gemini-2.5-pro-image"
+  gemini_model: "gemini-3.1-flash-image-preview"
+
 # Display settings
 display:
   # Use rich formatting for CLI output

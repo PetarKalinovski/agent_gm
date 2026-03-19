@@ -1,108 +1,106 @@
 """Web image search for reference-based asset generation.
 
 When the game world is based on a known IP (Game of Thrones, Star Wars, etc.),
-this service searches DuckDuckGo Images for reference images of characters and
+this service searches Bing Images for reference images of characters and
 locations, then passes them to the image generator for more accurate results.
+
+Uses curl for all HTTP requests to bypass TLS fingerprint blocking by
+Cloudflare and similar CDNs that reject Python HTTP libraries.
 """
 
 import asyncio
-import hashlib
 import logging
+import re
+import subprocess
+import urllib.parse
 from pathlib import Path
-
-import httpx
-from ddgs import DDGS
 
 logger = logging.getLogger(__name__)
 
 # Total timeout for search + download
-_TIMEOUT_SECONDS = 10
+_TIMEOUT_SECONDS = 15
+
+# Regex to extract full-size image URLs from Bing image search HTML
+# Bing encodes them as murl&quot;:&quot;URL&quot; in the page source
+_BING_IMAGE_RE = re.compile(r'murl&quot;:&quot;(https?://[^&]+?)&quot;')
 
 
 class ReferenceImageSearch:
     """Search the web for reference images to feed into asset generation."""
 
-    def __init__(self):
-        self.cache_dir = Path("data/assets/references")
+    def __init__(self, world_name: str):
+        self.cache_dir = Path("data/assets") / world_name / "references"
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
-    async def find_character_reference(
-        self, name: str, world_name: str
+    def _get_reference_path(self, entity_id: str) -> Path:
+        """Return reference file path based on entity ID."""
+        return self.cache_dir / f"{entity_id}.png"
+
+    async def find_reference(
+        self, entity_id: str, search_query: str | None = None
     ) -> bytes | None:
-        """Search for a reference image of a character.
+        """Find or search for a reference image for an entity.
 
         Args:
-            name: Character name (e.g. "Tyrion Lannister")
-            world_name: World/IP name (e.g. "Game of Thrones")
+            entity_id: The entity's unique ID (NPC, location, player).
+            search_query: Optional web search query. If None, no web search
+                is performed (but a manually placed file is still returned).
 
         Returns:
             Image bytes if found, None otherwise.
         """
-        query = f"{name} {world_name}"
-        return await self._search_and_download(query)
+        # 1. Check if entity reference file already exists
+        ref_path = self._get_reference_path(entity_id)
+        if ref_path.exists() and ref_path.stat().st_size > 0:
+            logger.info(f"Reference cache hit for entity: {entity_id}")
+            return ref_path.read_bytes()
 
-    async def find_location_reference(
-        self, name: str, loc_type: str, world_name: str
-    ) -> bytes | None:
-        """Search for a reference image of a location.
+        # 2. No search query → no web search
+        if not search_query:
+            return None
 
-        Args:
-            name: Location name (e.g. "King's Landing")
-            loc_type: Location type (e.g. "city")
-            world_name: World/IP name (e.g. "Game of Thrones")
+        # 3. Check miss marker (avoid re-searching known failures)
+        miss_marker = ref_path.with_suffix(".miss")
+        if miss_marker.exists():
+            logger.debug(f"Reference cache miss marker for entity: {entity_id}")
+            return None
 
-        Returns:
-            Image bytes if found, None otherwise.
-        """
-        query = f"{name} {world_name}"
-        return await self._search_and_download(query)
+        # 4. Search web and download
+        return await self._search_and_download(entity_id, search_query)
 
-    def _get_cache_path(self, query: str) -> Path:
-        """Return cache file path based on MD5 hash of query."""
-        query_hash = hashlib.md5(query.lower().encode()).hexdigest()
-        return self.cache_dir / f"{query_hash}.png"
-
-    async def _search_and_download(self, query: str) -> bytes | None:
-        """Search DDG images, download first result, return bytes.
+    async def _search_and_download(self, entity_id: str, query: str) -> bytes | None:
+        """Search Bing images, download first result, return bytes.
 
         Returns None on any failure so the caller falls back to text-only
         generation (current behavior).
         """
-        # Check cache first
-        cache_path = self._get_cache_path(query)
-        if cache_path.exists() and cache_path.stat().st_size > 0:
-            logger.info(f"Reference cache hit for: {query}")
-            return cache_path.read_bytes()
-
-        # Also cache misses (empty file) so we don't re-search
-        miss_marker = cache_path.with_suffix(".miss")
-        if miss_marker.exists():
-            logger.debug(f"Reference cache miss marker for: {query}")
-            return None
+        ref_path = self._get_reference_path(entity_id)
+        miss_marker = ref_path.with_suffix(".miss")
 
         try:
             logger.info(f"Searching web for reference image: {query}")
-            image_url = await asyncio.wait_for(
+            image_urls = await asyncio.wait_for(
                 self._do_search(query), timeout=_TIMEOUT_SECONDS
             )
-            if not image_url:
+            if not image_urls:
                 logger.info(f"No image results for: {query}")
                 miss_marker.touch()
                 return None
 
-            logger.info(f"Downloading reference image from: {image_url}")
-            image_bytes = await asyncio.wait_for(
-                self._do_download(image_url), timeout=_TIMEOUT_SECONDS
-            )
-            if not image_bytes:
-                logger.warning(f"Failed to download reference for: {query}")
-                miss_marker.touch()
-                return None
+            # Try each URL until one succeeds
+            for image_url in image_urls:
+                logger.info(f"Downloading reference image from: {image_url}")
+                image_bytes = await asyncio.wait_for(
+                    self._do_download(image_url), timeout=_TIMEOUT_SECONDS
+                )
+                if image_bytes:
+                    ref_path.write_bytes(image_bytes)
+                    logger.info(f"Cached reference image for entity {entity_id}: {query} ({len(image_bytes)} bytes)")
+                    return image_bytes
 
-            # Cache the result
-            cache_path.write_bytes(image_bytes)
-            logger.info(f"Cached reference image for: {query} ({len(image_bytes)} bytes)")
-            return image_bytes
+            logger.warning(f"All download attempts failed for: {query}")
+            miss_marker.touch()
+            return None
 
         except asyncio.TimeoutError:
             logger.warning(f"Reference image search timed out for: {query}")
@@ -113,28 +111,57 @@ class ReferenceImageSearch:
             miss_marker.touch()
             return None
 
-    async def _do_search(self, query: str) -> str | None:
-        """Run DDG image search in a thread (the library is synchronous)."""
+    async def _do_search(self, query: str) -> list[str]:
+        """Search Bing Images via curl and extract image URLs from HTML."""
         def _search():
-            ddgs = DDGS()
-            results = ddgs.images(query, max_results=3)
-            if results:
-                return results[0]["image"]
-            return None
+            encoded_query = urllib.parse.quote_plus(query)
+            url = f"https://www.bing.com/images/search?q={encoded_query}&first=1"
+            result = subprocess.run(
+                ["curl", "-sL", "--max-time", "10",
+                 "-H", "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+                 "-H", "Accept: text/html",
+                 "-H", "Accept-Language: en-US,en;q=0.9",
+                 url],
+                capture_output=True, timeout=15,
+            )
+            if result.returncode != 0:
+                return []
+            html = result.stdout.decode("utf-8", errors="replace")
+            urls = _BING_IMAGE_RE.findall(html)
+            # Deduplicate while preserving order, return top 3
+            seen = set()
+            unique = []
+            for u in urls:
+                if u not in seen:
+                    seen.add(u)
+                    unique.append(u)
+                    if len(unique) >= 3:
+                        break
+            return unique
 
         return await asyncio.to_thread(_search)
 
     async def _do_download(self, url: str) -> bytes | None:
-        """Download an image from a URL."""
+        """Download an image using curl (bypasses TLS fingerprint blocking)."""
+        def _curl_download():
+            result = subprocess.run(
+                ["curl", "-sL", "--max-time", "10",
+                 "-H", "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+                 "-H", "Accept: image/*,*/*",
+                 "-H", "Accept-Language: en-US,en;q=0.9",
+                 url],
+                capture_output=True, timeout=15,
+            )
+            if result.returncode != 0:
+                return None
+            content = result.stdout
+            # Basic sanity check: images should be at least 1KB
+            if len(content) < 1000:
+                return None
+            return content
+
         try:
-            async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
-                resp = await client.get(url)
-                resp.raise_for_status()
-                content_type = resp.headers.get("content-type", "")
-                if "image" not in content_type and len(resp.content) < 1000:
-                    logger.warning(f"Response doesn't look like an image: {content_type}")
-                    return None
-                return resp.content
+            return await asyncio.to_thread(_curl_download)
         except Exception:
             logger.exception(f"Failed to download image from {url}")
             return None

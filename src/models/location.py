@@ -100,6 +100,7 @@ class Location(Base):
     background_image_path: Mapped[str | None] = mapped_column(String(500), nullable=True)  # Generated scene background
     collision_mask_path: Mapped[str | None] = mapped_column(String(500), nullable=True)  # Black/white walkable mask
     walkable_bounds: Mapped[dict] = mapped_column(JSON, default=lambda: {"x_min": 10, "x_max": 90, "y_min": 20, "y_max": 80})  # Simple collision bounds
+    reference_search_query: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
     # Relationships
     parent: Mapped["Location | None"] = relationship(

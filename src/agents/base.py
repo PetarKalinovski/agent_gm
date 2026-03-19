@@ -29,8 +29,37 @@ def setup_api_keys() -> None:
         os.environ["OPENAI_API_KEY"] = openai_key
 
 
+def _resolve_api_key(model: str) -> str | None:
+    """Resolve the API key for a model based on its provider prefix.
+
+    Supports:
+        - openrouter/... → OPENROUTER_API_KEY
+        - anthropic/...  → ANTHROPIC_API_KEY (works with both API keys and setup-tokens)
+        - openai/...     → OPENAI_API_KEY
+
+    Args:
+        model: Model ID string in LiteLLM format (provider/model-name).
+
+    Returns:
+        API key string or None if not found.
+    """
+    model_lower = model.lower()
+    if model_lower.startswith("openrouter/"):
+        return os.environ.get("OPENROUTER_API_KEY")
+    elif model_lower.startswith("anthropic/"):
+        return os.environ.get("ANTHROPIC_API_KEY")
+    elif model_lower.startswith("openai/"):
+        return os.environ.get("OPENAI_API_KEY")
+    return None
+
+
 def create_model(agent_name: str) -> LiteLLMModel:
     """Create a LiteLLM model from agent config.
+
+    The provider is detected from the model string prefix:
+        - openrouter/provider/model → routes through OpenRouter
+        - anthropic/model           → direct Anthropic API
+        - openai/model              → direct OpenAI API
 
     Args:
         agent_name: Name of the agent in agents.yaml.
@@ -40,13 +69,11 @@ def create_model(agent_name: str) -> LiteLLMModel:
     """
     config = get_agent_config(agent_name)
 
-    # Build client args
+    # Resolve API key based on provider prefix
     client_args = {}
-
-    # Check for OpenRouter API key
-    openrouter_key = os.environ.get("OPENROUTER_API_KEY")
-    if openrouter_key and "openrouter" in config.model.lower():
-        client_args["api_key"] = openrouter_key
+    api_key = _resolve_api_key(config.model)
+    if api_key:
+        client_args["api_key"] = api_key
 
     return LiteLLMModel(
         model_id=config.model,

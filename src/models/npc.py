@@ -50,6 +50,7 @@ class NPC(Base):
     # Visual assets (generated)
     sprite_path: Mapped[str | None] = mapped_column(String(500), nullable=True)  # Base sprite path
     portrait_path: Mapped[str | None] = mapped_column(String(500), nullable=True)  # Portrait for dialogue
+    reference_search_query: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
     # Appearance and personality
     description_physical: Mapped[str] = mapped_column(Text, default="")

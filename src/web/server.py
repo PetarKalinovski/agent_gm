@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -465,11 +465,17 @@ async def get_quests(player_id: str):
 _asset_manager: AssetManager | None = None
 
 
+def _get_world_name() -> str:
+    """Derive world name from the active database path."""
+    db_path = get_active_db_path()
+    return Path(db_path).stem
+
+
 def get_asset_manager() -> AssetManager:
     """Get or create asset manager singleton."""
     global _asset_manager
     if _asset_manager is None:
-        _asset_manager = AssetManager()
+        _asset_manager = AssetManager(_get_world_name())
     return _asset_manager
 
 
@@ -604,6 +610,58 @@ async def pregenerate_assets(location_id: str):
         logger.error(f"Error pre-generating assets: {e}", exc_info=True)
         return {"error": str(e)}
 
+@app.post("/api/assets/reference/{entity_id}")
+async def upload_reference(entity_id: str, file: UploadFile = File(...)):
+    """Upload a reference image for an entity (NPC or location)."""
+    asset_manager = get_asset_manager()
+    ref_path = asset_manager.ref_search._get_reference_path(entity_id)
+    miss_marker = ref_path.with_suffix(".miss")
+
+    contents = await file.read()
+    if len(contents) < 100:
+        return {"error": "File too small to be a valid image"}
+
+    ref_path.write_bytes(contents)
+
+    # Clear miss marker if it exists
+    if miss_marker.exists():
+        miss_marker.unlink()
+
+    return {"success": True, "path": str(ref_path)}
+
+
+@app.get("/api/assets/reference/{entity_id}")
+async def get_reference(entity_id: str):
+    """Get reference image for an entity if it exists."""
+    asset_manager = get_asset_manager()
+    ref_path = asset_manager.ref_search._get_reference_path(entity_id)
+
+    if ref_path.exists() and ref_path.stat().st_size > 0:
+        return FileResponse(ref_path, media_type="image/png")
+
+    return {"error": "No reference image found"}
+
+
+@app.delete("/api/assets/reference/{entity_id}")
+async def delete_reference(entity_id: str):
+    """Delete reference image and miss marker for an entity."""
+    asset_manager = get_asset_manager()
+    ref_path = asset_manager.ref_search._get_reference_path(entity_id)
+    miss_marker = ref_path.with_suffix(".miss")
+
+    deleted = False
+    if ref_path.exists():
+        ref_path.unlink()
+        deleted = True
+    if miss_marker.exists():
+        miss_marker.unlink()
+        deleted = True
+
+    if deleted:
+        return {"success": True}
+    return {"error": "No reference image or miss marker found"}
+
+
 @app.post("/api/npc/transform")
 async def update_npc_transform(request: TransformRequest):
     settings = load_settings()
@@ -671,6 +729,7 @@ class NPCUpdate(BaseModel):
     position_x: float | None = None
     position_y: float | None = None
     scale: float | None = None
+    reference_search_query: str | None = None
 
 
 class LocationUpdate(BaseModel):
@@ -686,6 +745,7 @@ class LocationUpdate(BaseModel):
     controlling_faction_id: str | None = None
     visited: bool | None = None
     discovered: bool | None = None
+    reference_search_query: str | None = None
 
 
 class FactionUpdate(BaseModel):
@@ -902,6 +962,7 @@ async def get_npc_detail(npc_id: str):
             "position_x": npc.position_x,
             "position_y": npc.position_y,
             "scale": npc.scale,
+            "reference_search_query": npc.reference_search_query,
         }
 
 
@@ -955,6 +1016,15 @@ async def update_npc(npc_id: str, update: NPCUpdate):
             npc.position_y = update.position_y
         if update.scale is not None:
             npc.scale = update.scale
+        if update.reference_search_query is not None:
+            old_query = npc.reference_search_query
+            npc.reference_search_query = update.reference_search_query if update.reference_search_query != "" else None
+            # Clear miss marker when query changes so a new search can happen
+            if npc.reference_search_query != old_query:
+                asset_manager = get_asset_manager()
+                miss_marker = asset_manager.ref_search._get_reference_path(npc.id).with_suffix(".miss")
+                if miss_marker.exists():
+                    miss_marker.unlink()
 
         db.commit()
         return {"success": True}
@@ -1085,6 +1155,7 @@ async def get_location_detail(location_id: str):
             "controlling_faction_id": loc.controlling_faction_id,
             "visited": loc.visited,
             "discovered": loc.discovered,
+            "reference_search_query": loc.reference_search_query,
         }
 
 
@@ -1121,6 +1192,15 @@ async def update_location(location_id: str, update: LocationUpdate):
             loc.visited = update.visited
         if update.discovered is not None:
             loc.discovered = update.discovered
+        if update.reference_search_query is not None:
+            old_query = loc.reference_search_query
+            loc.reference_search_query = update.reference_search_query if update.reference_search_query != "" else None
+            # Clear miss marker when query changes so a new search can happen
+            if loc.reference_search_query != old_query:
+                asset_manager = get_asset_manager()
+                miss_marker = asset_manager.ref_search._get_reference_path(loc.id).with_suffix(".miss")
+                if miss_marker.exists():
+                    miss_marker.unlink()
 
         db.commit()
         return {"success": True}
@@ -1849,7 +1929,7 @@ async def get_current_world():
 @app.post("/api/worlds/select")
 async def select_world(request: WorldSelectRequest):
     """Select a world (database) to use."""
-    global sessions
+    global sessions, _asset_manager
 
     db_path = request.db_path
 
@@ -1858,6 +1938,7 @@ async def select_world(request: WorldSelectRequest):
 
     # Clear all active sessions (they're tied to the old database)
     sessions.clear()
+    _asset_manager = None
 
     # Reset the database engine and set new path
     reset_engine()
@@ -1907,7 +1988,7 @@ async def select_world(request: WorldSelectRequest):
 @app.post("/api/worlds/create")
 async def create_world(request: WorldCreateRequest):
     """Create a new world with WorldForge."""
-    global sessions
+    global sessions, _asset_manager
 
     # Sanitize name for filename
     safe_name = "".join(c for c in request.name if c.isalnum() or c in "._- ").strip()
@@ -1921,6 +2002,7 @@ async def create_world(request: WorldCreateRequest):
 
     # Clear sessions
     sessions.clear()
+    _asset_manager = None
 
     # Reset engine and set new path
     reset_engine()
@@ -1977,10 +2059,11 @@ async def create_world_stream(request: WorldCreateRequest):
         return StreamingResponse(error_stream(), media_type="text/event-stream")
 
     async def generation_stream():
-        global sessions
+        global sessions, _asset_manager
 
         # Clear sessions
         sessions.clear()
+        _asset_manager = None
 
         # Reset engine and set new path
         reset_engine()

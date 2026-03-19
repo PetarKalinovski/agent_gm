@@ -25,10 +25,10 @@ class AssetManager:
     Assets are generated on-demand and cached to the database.
     """
 
-    def __init__(self):
-        self.image_gen = ImageGenerator()
-        self.ref_search = ReferenceImageSearch()
-        self.assets_dir = Path("data/assets")
+    def __init__(self, world_name: str):
+        self.image_gen = ImageGenerator(world_name)
+        self.ref_search = ReferenceImageSearch(world_name)
+        self.assets_dir = Path("data/assets") / world_name
 
     def _get_world_bible(self, db_session) -> WorldBible | None:
         """Get the world bible for style consistency."""
@@ -56,10 +56,8 @@ class AssetManager:
 
             # Generate new background
             world_bible = self._get_world_bible(db)
-            ref = await self.ref_search.find_location_reference(
-                location.name,
-                location.type.value if hasattr(location.type, 'value') else str(location.type),
-                world_bible.name if world_bible else ""
+            ref = await self.ref_search.find_reference(
+                location.id, location.reference_search_query
             )
             path = await self.image_gen.generate_location_background(location, world_bible, reference_image=ref)
 
@@ -113,8 +111,8 @@ class AssetManager:
                 character = db.query(NPC).filter(NPC.id == character_id).first()
                 world_bible = self._get_world_bible(db)
                 # Search for a web reference image before generating
-                ref = await self.ref_search.find_character_reference(
-                    character.name, world_bible.name if world_bible else ""
+                ref = await self.ref_search.find_reference(
+                    character.id, character.reference_search_query
                 )
                 path = await self.image_gen.generate_character_sprite(
                     character, world_bible, "front", reference_image=ref
@@ -150,8 +148,8 @@ class AssetManager:
             world_bible = self._get_world_bible(db)
 
             # Search for a web reference image before generating
-            ref = await self.ref_search.find_character_reference(
-                character.name, world_bible.name if world_bible else ""
+            ref = await self.ref_search.find_reference(
+                character.id, getattr(character, 'reference_search_query', None)
             )
 
             # Generate ALL sprites at once (with style consistency)
@@ -261,8 +259,8 @@ class AssetManager:
 
             # Generate new portrait
             world_bible = self._get_world_bible(db)
-            ref = await self.ref_search.find_character_reference(
-                npc.name, world_bible.name if world_bible else ""
+            ref = await self.ref_search.find_reference(
+                npc.id, npc.reference_search_query
             )
             path = await self.image_gen.generate_portrait(npc, world_bible, reference_image=ref)
 
@@ -370,9 +368,10 @@ class AssetManager:
 
     def get_asset_url(self, path: str) -> str:
         """Convert asset path to URL for frontend."""
-        # Convert absolute path to relative URL
-        if path.startswith(str(self.assets_dir)):
-            relative = path[len(str(self.assets_dir)):]
+        # Static mount serves data/assets/ as /assets/
+        assets_root = str(Path("data/assets"))
+        if path.startswith(assets_root):
+            relative = path[len(assets_root):]
             return f"/assets{relative.replace(chr(92), '/')}"  # Handle Windows paths
         return f"/assets/{path}"
 

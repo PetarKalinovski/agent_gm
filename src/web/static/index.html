@@ -291,6 +291,58 @@
             background: rgba(34, 197, 94, 0.1);
         }
 
+        .tool-pill.subagent {
+            border-color: #a78bfa;
+            background: rgba(167, 139, 250, 0.1);
+            cursor: pointer;
+        }
+
+        .tool-pill.subagent:hover {
+            background: rgba(167, 139, 250, 0.2);
+        }
+
+        .tool-pill .toggle-arrow {
+            font-size: 0.6rem;
+            transition: transform 0.2s;
+        }
+
+        .tool-pill .toggle-arrow.open {
+            transform: rotate(90deg);
+        }
+
+        .subagent-output {
+            display: none;
+            padding: 0.5rem 0.75rem;
+            margin-top: 0.3rem;
+            margin-bottom: 0.3rem;
+            background: rgba(167, 139, 250, 0.05);
+            border-left: 2px solid #a78bfa;
+            border-radius: 0 6px 6px 0;
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            max-height: 200px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        .subagent-output.open {
+            display: block;
+        }
+
+        .tool-pill .tool-spinner {
+            width: 8px;
+            height: 8px;
+            border: 1.5px solid var(--warning);
+            border-top-color: transparent;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
         /* Thinking indicator */
         .thinking {
             display: flex;
@@ -1045,6 +1097,7 @@
                 </div>
                 <div class="generation-progress" id="generation-progress">
                     <div class="generation-status" id="generation-status">Generating world...</div>
+                    <div class="tools-container" id="generation-tools"></div>
                     <div class="generation-output" id="generation-output"></div>
                 </div>
             </section>
@@ -1407,15 +1460,23 @@
         </div>
     </div>
 
-    <!-- Player Name Modal -->
+    <!-- Character Creation Modal -->
     <div id="name-modal" class="modal" style="display: none;">
-        <div class="modal-content" style="max-width: 400px;">
+        <div class="modal-content" style="max-width: 550px;">
             <div class="modal-header">
-                <h3>Name Your Character</h3>
+                <h3>Create Your Character</h3>
             </div>
             <div class="modal-body">
-                <p style="color: var(--text-secondary); margin-bottom: 1rem;">Your character awaits. What shall they be called?</p>
-                <input type="text" id="player-name-input" class="form-input" placeholder="Enter name..." style="width: 100%; font-size: 1.1rem; padding: 0.75rem;">
+                <p id="pc-guidelines-hint" style="color: var(--text-secondary); margin-bottom: 1rem; font-style: italic; display: none;"></p>
+
+                <label style="color: var(--text-secondary); font-size: 0.85rem; margin-bottom: 0.25rem; display: block;">Name</label>
+                <input type="text" id="player-name-input" class="form-input" placeholder="Enter name..." style="width: 100%; font-size: 1.1rem; padding: 0.75rem; margin-bottom: 0.75rem;">
+
+                <label style="color: var(--text-secondary); font-size: 0.85rem; margin-bottom: 0.25rem; display: block;">Physical Description <span style="opacity:0.5">(used for sprite generation)</span></label>
+                <textarea id="player-description-input" class="form-input" placeholder="What does your character look like?" rows="3" style="width: 100%; font-size: 0.95rem; padding: 0.75rem; margin-bottom: 0.75rem; resize: vertical;"></textarea>
+
+                <label style="color: var(--text-secondary); font-size: 0.85rem; margin-bottom: 0.25rem; display: block;">Background <span style="opacity:0.5">(optional)</span></label>
+                <textarea id="player-background-input" class="form-input" placeholder="Your character's backstory..." rows="2" style="width: 100%; font-size: 0.95rem; padding: 0.75rem; resize: vertical;"></textarea>
             </div>
             <div class="modal-footer">
                 <button class="action-btn primary" id="confirm-name-btn">Begin Adventure</button>
@@ -1652,6 +1713,8 @@
             generationProgress.classList.add('visible');
             generationStatus.textContent = 'Starting world generation...';
             generationOutput.textContent = '';
+            const genToolsContainer = document.getElementById('generation-tools');
+            if (genToolsContainer) genToolsContainer.innerHTML = '';
 
             try {
                 const res = await fetch('/api/worlds/create/stream', {
@@ -1689,9 +1752,13 @@
                                     outputText += data.data;
                                     generationOutput.textContent = outputText.slice(-2000);
                                     generationOutput.scrollTop = generationOutput.scrollHeight;
+                                } else if (data.type === 'tool_update' && data.tool) {
+                                    if (genToolsContainer) renderToolPill(genToolsContainer, data.tool);
+                                } else if (data.type === 'tool_summary' && data.payload && data.payload.tools) {
+                                    if (genToolsContainer) data.payload.tools.forEach(t => renderToolPill(genToolsContainer, t));
                                 } else if (data.type === 'complete') {
                                     generationStatus.textContent = data.message || 'World created successfully!';
-                                    // Reload worlds and select the new one
+                                    if (data.tools && genToolsContainer) data.tools.forEach(t => renderToolPill(genToolsContainer, t));
                                     await loadWorlds();
                                     selectWorld(data.db_path);
                                 } else if (data.type === 'error') {
@@ -1776,41 +1843,71 @@
         }
 
         function showNameModal(playerId) {
-            return new Promise((resolve) => {
+            return new Promise(async (resolve) => {
                 const modal = document.getElementById('name-modal');
-                const input = document.getElementById('player-name-input');
+                const nameInput = document.getElementById('player-name-input');
+                const descInput = document.getElementById('player-description-input');
+                const bgInput = document.getElementById('player-background-input');
+                const hint = document.getElementById('pc-guidelines-hint');
                 const confirmBtn = document.getElementById('confirm-name-btn');
 
+                // Pre-fill from WorldForge's suggested PC
+                try {
+                    const res = await fetch('/api/world/bible');
+                    const bible = await res.json();
+                    if (bible.pc_guidelines) {
+                        hint.textContent = bible.pc_guidelines;
+                        hint.style.display = 'block';
+                    }
+                    if (bible.pc_suggested_name) {
+                        nameInput.value = bible.pc_suggested_name;
+                    }
+                    if (bible.pc_suggested_description) {
+                        descInput.value = bible.pc_suggested_description;
+                    }
+                    if (bible.pc_suggested_background) {
+                        bgInput.value = bible.pc_suggested_background;
+                    }
+                } catch (e) {
+                    console.warn('Could not fetch world bible for PC hints:', e);
+                }
+
                 modal.style.display = 'flex';
-                input.value = '';
-                input.focus();
+                nameInput.value = '';
+                nameInput.focus();
 
                 const submit = async () => {
-                    const name = input.value.trim();
+                    const name = nameInput.value.trim();
                     if (!name) {
-                        input.style.borderColor = 'var(--error)';
+                        nameInput.style.borderColor = 'var(--error)';
                         return;
                     }
                     confirmBtn.disabled = true;
                     confirmBtn.textContent = 'Saving...';
 
+                    const update = { name };
+                    const desc = descInput.value.trim();
+                    const bg = bgInput.value.trim();
+                    if (desc) update.description = desc;
+                    if (bg) update.background = bg;
+
                     try {
                         await fetch(`/api/world/players/${playerId}`, {
                             method: 'PUT',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ name })
+                            body: JSON.stringify(update)
                         });
                         modal.style.display = 'none';
                         resolve();
                     } catch (e) {
-                        console.error('Failed to save name:', e);
+                        console.error('Failed to save character:', e);
                         confirmBtn.disabled = false;
                         confirmBtn.textContent = 'Begin Adventure';
                     }
                 };
 
                 confirmBtn.onclick = submit;
-                input.onkeydown = (e) => { if (e.key === 'Enter') submit(); };
+                nameInput.onkeydown = (e) => { if (e.key === 'Enter') e.preventDefault(); };
             });
         }
 
@@ -1971,6 +2068,61 @@
                        .replace(/\n/g, '<br>');
         }
 
+        function renderToolPill(container, tool) {
+            if (!container || !tool) return;
+            const toolId = tool.id;
+            let pill = container.querySelector(`[data-tool-id="${toolId}"]`);
+            const isSubagent = tool.is_subagent;
+            const isDone = tool.status === 'success' || tool.status === 'error';
+            const statusIcon = isDone ? '&#10003;' : '<span class="tool-spinner"></span>';
+            const displayName = (tool.name || '').replace(/^prompt_/, '').replace(/_agent$/, '').replace(/_/g, ' ');
+
+            if (!pill) {
+                const wrapper = document.createElement('div');
+                wrapper.style.display = 'inline-flex';
+                wrapper.style.flexDirection = 'column';
+                wrapper.dataset.toolWrapper = toolId;
+
+                pill = document.createElement('span');
+                pill.className = `tool-pill ${isDone ? 'success' : 'running'}${isSubagent ? ' subagent' : ''}`;
+                pill.dataset.toolId = toolId;
+
+                if (isSubagent) {
+                    pill.innerHTML = `<span class="toggle-arrow">&#9654;</span> ${displayName} ${statusIcon}`;
+                    const outputDiv = document.createElement('div');
+                    outputDiv.className = 'subagent-output';
+                    outputDiv.dataset.toolOutput = toolId;
+                    if (tool.output) outputDiv.textContent = tool.output;
+
+                    pill.addEventListener('click', () => {
+                        const arrow = pill.querySelector('.toggle-arrow');
+                        const panel = wrapper.querySelector('.subagent-output');
+                        if (panel) {
+                            panel.classList.toggle('open');
+                            arrow && arrow.classList.toggle('open');
+                        }
+                    });
+
+                    wrapper.appendChild(pill);
+                    wrapper.appendChild(outputDiv);
+                } else {
+                    pill.innerHTML = `${displayName} ${statusIcon}`;
+                    wrapper.appendChild(pill);
+                }
+                container.appendChild(wrapper);
+            } else {
+                // Update existing pill
+                pill.className = `tool-pill ${isDone ? 'success' : 'running'}${isSubagent ? ' subagent' : ''}`;
+                if (isSubagent) {
+                    pill.innerHTML = `<span class="toggle-arrow${pill.querySelector('.toggle-arrow.open') ? ' open' : ''}">&#9654;</span> ${displayName} ${statusIcon}`;
+                    const panel = container.querySelector(`[data-tool-output="${toolId}"]`);
+                    if (panel && tool.output) panel.textContent = tool.output;
+                } else {
+                    pill.innerHTML = `${displayName} ${statusIcon}`;
+                }
+            }
+        }
+
         async function sendMessage(inputText = null) {
             const input = inputText || userInput.value.trim();
             if (!input || !currentPlayerId || isProcessing) return;
@@ -2025,8 +2177,11 @@
                                     } else if (payload.type === 'narration' && payload.content) {
                                         textBuffer += payload.content;
                                         contentEl.innerHTML = formatText(textBuffer);
+                                    } else if (payload.type === 'tool_update' && payload.tool) {
+                                        renderToolPill(toolsContainer, payload.tool);
+                                    } else if (payload.type === 'tool_summary' && payload.payload && payload.payload.tools) {
+                                        payload.payload.tools.forEach(t => renderToolPill(toolsContainer, t));
                                     } else if (payload.type === 'npc_death' && payload.npc_id) {
-                                        // Trigger death animation on the game canvas
                                         console.log(`NPC Death Event: ${payload.npc_name} (${payload.npc_id})`);
                                         if (game && game.playDeathAnimation) {
                                             game.playDeathAnimation(payload.npc_id);
@@ -3676,7 +3831,13 @@
                 let buffer = '';
                 let responseText = '';
 
+                // Add a tools container above the response text
+                const forgeToolsDiv = document.createElement('div');
+                forgeToolsDiv.className = 'tools-container';
                 thinkingEl.innerHTML = '';
+                thinkingEl.appendChild(forgeToolsDiv);
+                const forgeContentDiv = document.createElement('div');
+                thinkingEl.appendChild(forgeContentDiv);
 
                 while (true) {
                     const { done, value } = await reader.read();
@@ -3695,9 +3856,13 @@
                                     const payload = JSON.parse(line.slice(5).trim());
                                     if (payload.type === 'token' && payload.data) {
                                         responseText += payload.data;
-                                        thinkingEl.innerHTML = formatText(responseText);
+                                        forgeContentDiv.innerHTML = formatText(responseText);
+                                    } else if (payload.type === 'tool_update' && payload.tool) {
+                                        renderToolPill(forgeToolsDiv, payload.tool);
+                                    } else if (payload.type === 'tool_summary' && payload.payload && payload.payload.tools) {
+                                        payload.payload.tools.forEach(t => renderToolPill(forgeToolsDiv, t));
                                     } else if (payload.type === 'complete') {
-                                        // Done
+                                        if (payload.tools) payload.tools.forEach(t => renderToolPill(forgeToolsDiv, t));
                                     }
                                 } catch (e) { /* ignore */ }
                             }

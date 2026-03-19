@@ -1,4 +1,4 @@
-"""Image generation service using Nano Banana (Gemini 2.5 Flash) API."""
+"""Image generation service using Gemini image generation API."""
 
 import base64
 import io
@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 import httpx
 from PIL import Image
+
+from src.config import load_settings
 
 if TYPE_CHECKING:
     from src.models.location import Location
@@ -19,13 +21,23 @@ logger = logging.getLogger(__name__)
 
 
 class ImageGenerator:
-    """Generate game assets via Nano Banana (Gemini 2.5 Flash) API."""
+    """Generate game assets via Gemini image generation API (OpenRouter or direct)."""
 
-    def __init__(self):
-        self.api_key = os.getenv("OPENROUTER_API_KEY")
-        self.model = "google/gemini-2.5-flash-image"
-        self.api_url = "https://openrouter.ai/api/v1/chat/completions"
-        self.assets_dir = Path("data/assets")
+    def __init__(self, world_name: str):
+        settings = load_settings()
+        img_config = settings.image_generation
+
+        self.provider = img_config.provider
+        if self.provider == "gemini":
+            self.api_key = os.getenv("GEMINI_API_KEY")
+            self.model = img_config.gemini_model
+            self.api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent"
+        else:
+            self.api_key = os.getenv("OPENROUTER_API_KEY")
+            self.model = img_config.openrouter_model
+            self.api_url = "https://openrouter.ai/api/v1/chat/completions"
+
+        self.assets_dir = Path("data/assets") / world_name
         self._ensure_directories()
 
     def _ensure_directories(self):
@@ -41,14 +53,22 @@ class ImageGenerator:
         image_size: str = "2K",
         reference_image: bytes | None = None
     ) -> bytes:
-        """Call Nano Banana API and return raw image bytes.
+        """Call image generation API and return raw image bytes.
 
-        Args:
-            prompt: Text prompt for image generation
-            aspect_ratio: Output aspect ratio
-            image_size: Output size (1K, 2K, etc)
-            reference_image: Optional reference image bytes for style consistency
+        Routes to the appropriate provider based on self.provider.
         """
+        if self.provider == "gemini":
+            return await self._call_gemini(prompt, reference_image)
+        return await self._call_openrouter(prompt, aspect_ratio, image_size, reference_image)
+
+    async def _call_openrouter(
+        self,
+        prompt: str,
+        aspect_ratio: str = "16:9",
+        image_size: str = "2K",
+        reference_image: bytes | None = None
+    ) -> bytes:
+        """Call OpenRouter API and return raw image bytes."""
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
@@ -56,7 +76,6 @@ class ImageGenerator:
 
         # Build message content - can be multimodal with reference image
         if reference_image:
-            # Encode reference image as base64
             ref_b64 = base64.b64encode(reference_image).decode('utf-8')
             content = [
                 {
@@ -98,12 +117,58 @@ class ImageGenerator:
             message = result["choices"][0]["message"]
             if message.get("images"):
                 image_url = message["images"][0]["image_url"]["url"]
-                # Parse base64 data URL
                 if image_url.startswith("data:image"):
                     _, encoded = image_url.split(",", 1)
                     return base64.b64decode(encoded)
 
-        raise ValueError("No image returned from API")
+        raise ValueError("No image returned from OpenRouter API")
+
+    async def _call_gemini(
+        self,
+        prompt: str,
+        reference_image: bytes | None = None
+    ) -> bytes:
+        """Call Gemini direct API and return raw image bytes."""
+        parts = []
+
+        if reference_image:
+            ref_b64 = base64.b64encode(reference_image).decode('utf-8')
+            parts.append({
+                "inline_data": {
+                    "mime_type": "image/png",
+                    "data": ref_b64
+                }
+            })
+
+        parts.append({"text": prompt})
+
+        payload = {
+            "contents": [{"parts": parts}],
+            "generationConfig": {
+                "responseModalities": ["TEXT", "IMAGE"]
+            }
+        }
+
+        url = f"{self.api_url}?key={self.api_key}"
+
+        async with httpx.AsyncClient(timeout=180.0) as client:
+            response = await client.post(
+                url,
+                headers={"Content-Type": "application/json"},
+                json=payload
+            )
+            response.raise_for_status()
+            result = response.json()
+
+        # Extract image from response
+        candidates = result.get("candidates", [])
+        if candidates:
+            content_parts = candidates[0].get("content", {}).get("parts", [])
+            for part in content_parts:
+                if "inlineData" in part:
+                    return base64.b64decode(part["inlineData"]["data"])
+
+        raise ValueError("No image returned from Gemini API")
 
     def _save_image(self, image_data: bytes, relative_path: str) -> str:
         """Save image to assets directory. Returns absolute path."""
@@ -296,9 +361,24 @@ Requirements:
         Returns:
             Path to saved image file
         """
-        prompt = self._build_location_prompt(location, world_bible)
         if reference_image:
-            prompt += "\n\nA reference image of this location is provided. Use it to match the location's appearance and atmosphere."
+            visual_style = world_bible.visual_style if world_bible else "fantasy RPG game art"
+            prompt = f"""The attached reference image shows what "{location.name}" looks like. This is your PRIMARY visual reference — your output MUST capture the appearance, architecture, colors, and atmosphere of this image.
+
+Reinterpret this reference as a 2D top-down game scene background in this style: {visual_style}
+
+Requirements:
+- Isometric top-down perspective
+- Wide view, suitable for use as a background
+- No characters, people, or creatures in the scene
+- Clear walkable floor area in the center
+- Game-ready art style
+- High quality, detailed, suitable for a 2D RPG game
+- Avoid creating small indoor rooms. If you must, zoom out enough and make everything outside the room black.
+
+The reference image is the ground truth for how this place looks. Match it."""
+        else:
+            prompt = self._build_location_prompt(location, world_bible)
         logger.info(f"Generating location background for: {location.name}")
 
         image_data = await self._call_api(prompt, aspect_ratio="16:9", reference_image=reference_image)
@@ -323,9 +403,31 @@ Requirements:
         Returns:
             Path to saved image file (transparent background)
         """
-        prompt = self._build_sprite_prompt(character, world_bible, direction)
         if reference_image:
-            prompt += "\n\nA reference image of this character is provided. Use it to match the character's appearance."
+            visual_style = world_bible.visual_style if world_bible else "fantasy RPG game art"
+            direction_map = {
+                "front": "front-facing view, looking at viewer",
+                "back": "back view, facing away from viewer",
+                "left": "left side profile view",
+                "right": "right side profile view"
+            }
+            view_desc = direction_map.get(direction, direction_map["front"])
+            prompt = f"""The attached reference image shows the character "{character.name}". This is your PRIMARY visual reference — your output MUST look like this character. Match their face, body, clothing, colors, and proportions from the reference image.
+
+Reinterpret this character as a 2D isometric RPG game sprite in this style: {visual_style}
+
+Requirements:
+- Isometric perspective, {view_desc}
+- Full body visible, standing idle pose
+- Solid bright green background (#00FF00) for easy removal
+- YOU MUST NOT HAVE ANYTHING EXCEPT THE CHARACTER IN THE IMAGE. NOTHING ELSE.
+- Clean edges, game-ready sprite
+- Character should be approximately 64-128 pixels tall in style
+- No shadows on the ground, character only
+
+DO NOT invent a new appearance. The reference image IS the character's appearance."""
+        else:
+            prompt = self._build_sprite_prompt(character, world_bible, direction)
         logger.info(f"Generating sprite for {character.name} ({direction})")
 
         image_data = await self._call_api(prompt, aspect_ratio="1:1", image_size="1K", reference_image=reference_image)
@@ -352,9 +454,28 @@ Requirements:
         Returns:
             Path to saved image file
         """
-        prompt = self._build_portrait_prompt(npc, world_bible)
         if reference_image:
-            prompt += "\n\nA reference image of this character is provided. Create a portrait matching their appearance."
+            visual_style = world_bible.visual_style if world_bible else "fantasy RPG game art"
+            prompt = f"""The attached reference image shows the character "{npc.name}". This is your PRIMARY visual reference — the portrait MUST look like this person. Match their face, features, hair, skin tone, and overall appearance from the reference image.
+
+Reinterpret this character as a 2D hand-painted portrait for an RPG dialogue box.
+Style: {visual_style}, 2D illustration, digital painting with visible brushwork
+Current mood: {npc.current_mood}
+
+Requirements:
+- Head and shoulders portrait, close-up framing
+- 3/4 view angle, slightly facing viewer
+- Expressive face showing mood: {npc.current_mood}
+- Hand-painted illustration style with painterly texture
+- Bold linework and defined features
+- Rich colors, stylized shading (NOT realistic lighting)
+- Simple gradient or solid color background
+- Style inspired by: Baldur's Gate portraits, Pillars of Eternity, classic CRPG art
+- Square format, focus entirely on the character's face and expression
+
+DO NOT invent a new face or appearance. The reference image IS what this character looks like."""
+        else:
+            prompt = self._build_portrait_prompt(npc, world_bible)
         logger.info(f"Generating portrait for: {npc.name}")
 
         image_data = await self._call_api(prompt, aspect_ratio="1:1", image_size="1K", reference_image=reference_image)
