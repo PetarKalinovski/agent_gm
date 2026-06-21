@@ -66,8 +66,8 @@ def main():
         # Run the web frontend
         from src.web import run_server
         print("Starting Forge Web Frontend...")
-        print("Open http://localhost:8000 in your browser")
-        run_server(host="0.0.0.0", port=8000)
+        print("Open http://localhost:12000 in your browser")
+        run_server(host="0.0.0.0", port=12000)
 
 
 if __name__ == "__main__":
