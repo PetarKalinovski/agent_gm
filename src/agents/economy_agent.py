@@ -120,6 +120,14 @@ class EconomyAgent(BaseGameAgent):
         """Build the economy system prompt."""
         return ECONOMY_SYSTEM_PROMPT + f"\n\nThe current player_id is: {self.context.player_id}"
 
+    def _build_context(self, input_text: str) -> str:
+        """Pass through enriched input from prompt_economy_agent.
+
+        Context enrichment (DM context, world snapshot) is handled by the
+        tool wrapper in agents_as_tools.py before this method is called.
+        """
+        return input_text
+
     def process_input(self, instruction: str) -> str:
         """Process an economy-related instruction.
 

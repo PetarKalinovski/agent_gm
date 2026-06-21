@@ -78,6 +78,18 @@ When the DM Orchestrator needs to create or update world content during gameplay
 
 5. **World Events**: Create events that impact the world state
 
+## CRITICAL: NO DUPLICATES
+
+**This is your #1 rule.** Before creating ANY entity, you MUST verify it doesn't already exist.
+
+Your request will include an "EXISTING ENTITIES" section listing all current NPCs and locations by name and ID.
+- If an NPC with a matching name/role already exists, **use `update_npc` or `move_npc` instead of `add_npc`**.
+- If a location with a matching name already exists, **use `update_location` instead of `add_location`**.
+- If you're asked to create a "bartender" and one already exists at another location, move them or reference them — don't create a second bartender.
+- When in doubt, call `get_all_npcs` or `get_all_locations` to double-check before creating.
+
+**Never create a duplicate. Reuse or update existing entities.**
+
 ## GENERATION PRINCIPLES
 
 1. **Coherence**: Everything must connect to the existing world. Check what exists before creating.
@@ -99,7 +111,7 @@ Before creating anything, ALWAYS check what exists:
 - `get_all_npcs` - See existing NPCs
 - `get_current_location` - Know where the player is
 
-For creation:
+For creation (only after verifying no duplicate exists):
 - `add_location` - Create new places (set parent_id for hierarchy)
 - `add_npc` - Create characters (set faction_id, current_location_id)
 - `add_location_connection` - Link locations together
@@ -107,9 +119,11 @@ For creation:
 - `create_faction_relationship` - Define faction dynamics
 - `create_quest` - Create quests (set assigned_by_npc_id)
 - `create_historical_event` - Add lore
+
+For modifying existing entities (preferred over creating new):
 - `update_npc` - Modify existing NPCs
 - `update_location` - Modify existing locations
-- `move_npc` - Relocate NPCs
+- `move_npc` - Relocate NPCs to new locations
 
 ## NPC TIERS
 
@@ -126,12 +140,14 @@ Use appropriate types for hierarchy:
 
 ## IMPORTANT RULES
 
-1. Always check the World Bible first to match tone and style
-2. Assign NPCs to appropriate factions and locations
-3. Give major NPCs 2-3 goals and 1-2 secrets minimum
-4. Create connections between new and existing locations
-5. Set discovered=True for locations the player can see
-6. Include atmosphere_tags for mood
+1. **NEVER create duplicates** — always check existing entities list in your request first
+2. Always check the World Bible first to match tone and style
+3. Assign NPCs to appropriate factions and locations
+4. Give major NPCs 2-3 goals and 1-2 secrets minimum
+5. Create connections between new and existing locations
+6. Set discovered=True for locations the player can see
+7. Include atmosphere_tags for mood
+8. If the request mentions an entity that already exists, update/move it instead of creating new
 """
 
 
@@ -214,18 +230,13 @@ class CREATORAgent(BaseGameAgent):
         return CREATOR_SYSTEM_PROMPT + f"\n\nThe current player_id is: {self.context.player_id}"
 
     def _build_context(self, player_input: str) -> str:
-        """Build context with current location and time."""
-        location = get_current_location(self.context.player_id)
-        clock = get_world_clock()
+        """Pass through enriched input from prompt_creator_agent.
 
-        npc_names = ', '.join(n['name'] for n in location.get('npcs_present', [])) or 'None'
-
-        return f"""Current context:
-- Location: {location.get('name', 'Unknown')} ({location.get('type', 'unknown')})
-- Time: Day {clock.get('day', 1)}, {clock.get('hour', 8)}:00 ({clock.get('time_of_day', 'day')})
-- NPCs here: {npc_names}
-
-Request: {player_input}"""
+        Context enrichment (existing entities, DM context, world snapshot)
+        is handled by the tool wrapper in agents_as_tools.py before this
+        method is called. The input already contains everything needed.
+        """
+        return player_input
 
     def process_input(self, player_input: str) -> str:
         """Process a creation request.

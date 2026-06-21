@@ -9,12 +9,13 @@ from src.tools.world_write import update_npc_relationship, update_npc_mood, upda
 from src.tools.narration import speak, show_quest_update
 
 
-def build_npc_system_prompt(npc: dict[str, Any], relationship: dict[str, Any]) -> str:
+def build_npc_system_prompt(npc: dict[str, Any], relationship: dict[str, Any], scene_context: str = "") -> str:
     """Build the system prompt for an NPC conversation.
 
     Args:
         npc: NPC data dictionary.
         relationship: Relationship data with the player.
+        scene_context: Current scene info (location, other NPCs, time, events).
 
     Returns:
         System prompt string.
@@ -26,6 +27,14 @@ def build_npc_system_prompt(npc: dict[str, Any], relationship: dict[str, Any]) -
         if i not in revealed_indices
     ]
 
+    # Scene awareness block
+    scene_block = ""
+    if scene_context:
+        scene_block = f"""
+**Current Scene (what you can see/hear/know):**
+{scene_context}
+"""
+
     prompt = f"""You are roleplaying as {npc['name']}, an NPC in a text-based RPG.
 
 **Your Character:**
@@ -35,6 +44,7 @@ def build_npc_system_prompt(npc: dict[str, Any], relationship: dict[str, Any]) -
 - Personality: {npc.get('description_personality', 'Not specified')}
 - Speech style: {npc.get('voice_pattern', 'Normal speech')}
 - Current mood: {npc.get('current_mood', 'neutral')}
+{scene_block}
 
 **Your Goals:**
 {chr(10).join(f'- {g}' for g in npc.get('goals', ['None specified'])) if npc.get('goals') else '- None specified'}
@@ -133,6 +143,7 @@ class NPCAgent(BaseGameAgent):
         self.npc: dict[str, Any] = {}
         self.relationship: dict[str, Any] = {}
         self._player_name: str = "Unknown"
+        self._scene_context: str = ""  # Location, other NPCs, time, events
 
         # Don't call super().__init__ yet - we need NPC data first
         # We'll initialize the base agent when start_conversation is called
@@ -144,8 +155,8 @@ class NPCAgent(BaseGameAgent):
         return f"{self.context.player_id}_{self.npc_id}"
 
     def _build_system_prompt(self) -> str:
-        """Build system prompt from NPC and relationship data."""
-        prompt = build_npc_system_prompt(self.npc, self.relationship)
+        """Build system prompt from NPC, relationship, and scene data."""
+        prompt = build_npc_system_prompt(self.npc, self.relationship, scene_context=self._scene_context)
         prompt += f"\nThe Player's Name is: {self._player_name}"
         return prompt
 

@@ -11,15 +11,19 @@ from strands.session.file_session_manager import FileSessionManager
 from strands_semantic_memory.message_utils import extract_text_content
 
 
-def get_recent_dm_context(player_id: str, num_messages: int = 6) -> str:
+def get_recent_dm_context(player_id: str, num_messages: int = 20, stop_at_npc_id: str | None = None) -> str:
     """Get recent conversation context from the DM agent's session.
 
-    Extracts the last N messages that have text content (ignoring tool-only messages)
-    from the DM's conversation history to provide context to NPC agents.
+    Walks backward through the DM's conversation history, collecting text
+    messages. If stop_at_npc_id is provided, stops when it encounters a
+    prompt_npc_agent call for that same NPC (since the NPC already has its
+    own session history for that earlier conversation).
 
     Args:
         player_id: The player's ID (used as session_id for DM).
-        num_messages: Number of recent text messages to retrieve.
+        num_messages: Max number of recent text messages to retrieve.
+        stop_at_npc_id: If set, stop collecting when we hit a prior
+            prompt_npc_agent call for this NPC ID.
 
     Returns:
         Formatted string with recent conversation context.
@@ -27,19 +31,14 @@ def get_recent_dm_context(player_id: str, num_messages: int = 6) -> str:
     from pathlib import Path
 
     try:
-        # DM uses player_id as session_id and "default" as agent_id
         storage_dir = os.path.join(tempfile.gettempdir(), "strands/sessions")
 
-        # Check if session actually exists with messages before creating manager
-        # This prevents creating empty/partial session directories
-        # FileSessionManager uses session_<id>/agents/agent_<agent_id>/messages/ structure
         session_path = Path(storage_dir) / f"session_{player_id}" / "agents" / "agent_default" / "messages"
         if not session_path.exists():
             return ""
 
         session_manager = FileSessionManager(session_id=player_id, storage_dir=storage_dir)
 
-        # Get all messages
         all_messages = session_manager.list_messages(
             session_id=player_id,
             agent_id="default",
@@ -48,34 +47,114 @@ def get_recent_dm_context(player_id: str, num_messages: int = 6) -> str:
         if not all_messages:
             return ""
 
-        # Filter to messages that have text content, then get last N
-        messages_with_text = []
-        for session_msg in all_messages:
+        # Walk backward, collecting text messages and checking for NPC call boundary
+        collected = []
+        for session_msg in reversed(all_messages):
+            if len(collected) >= num_messages:
+                break
+
             message = session_msg.to_message()
+            content = message.get("content", [])
+
+            # Check if this message contains a prompt_npc_agent call for the same NPC
+            if stop_at_npc_id:
+                for block in content:
+                    if isinstance(block, dict) and "toolUse" in block:
+                        tool_use = block["toolUse"]
+                        if (tool_use.get("name") == "prompt_npc_agent"
+                                and tool_use.get("input", {}).get("npc_id") == stop_at_npc_id):
+                            # Hit a prior conversation with this NPC — stop here
+                            break
+                else:
+                    # No break in inner loop — check text
+                    text = extract_text_content(message)
+                    if text.strip():
+                        role = message.get("role", "unknown")
+                        label = "Player" if role == "user" else "Narrator"
+                        collected.append(f"{label}: {text.strip()}")
+                    continue
+                # Inner loop broke — we hit the NPC boundary
+                break
+
+            # No NPC boundary check — just collect text
             text = extract_text_content(message)
             if text.strip():
-                messages_with_text.append((message, text.strip()))
+                role = message.get("role", "unknown")
+                label = "Player" if role == "user" else "Narrator"
+                collected.append(f"{label}: {text.strip()}")
 
-        # Get the last N messages with text
-        recent_messages = messages_with_text[-num_messages:] if len(messages_with_text) > num_messages else messages_with_text
-
-        # Format messages
-        context_parts = []
-        for message, text in recent_messages:
-            role = message.get("role", "unknown")
-            if role == "user":
-                context_parts.append(f"Player: {text}")
-            else:
-                context_parts.append(f"Narrator: {text}")
-
-        if not context_parts:
+        if not collected:
             return ""
 
-        return "Recent conversation:\n" + "\n".join(context_parts)
+        # Reverse back to chronological order
+        collected.reverse()
+        return "Recent conversation:\n" + "\n".join(collected)
 
     except Exception:
         # If we can't read the session, return empty context
         return ""
+
+
+def _build_world_snapshot(player_id: str) -> str:
+    """Build a snapshot of current world state for sub-agent context bridging.
+
+    Gives sub-agents awareness of the current scene so they can act
+    coherently without needing to query everything themselves.
+
+    Args:
+        player_id: The player's ID.
+
+    Returns:
+        Formatted string with current world state summary.
+    """
+    from src.tools.world_read import (
+        get_current_location,
+        get_available_destinations,
+        get_world_clock,
+        get_recent_events,
+    )
+
+    parts = []
+
+    try:
+        location = get_current_location(player_id)
+        loc_name = location.get("name", "Unknown")
+        loc_type = location.get("type", "unknown")
+        loc_id = location.get("id", "")
+        parts.append(f"Current location: {loc_name} ({loc_type}) [id={loc_id}]")
+
+        # NPCs at current location
+        npcs_here = location.get("npcs_present", [])
+        if npcs_here:
+            npc_list = ", ".join(f"{n['name']} (id={n['id']})" for n in npcs_here)
+            parts.append(f"NPCs here: {npc_list}")
+        else:
+            parts.append("NPCs here: None")
+
+        # Available destinations
+        if loc_id:
+            destinations = get_available_destinations(loc_id)
+            if destinations:
+                dest_list = ", ".join(
+                    f"{d.get('name', '?')} (id={d.get('id', '?')})"
+                    for d in destinations
+                )
+                parts.append(f"Connected locations: {dest_list}")
+
+        # Time
+        clock = get_world_clock()
+        parts.append(f"Time: Day {clock.get('day', 1)}, {clock.get('hour', 8)}:00 ({clock.get('time_of_day', 'day')})")
+
+        # Recent events (last 3 days, brief)
+        events = get_recent_events(days_back=3, player_visible_only=True)
+        if events:
+            event_lines = [f"  - {e.get('name', '?')}: {e.get('description', '')[:80]}" for e in events[:5]]
+            parts.append("Recent events:\n" + "\n".join(event_lines))
+
+    except Exception:
+        parts.append("(Could not load full world snapshot)")
+
+    return "\n".join(parts)
 
 
 @tool
@@ -99,11 +178,48 @@ def prompt_creator_agent(player_id: str, instruction: str) -> dict[str, str]:
     Returns:
         Dictionary with the agent's response describing what was created.
     """
-    # Import inside function to avoid circular imports
     from src.agents.creation_agent import CREATORAgent
+    from src.tools.world_read import get_all_npcs, get_all_locations
+
+    # Pre-fetch existing entities so Creator knows what NOT to duplicate
+    existing_npcs = []
+    existing_locations = []
+    try:
+        existing_npcs = get_all_npcs()
+        existing_locations = get_all_locations()
+    except Exception:
+        pass
+
+    npc_summary = ", ".join(
+        f"{n['name']} (id={n['id']}, loc={n.get('current_location_id', '?')})"
+        for n in existing_npcs
+    ) if existing_npcs else "None"
+
+    loc_summary = ", ".join(
+        f"{loc['name']} (id={loc['id']})"
+        for loc in existing_locations
+    ) if existing_locations else "None"
+
+    # Get recent DM context so Creator knows what just happened narratively
+    dm_context = get_recent_dm_context(player_id, num_messages=6)
+    world_snapshot = _build_world_snapshot(player_id)
+
+    # Build enriched instruction with existing entities front-loaded
+    enriched = f"""## EXISTING ENTITIES — DO NOT DUPLICATE THESE
+**Existing NPCs:** {npc_summary}
+**Existing Locations:** {loc_summary}
+
+## CURRENT SCENE
+{world_snapshot}
+
+## RECENT NARRATIVE
+{dm_context if dm_context else "(No recent context)"}
+
+## CREATION REQUEST
+{instruction}"""
 
     agent = CREATORAgent(player_id)
-    result = agent.process_input(instruction)
+    result = agent.process_input(enriched)
 
     return {"text_response": str(result)}
 
@@ -151,24 +267,27 @@ def prompt_npc_agent(player_id: str, npc_id: str, player_input: str, is_first_in
             "revealed_secrets": relationship.revealed_secrets if relationship else [],
         }
 
-    # Auto-fetch recent DM conversation context
-    dm_context = get_recent_dm_context(player_id, num_messages=6)
+    # Auto-fetch recent DM context — grab up to 20 messages but stop if we
+    # hit a prior conversation with THIS same NPC (it has its own memory for that)
+    dm_context = get_recent_dm_context(player_id, num_messages=20, stop_at_npc_id=npc_id)
+    world_snapshot = _build_world_snapshot(player_id)
 
-    # Combine auto-context with any explicit context from the DM
-    combined_context_parts = []
+    # Narrative context = DM conversation + explicit DM context (for user messages)
+    narrative_parts = []
     if dm_context:
-        combined_context_parts.append(dm_context)
+        narrative_parts.append(dm_context)
     if context:
-        combined_context_parts.append(f"Additional context: {context}")
-
-    combined_context = "\n\n".join(combined_context_parts)
+        narrative_parts.append(f"Additional context: {context}")
+    narrative_context = "\n\n".join(narrative_parts)
 
     # Create NPC agent with validated data
     agent = NPCAgent(player_id, npc_id)
+    # Scene context goes into the system prompt so NPC always knows where it is
+    agent._scene_context = world_snapshot
 
     if is_first_interaction:
         # First interaction - start a new conversation with greeting
-        response = agent.start_conversation(npc=npc_data, relationship=relationship_dict, context=combined_context)
+        response = agent.start_conversation(npc=npc_data, relationship=relationship_dict, context=narrative_context)
     else:
         # Continuing conversation - pass the player's actual words
         # Still need to initialize the agent with NPC data before responding
@@ -178,7 +297,7 @@ def prompt_npc_agent(player_id: str, npc_id: str, player_input: str, is_first_in
         agent._player_name = player_data.get("name", "Unknown") if player_data else "Unknown"
         agent._agent = agent._create_agent()
 
-        result = agent.respond(player_input, context=combined_context)
+        result = agent.respond(player_input, context=narrative_context)
         response = result.get("response", "...")
 
     return {"text_response": str(response)}
@@ -202,11 +321,23 @@ def prompt_economy_agent(player_id: str, instruction: str) -> dict[str, str]:
     Returns:
         Dictionary with the agent's response.
     """
-    # Import inside function to avoid circular imports
     from src.agents.economy_agent import EconomyAgent
 
+    # Bridge context: give Economy agent awareness of the current scene
+    dm_context = get_recent_dm_context(player_id, num_messages=4)
+    world_snapshot = _build_world_snapshot(player_id)
+
+    enriched = f"""## CURRENT SCENE
+{world_snapshot}
+
+## RECENT NARRATIVE
+{dm_context if dm_context else "(No recent context)"}
+
+## ECONOMY REQUEST
+{instruction}"""
+
     agent = EconomyAgent(player_id)
-    result = agent.process_input(instruction)
+    result = agent.process_input(enriched)
 
     return {"text_response": str(result)}
 
