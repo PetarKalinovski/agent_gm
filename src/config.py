@@ -42,6 +42,7 @@ class ApiConfig(BaseModel):
     """API configuration."""
     openrouter_key_env: str = "OPENROUTER_API_KEY"
     anthropic_key_env: str = "ANTHROPIC_API_KEY"
+    anthropic_auth_token_env: str = "ANTHROPIC_AUTH_TOKEN"
     openai_key_env: str = "OPENAI_API_KEY"
 
 

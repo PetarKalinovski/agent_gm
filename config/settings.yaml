@@ -26,6 +26,10 @@ api:
   # Environment variable names for API keys
   openrouter_key_env: "OPENROUTER_API_KEY"
   anthropic_key_env: "ANTHROPIC_API_KEY"
+  # OAuth setup-token from `claude setup-token` (sk-ant-oat01-*)
+  # If set, uses Authorization: Bearer instead of x-api-key
+  # Auto-detected from ANTHROPIC_API_KEY prefix if not set separately
+  anthropic_auth_token_env: "ANTHROPIC_AUTH_TOKEN"
   openai_key_env: "OPENAI_API_KEY"
 
 # Image generation configuration

@@ -1,4 +1,4 @@
-"""Base agent setup using Strands Agents SDK with LiteLLM."""
+"""Base agent setup using Strands Agents SDK with LiteLLM and native Anthropic."""
 
 import os
 import logging
@@ -6,12 +6,18 @@ from typing import Any
 
 from strands import Agent
 from strands.models.litellm import LiteLLMModel
+from strands.models.anthropic import AnthropicModel
 
 from src.config import get_agent_config, get_api_key, load_agents_config
 
 # Suppress verbose LiteLLM warnings
 logging.getLogger("LiteLLM").setLevel(logging.ERROR)
 logging.getLogger("httpx").setLevel(logging.WARNING)
+
+logger = logging.getLogger(__name__)
+
+# OAuth token prefix used by Anthropic setup-tokens
+_ANTHROPIC_OAUTH_PREFIX = "sk-ant-oat"
 
 
 def setup_api_keys() -> None:
@@ -29,37 +35,73 @@ def setup_api_keys() -> None:
         os.environ["OPENAI_API_KEY"] = openai_key
 
 
-def _resolve_api_key(model: str) -> str | None:
-    """Resolve the API key for a model based on its provider prefix.
+def _resolve_anthropic_client_args() -> dict[str, Any]:
+    """Resolve Anthropic client args, handling both API keys and OAuth tokens.
 
-    Supports:
-        - openrouter/... → OPENROUTER_API_KEY
-        - anthropic/...  → ANTHROPIC_API_KEY (works with both API keys and setup-tokens)
-        - openai/...     → OPENAI_API_KEY
-
-    Args:
-        model: Model ID string in LiteLLM format (provider/model-name).
+    Checks ANTHROPIC_AUTH_TOKEN first (explicit OAuth), then ANTHROPIC_API_KEY.
+    Auto-detects OAuth tokens by their sk-ant-oat prefix and routes them
+    as auth_token (Bearer) instead of api_key (x-api-key).
 
     Returns:
-        API key string or None if not found.
+        Client args dict for anthropic.AsyncAnthropic.
     """
-    model_lower = model.lower()
-    if model_lower.startswith("openrouter/"):
-        return os.environ.get("OPENROUTER_API_KEY")
-    elif model_lower.startswith("anthropic/"):
-        return os.environ.get("ANTHROPIC_API_KEY")
-    elif model_lower.startswith("openai/"):
-        return os.environ.get("OPENAI_API_KEY")
-    return None
+    # Check explicit OAuth token first
+    auth_token = os.environ.get("ANTHROPIC_AUTH_TOKEN")
+    if auth_token:
+        logger.info("Using Anthropic OAuth auth_token (Bearer)")
+        return {"auth_token": auth_token}
+
+    # Fall back to API key, auto-detecting OAuth tokens by prefix
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if api_key:
+        if api_key.startswith(_ANTHROPIC_OAUTH_PREFIX):
+            logger.info("Detected OAuth token in ANTHROPIC_API_KEY, using as auth_token (Bearer)")
+            return {"auth_token": api_key}
+        else:
+            return {"api_key": api_key}
+
+    raise ValueError(
+        "No Anthropic credentials found. Set ANTHROPIC_API_KEY (for API keys) "
+        "or ANTHROPIC_AUTH_TOKEN (for OAuth setup-tokens from `claude setup-token`)."
+    )
 
 
-def create_model(agent_name: str) -> LiteLLMModel:
-    """Create a LiteLLM model from agent config.
+def _create_anthropic_model(agent_name: str) -> AnthropicModel:
+    """Create a native Anthropic model (bypasses LiteLLM).
 
-    The provider is detected from the model string prefix:
-        - openrouter/provider/model → routes through OpenRouter
-        - anthropic/model           → direct Anthropic API
-        - openai/model              → direct OpenAI API
+    Uses the Anthropic SDK directly, which properly handles both
+    API keys (x-api-key) and OAuth tokens (Authorization: Bearer).
+
+    Args:
+        agent_name: Name of the agent in agents.yaml.
+
+    Returns:
+        Configured AnthropicModel.
+    """
+    config = get_agent_config(agent_name)
+    # Strip the "anthropic/" prefix to get the bare model ID
+    model_id = config.model.split("/", 1)[1] if "/" in config.model else config.model
+
+    client_args = _resolve_anthropic_client_args()
+
+    model = AnthropicModel(
+        model_id=model_id,
+        max_tokens=config.max_tokens,
+        client_args=client_args,
+        params={"temperature": config.temperature},
+    )
+
+    # When using OAuth (auth_token), the SDK auto-reads ANTHROPIC_API_KEY
+    # from env and sets both X-Api-Key and Authorization headers.
+    # Anthropic rejects OAuth tokens in X-Api-Key, so we must nullify it.
+    if "auth_token" in client_args:
+        model.client.api_key = None
+
+    return model
+
+
+def _create_litellm_model(agent_name: str) -> LiteLLMModel:
+    """Create a LiteLLM model for OpenRouter/OpenAI/other providers.
 
     Args:
         agent_name: Name of the agent in agents.yaml.
@@ -69,11 +111,16 @@ def create_model(agent_name: str) -> LiteLLMModel:
     """
     config = get_agent_config(agent_name)
 
-    # Resolve API key based on provider prefix
     client_args = {}
-    api_key = _resolve_api_key(config.model)
-    if api_key:
-        client_args["api_key"] = api_key
+    model_lower = config.model.lower()
+    if model_lower.startswith("openrouter/"):
+        key = os.environ.get("OPENROUTER_API_KEY")
+        if key:
+            client_args["api_key"] = key
+    elif model_lower.startswith("openai/"):
+        key = os.environ.get("OPENAI_API_KEY")
+        if key:
+            client_args["api_key"] = key
 
     return LiteLLMModel(
         model_id=config.model,
@@ -81,9 +128,33 @@ def create_model(agent_name: str) -> LiteLLMModel:
         params={
             "temperature": config.temperature,
             "max_tokens": config.max_tokens,
-            "drop_params": True,  # Drop unsupported params like reasoningContent
+            "drop_params": True,
         }
     )
+
+
+def create_model(agent_name: str) -> AnthropicModel | LiteLLMModel:
+    """Create a model from agent config, routing to the correct provider.
+
+    Provider routing (detected from model string prefix):
+        - anthropic/model           -> native Anthropic SDK (supports OAuth)
+        - openrouter/provider/model -> LiteLLM via OpenRouter
+        - openai/model              -> LiteLLM via OpenAI
+        - other                     -> LiteLLM (generic)
+
+    Args:
+        agent_name: Name of the agent in agents.yaml.
+
+    Returns:
+        Configured model instance.
+    """
+    config = get_agent_config(agent_name)
+
+    if config.model.lower().startswith("anthropic/"):
+        logger.info("agent=%s | using native Anthropic provider for %s", agent_name, config.model)
+        return _create_anthropic_model(agent_name)
+    else:
+        return _create_litellm_model(agent_name)
 
 
 def create_agent(
@@ -117,14 +188,6 @@ def create_agent(
     # Use provided callback_handler, or fall back to context callback
     handler = callback_handler
     if handler is None:
-        # return Agent(
-        #     model=model,
-        #     system_prompt=system_prompt,
-        #     tools=tools or [],
-        #     session_manager=session_manager,
-        #     conversation_manager=conversation_manager,
-        #     hooks=hooks or [],
-        # )
         handler = get_callback_handler()
 
     return Agent(
