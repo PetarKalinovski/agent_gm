@@ -58,7 +58,7 @@ class ImageGenerator:
         Routes to the appropriate provider based on self.provider.
         """
         if self.provider == "gemini":
-            return await self._call_gemini(prompt, reference_image)
+            return await self._call_gemini(prompt, reference_image, aspect_ratio)
         return await self._call_openrouter(prompt, aspect_ratio, image_size, reference_image)
 
     async def _call_openrouter(
@@ -126,7 +126,8 @@ class ImageGenerator:
     async def _call_gemini(
         self,
         prompt: str,
-        reference_image: bytes | None = None
+        reference_image: bytes | None = None,
+        aspect_ratio: str = "1:1",
     ) -> bytes:
         """Call Gemini direct API and return raw image bytes."""
         parts = []
@@ -145,7 +146,10 @@ class ImageGenerator:
         payload = {
             "contents": [{"parts": parts}],
             "generationConfig": {
-                "responseModalities": ["TEXT", "IMAGE"]
+                "responseModalities": ["TEXT", "IMAGE"],
+                "imageConfig": {
+                    "aspectRatio": aspect_ratio
+                }
             }
         }
 
@@ -235,26 +239,22 @@ Requirements:
         }
         view_desc = direction_map.get(direction, direction_map["front"])
 
-        return f"""Create a single character sprite for a 2D isometric RPG game.
-Style: {visual_style}
+        return f"""Draw ONE character standing in the center of the image. NOT a sprite sheet. NOT multiple views. Just ONE character, ONE pose.
 
-It should be in a 2d sprite style suitable for use in an isometric RPG game.
-
+Style: {visual_style}, 2D game character illustration
 Color palette: {color_palette}
 
 Character: {name}
 Appearance: {physical_desc}
 Role/Profession: {profession}
 
-Requirements:
-- Isometric perspective, {view_desc}
-- Full body visible, standing idle pose
-- Solid bright green background (#00FF00) for easy removal
-- YOU MUST NOT HAVE ANYTHING EXCEPT THE CHARACTER IN THE IMAGE. NOTHING ELSE.
-- Clean edges, game-ready sprite
-- Character should be approximately 64-128 pixels tall in style
-- Consistent with art style: visual_style
-- No shadows on the ground, character only"""
+Pose: Standing idle, {view_desc}
+- Full body visible from head to feet
+- Character should be large and centered, filling most of the image height
+- Solid bright green background (#00FF00) for easy chroma key removal
+- ONLY ONE CHARACTER IN THE IMAGE. No duplicates, no alternate views, no turnaround sheet.
+- No other objects, no shadows on the ground, no text, no labels
+- Clean edges suitable for cutting out"""
 
     def _build_portrait_prompt(
         self,
@@ -412,20 +412,17 @@ The reference image is the ground truth for how this place looks. Match it."""
                 "right": "right side profile view"
             }
             view_desc = direction_map.get(direction, direction_map["front"])
-            prompt = f"""The attached reference image shows the character "{character.name}". This is your PRIMARY visual reference — your output MUST look like this character. Match their face, body, clothing, colors, and proportions from the reference image.
+            prompt = f"""The attached reference image shows the character "{character.name}". Draw this SAME character but seen {view_desc}.
 
-Reinterpret this character as a 2D isometric RPG game sprite in this style: {visual_style}
+Style: {visual_style}, 2D game character illustration
 
-Requirements:
-- Isometric perspective, {view_desc}
-- Full body visible, standing idle pose
-- Solid bright green background (#00FF00) for easy removal
-- YOU MUST NOT HAVE ANYTHING EXCEPT THE CHARACTER IN THE IMAGE. NOTHING ELSE.
-- Clean edges, game-ready sprite
-- Character should be approximately 64-128 pixels tall in style
-- No shadows on the ground, character only
+CRITICAL: Output must contain ONLY ONE character, ONE pose. NOT a sprite sheet, NOT multiple views side by side.
 
-DO NOT invent a new appearance. The reference image IS the character's appearance."""
+- Match the character's face, body, clothing, colors, and proportions from the reference
+- {view_desc}, standing idle pose
+- Full body visible from head to feet, large and centered in the image
+- Solid bright green background (#00FF00) for chroma key removal
+- No other objects, no shadows, no text, no duplicates"""
         else:
             prompt = self._build_sprite_prompt(character, world_bible, direction)
         logger.info(f"Generating sprite for {character.name} ({direction})")
@@ -511,18 +508,17 @@ DO NOT invent a new face or appearance. The reference image IS what this charact
         }
         view_desc = direction_map.get(direction, "front-facing")
 
-        prompt = f"""This is a reference image of a character sprite. Generate the SAME character {view_desc}.
+        prompt = f"""The attached image shows a character. Draw this SAME character but seen {view_desc}.
 
 Character: {name}
-Original appearance: {physical_desc}
 
-CRITICAL Requirements:
-- Generate this EXACT same character, just rotated to show them {view_desc}
-- Keep the EXACT same art style, colors, proportions, and details
-- Same clothing, same colors, same body shape
-- Solid bright green background (#00FF00) for easy removal
-- Standing idle pose, full body visible
-- No shadows, character only
+CRITICAL: Output ONE character only. NOT a sprite sheet, NOT multiple views side by side. Just ONE figure, centered.
+
+- Same art style, clothing, colors, proportions, and details as the reference
+- {view_desc}, standing idle pose
+- Full body visible from head to feet, large and centered in the image
+- Solid bright green background (#00FF00) for chroma key removal
+- No other objects, no shadows, no text, no duplicates
 - Style: {visual_style}"""
 
         logger.info(f"Generating {direction} sprite for {name} (with reference)")
@@ -570,19 +566,19 @@ CRITICAL Requirements:
 
         foot_desc = "left foot forward" if frame == 1 else "right foot forward"
 
-        prompt = f"""This is a reference image of a character sprite in idle pose. Generate a WALKING animation frame.
+        prompt = f"""The attached image shows a character standing idle. Draw this SAME character in a walking pose with {foot_desc}, mid-stride.
 
 Character: {name}
 Direction: {direction_desc.get(direction, direction)}
-Pose: Walking with {foot_desc}, mid-stride
 
-CRITICAL Requirements:
-- Generate this EXACT same character in a walking pose
-- {foot_desc.upper()} - show the character mid-step
-- Keep EXACT same art style, colors, clothing, proportions
-- Same facing direction as would match "{direction}"
-- Solid bright green background (#00FF00)
-- Full body visible
+CRITICAL: Output ONE character only. NOT a sprite sheet, NOT multiple frames side by side. Just ONE figure, centered, in a walking pose.
+
+- Same character, same art style, clothing, colors, proportions as the reference
+- {foot_desc} — show the character mid-step
+- {direction_desc.get(direction, direction)}
+- Full body visible from head to feet, large and centered in the image
+- Solid bright green background (#00FF00) for chroma key removal
+- No other objects, no shadows, no text, no duplicates
 - Style: {visual_style}"""
 
         logger.info(f"Generating walk frame {frame} ({direction}) for {name}")
