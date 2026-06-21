@@ -33,6 +33,9 @@ from src.tools.world_read.connections import get_all_connections
 # Event tools
 from src.tools.world_read.events import get_recent_events
 
+# DM State tools
+from src.tools.world_read.dm_state import get_dm_state
+
 # World Bible tools
 from src.tools.world_read.world_bible import (
     get_historical_event,
@@ -82,6 +85,8 @@ __all__ = [
     "get_all_connections",
     # Events
     "get_recent_events",
+    # DM State
+    "get_dm_state",
     # World Bible
     "get_world_bible",
     "get_world_bible_for_generation",

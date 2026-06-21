@@ -107,6 +107,47 @@ class Event(Base):
         return f"<Event(id={self.id}, name={self.name}, type={self.event_type})>"
 
 
+class DMState(Base):
+    """Persistent narrative director state for the DM.
+
+    Singleton per world (like WorldClock). Tracks the DM's narrative intentions
+    so it can be proactive rather than purely reactive to player input.
+    """
+    __tablename__ = "dm_state"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+
+    # Current narrative arc — the story the DM is trying to tell right now
+    current_arc: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # e.g. "The Crimson Pact is moving to seize the docks district"
+
+    # Planned narrative beats — ordered steps the DM wants to unfold
+    planned_beats: Mapped[list] = mapped_column(JSON, default=list)
+    # e.g. ["merchant warns player about missing shipments", "guards mobilize at docks", "blockade begins"]
+
+    # Completed beats — beats that have already been delivered
+    completed_beats: Mapped[list] = mapped_column(JSON, default=list)
+
+    # Tension level — pacing control
+    tension: Mapped[str] = mapped_column(String(50), default="low")
+    # "low", "rising", "high", "climax", "falling"
+
+    # Active threats/complications the DM is weaving in
+    active_threats: Mapped[list] = mapped_column(JSON, default=list)
+    # e.g. ["Crimson Pact expansion", "mysterious plague in slums", "player is being followed"]
+
+    # World pressures — things happening in the background that create urgency
+    world_pressures: Mapped[list] = mapped_column(JSON, default=list)
+    # e.g. ["faction war escalating", "food shortage in 3 days", "eclipse approaching"]
+
+    # Last world tick — when we last ran the world simulation step
+    last_tick_day: Mapped[int] = mapped_column(Integer, default=0)
+    last_tick_hour: Mapped[int] = mapped_column(Integer, default=0)
+
+    def __repr__(self) -> str:
+        return f"<DMState(arc={self.current_arc!r}, tension={self.tension})>"
+
+
 class Message(Base):
     """A message in the conversation history."""
     __tablename__ = "messages"

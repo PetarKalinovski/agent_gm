@@ -52,6 +52,9 @@ from src.tools.world_write.items import (
 # Event tools
 from src.tools.world_write.events import create_event
 
+# DM State tools
+from src.tools.world_write.dm_state import update_dm_state, schedule_world_event
+
 # World Bible tools
 from src.tools.world_write.world_bible import (
     create_historical_event,
@@ -105,6 +108,9 @@ __all__ = [
     "spawn_item_to_user",
     # Events
     "create_event",
+    # DM State
+    "update_dm_state",
+    "schedule_world_event",
     # World Bible
     "create_world_bible",
     "create_historical_event",

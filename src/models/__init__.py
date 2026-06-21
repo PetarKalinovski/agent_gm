@@ -5,7 +5,7 @@ from src.models.location import Location, LocationType, Connection
 from src.models.npc import NPC, NPCTier
 from src.models.faction import Faction, FactionRelationship
 from src.models.player import Player
-from src.models.world_state import WorldClock, NPCRelationship, Event, Message
+from src.models.world_state import WorldClock, NPCRelationship, Event, Message, DMState
 from src.models.item import Item
 from src.models.world_bible import WorldBible, HistoricalEvent
 
@@ -27,6 +27,7 @@ __all__ = [
     "NPCRelationship",
     "Event",
     "Message",
+    "DMState",
     "Item",
     "WorldBible",
     "HistoricalEvent",
