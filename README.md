@@ -46,7 +46,7 @@ A multi-agent text-based RPG dungeon master powered by LLMs. Create entire game 
 ## Installation
 
 ### Prerequisites
-- Python 3.11+
+- Python 3.12+
 - [UV package manager](https://github.com/astral-sh/uv)
 
 ### Setup
@@ -72,7 +72,7 @@ export OPENROUTER_API_KEY=your_openrouter_api_key
 uv run main.py web
 ```
 
-Open http://localhost:8000 in your browser.
+Open http://localhost:12000 in your browser.
 
 ### Create Your First World
 

@@ -46,6 +46,18 @@ data/
 # OS
 .DS_Store
 Thumbs.db
+nul
+
+# Tool scratch files
+tmpclaude-*
+
+# Local artifacts
+journal/
+saved_db/
+/*.png
+notebooks/*.png
+notebooks/dm_state.json
+notebooks/data/
 
 # Testing
 .pytest_cache/

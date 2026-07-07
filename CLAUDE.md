@@ -15,8 +15,11 @@ uv sync
 # Start the game (CLI)
 uv run main.py play
 
-# Start web frontend (localhost:8000)
+# Start web frontend (localhost:12000)
 uv run main.py web
+
+# Run tests
+uv run pytest
 
 # Create a test world
 uv run main.py seed
@@ -34,19 +37,37 @@ uv run main.py play --db path/to/game.db
 
 ### Agent Hierarchy
 
-The DM Orchestrator is the main reasoning engine that delegates to specialized sub-agents:
+The DM Orchestrator is the main reasoning engine. It handles combat, economy,
+inventory, and quests **directly with tools** (no delegation — a sub-agent hop
+is player-visible latency) and delegates only where a second persona/memory
+genuinely helps:
 
 ```
-DM Orchestrator (main loop)
-├── NPC Agent - Dialogue with persistent memory
-├── Creator Agent - On-demand location/NPC generation
-├── Economy Agent - Inventory, shops, transactions
-└── Combat Agent - Combat encounters
+DM Orchestrator (main loop, strongest model)
+├── NPC Agent - Dialogue with persistent memory (fast model)
+└── Creator Agent - On-demand location/NPC generation (fast model)
 ```
+
+The DM prompt and `DM_TOOLS` in `src/agents/dm_orchestrator.py` must stay in
+sync — `tests/test_dm_prompt_tools.py` enforces that every tool the prompt
+references is registered.
 
 World generation uses separate agents:
 - WorldForge - Master world generator
 - Faction/Location/NPC/History generators - Domain-specific generation
+
+### Mechanical consequences (code enforces, LLM narrates)
+
+- **Time**: every turn applies a minimum time cost if the DM forgot
+  `advance_time` (`enforce_minimum_time_cost` in `src/services/world_tick.py`);
+  the clock tracks minutes so fractional costs accumulate.
+- **Events**: scheduled events fire deterministically on the world tick;
+  fired-but-unnarrated events are re-surfaced to the DM for up to 3 turns.
+- **Tension**: auto-escalates low→rising after 8 quiet turns.
+- **Quests**: `activate_quest`/`update_quest_status` sync `Player.active_quests`
+  and apply `Quest.rewards` (currency/items/reputation) transactionally.
+- **Travel**: `move_player` blocks on `Connection.requirements` until the DM
+  confirms them with `requirements_met=True`.
 
 ### Tool-Based World Mutation
 
