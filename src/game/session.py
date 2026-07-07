@@ -11,6 +11,7 @@ from src.agents.base import setup_api_keys
 from src.agents.dm_orchestrator import DMOrchestrator
 from src.config import load_settings
 from src.game.context import assemble_context
+from src.services.world_tick import snapshot_clock, enforce_minimum_time_cost
 from src.models import (
     Location,
     NPC,
@@ -167,15 +168,7 @@ class GameSession:
                 for idx, p in enumerate(players, start=1):
                     self.console.print(f"[{idx}] {p.name} - {p.description}")
                 choice = Prompt.ask("Enter the number of your character", choices=[str(i) for i in range(1, len(players)+1)], default="1")
-                player = players[int(choice)-1]
-
-            elif len(players) == 1:
-                player = players[0]
-
-            else:
-                player = None
-            if player:
-                return player.id
+                return players[int(choice)-1].id
 
             # Create new player
             self.console.print(Panel(
@@ -263,8 +256,13 @@ class GameSession:
                     continue
 
                 # Process input through DM
+                turn_start_clock = snapshot_clock()
                 response = self.dm.process_input(player_input)
                 # Response is already printed by tools (narrate, describe_location, etc.)
+
+                # If the DM forgot to advance time, apply a minimum cost so
+                # the world clock (and scheduled events) can't freeze
+                enforce_minimum_time_cost(turn_start_clock)
 
             except KeyboardInterrupt:
                 self.console.print("\n\nFarewell, adventurer!")

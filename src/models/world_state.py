@@ -17,12 +17,19 @@ class WorldClock(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     day: Mapped[int] = mapped_column(Integer, default=1)
     hour: Mapped[int] = mapped_column(Integer, default=8)  # 0-23
+    minute: Mapped[int | None] = mapped_column(Integer, nullable=True, default=0)  # 0-59
 
     def advance(self, hours: float) -> None:
-        """Advance the clock by the given number of hours."""
-        total_hours = self.hour + hours
-        self.day += int(total_hours // 24)
-        self.hour = int(total_hours % 24)
+        """Advance the clock by the given number of hours.
+
+        Tracks minutes so fractional costs (0.25h combat, 0.5h conversation)
+        accumulate instead of being truncated away.
+        """
+        total_minutes = (self.minute or 0) + round(hours * 60)
+        carry_hours = self.hour + total_minutes // 60
+        self.minute = int(total_minutes % 60)
+        self.day += int(carry_hours // 24)
+        self.hour = int(carry_hours % 24)
 
     def get_time_of_day(self) -> str:
         """Get a description of the time of day."""
@@ -99,6 +106,8 @@ class Event(Base):
     player_visible: Mapped[bool] = mapped_column(default=True)  # Will player hear about this?
     player_witnessed: Mapped[bool] = mapped_column(default=False)  # Did player see it?
     narrated_to_player: Mapped[bool] = mapped_column(default=False)  # Has it been told?
+    delivery_attempts: Mapped[int | None] = mapped_column(Integer, nullable=True, default=0)
+    # How many turns this event has been surfaced to the DM without being narrated
 
     # Metadata
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
@@ -143,6 +152,10 @@ class DMState(Base):
     # Last world tick — when we last ran the world simulation step
     last_tick_day: Mapped[int] = mapped_column(Integer, default=0)
     last_tick_hour: Mapped[int] = mapped_column(Integer, default=0)
+
+    # Turns since a world event fired — drives automatic tension escalation
+    # when the world has been quiet too long
+    turns_since_event: Mapped[int | None] = mapped_column(Integer, nullable=True, default=0)
 
     def __repr__(self) -> str:
         return f"<DMState(arc={self.current_arc!r}, tension={self.tension})>"

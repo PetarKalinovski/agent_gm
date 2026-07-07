@@ -12,6 +12,30 @@ from src.models import (
 )
 
 
+def _validate_inventory(raw: list) -> list[dict[str, Any]]:
+    """Coerce raw inventory entries to validated Item dicts.
+
+    Legacy entries may be bare strings — convert them rather than dropping
+    them so items are never silently lost.
+    """
+    validated = []
+    for item_data in raw or []:
+        try:
+            if isinstance(item_data, str):
+                item = Item(
+                    id=item_data.lower().replace(" ", "_"),
+                    name=item_data,
+                    type="misc",
+                )
+            else:
+                item = Item.from_dict(item_data)
+            validated.append(item.to_dict())
+        except Exception:
+            # Truly malformed entry — keep a recognizable stub instead of losing it
+            validated.append(Item(id="unknown_item", name=str(item_data), type="misc").to_dict())
+    return validated
+
+
 @tool
 def create_item_template(
     item_id: str,
@@ -68,18 +92,8 @@ def get_inventory(owner_id: str, owner_type: str = "player") -> dict[str, Any]:
             if not owner:
                 return {"error": "Player not found"}
 
-            # Validate all items in inventory
-            validated_inventory = []
-            for item_data in (owner.inventory or []):
-                try:
-                    item = Item.from_dict(item_data)
-                    validated_inventory.append(item.to_dict())
-                except Exception:
-                    # Skip invalid items
-                    continue
-
             return {
-                "inventory": validated_inventory,
+                "inventory": _validate_inventory(owner.inventory),
                 "currency": owner.currency,
             }
         elif owner_type == "npc":
@@ -87,18 +101,8 @@ def get_inventory(owner_id: str, owner_type: str = "player") -> dict[str, Any]:
             if not owner:
                 return {"error": "NPC not found"}
 
-            # Validate all items in inventory
-            validated_inventory = []
-            for item_data in (owner.inventory_notable or []):
-                try:
-                    item = Item.from_dict(item_data)
-                    validated_inventory.append(item.to_dict())
-                except Exception:
-                    # Skip invalid items
-                    continue
-
             return {
-                "inventory": validated_inventory,
+                "inventory": _validate_inventory(owner.inventory_notable),
                 "currency": getattr(owner, 'currency', 0),  # Default to 0 if not set
             }
         else:
@@ -184,8 +188,8 @@ def transfer_item(
         dest_inv_raw = getattr(dest, dest_inv_field) or []
 
         # Parse inventories as Item objects
-        source_inv = [Item.from_dict(item) for item in source_inv_raw]
-        dest_inv = [Item.from_dict(item) for item in dest_inv_raw]
+        source_inv = [Item.from_dict(item) for item in _validate_inventory(source_inv_raw)]
+        dest_inv = [Item.from_dict(item) for item in _validate_inventory(dest_inv_raw)]
 
         # Find item in source
         source_item = None
@@ -280,7 +284,7 @@ def use_item(user_id: str, item_id: str, user_type: str = "player") -> dict[str,
         inventory_raw = getattr(user, inv_field) or []
 
         # Parse inventory as Item objects
-        inventory = [Item.from_dict(item) for item in inventory_raw]
+        inventory = [Item.from_dict(item) for item in _validate_inventory(inventory_raw)]
 
         # Find item
         item = None
@@ -356,7 +360,7 @@ def spawn_item_to_user(
         inventory_raw = getattr(user, inv_field) or []
 
         # Parse inventory as Item objects
-        inventory = [Item.from_dict(item) for item in inventory_raw]
+        inventory = [Item.from_dict(item) for item in _validate_inventory(inventory_raw)]
 
         # Create new item
         new_item = Item(

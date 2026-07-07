@@ -15,7 +15,6 @@ from typing import Any, Generator
 SUBAGENT_TOOLS = frozenset({
     "prompt_npc_agent",
     "prompt_creator_agent",
-    "prompt_economy_agent",
     "prompt_research_agent",
 })
 

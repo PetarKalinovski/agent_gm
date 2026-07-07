@@ -46,13 +46,32 @@ def run_world_tick() -> dict[str, Any]:
         # 1. Fire scheduled events whose time has come
         fired_events = _check_scheduled_events(session, current_day, current_hour)
 
+        # 1b. Re-surface fired-but-undelivered events so they can't silently vanish
+        just_fired_ids = {e["id"] for e in fired_events}
+        undelivered_events = _check_undelivered_events(session, skip_ids=just_fired_ids)
+
         # 2. Check faction pressures (goals that should be visible)
         faction_pressures = _check_faction_goals(session)
 
         # 3. Check major NPC goals
         npc_agendas = _check_npc_goals(session)
 
-        # 4. Load the DM's narrative state
+        # 4. Quiet-turn tracking → mechanical tension escalation.
+        #    The DM is asked to manage tension, but if the world stays quiet
+        #    too long we escalate for it.
+        auto_escalated = False
+        if fired_events:
+            dm_state.turns_since_event = 0
+        else:
+            dm_state.turns_since_event = (dm_state.turns_since_event or 0) + 1
+
+        quiet_turns = dm_state.turns_since_event or 0
+        if dm_state.tension == "low" and quiet_turns >= 8:
+            dm_state.tension = "rising"
+            dm_state.turns_since_event = 0
+            auto_escalated = True
+
+        # 5. Load the DM's narrative state
         narrative_state = {
             "current_arc": dm_state.current_arc,
             "planned_beats": dm_state.planned_beats or [],
@@ -62,7 +81,7 @@ def run_world_tick() -> dict[str, Any]:
             "world_pressures": dm_state.world_pressures or [],
         }
 
-        # 5. Update last tick time
+        # 6. Update last tick time
         dm_state.last_tick_day = current_day
         dm_state.last_tick_hour = current_hour
         session.commit()
@@ -70,9 +89,12 @@ def run_world_tick() -> dict[str, Any]:
         return {
             "game_time": f"Day {current_day}, {current_hour:02d}:00",
             "fired_events": fired_events,
+            "undelivered_events": undelivered_events,
             "faction_pressures": faction_pressures,
             "npc_agendas": npc_agendas,
             "narrative_state": narrative_state,
+            "auto_escalated": auto_escalated,
+            "quiet_turns": quiet_turns,
         }
 
 
@@ -92,6 +114,11 @@ def _check_scheduled_events(session, current_day: int, current_hour: int) -> lis
             # Fire this event — mark it as occurred
             event.occurred_day = current_day
             event.occurred_hour = current_hour
+            if event.player_visible:
+                event.delivery_attempts = 1
+            else:
+                # Nothing to narrate — mark delivered immediately
+                event.narrated_to_player = True
 
             fired.append({
                 "id": event.id,
@@ -109,6 +136,57 @@ def _check_scheduled_events(session, current_day: int, current_hour: int) -> lis
         session.commit()
 
     return fired
+
+
+def _check_undelivered_events(session, skip_ids: set[str] | None = None) -> list[dict]:
+    """Re-surface fired events that were never woven into narration.
+
+    An event gets surfaced to the DM for up to 3 turns after firing; after
+    that it's marked delivered so stale events don't clutter the briefing
+    forever.
+    """
+    skip_ids = skip_ids or set()
+    pending = session.query(Event).filter(
+        Event.occurred_day.isnot(None),
+        Event.scheduled_day.isnot(None),  # Only scheduled events need delivery tracking
+        Event.player_visible == True,  # noqa: E712
+        Event.narrated_to_player == False,  # noqa: E712
+    ).all()
+
+    undelivered = []
+    changed = False
+    for event in pending:
+        if event.id in skip_ids:
+            continue
+        attempts = event.delivery_attempts or 0
+        if attempts >= 3:
+            event.narrated_to_player = True
+            changed = True
+            continue
+        undelivered.append({
+            "id": event.id,
+            "name": event.name,
+            "description": event.description,
+            "consequences": event.consequences or [],
+        })
+        event.delivery_attempts = attempts + 1
+        changed = True
+
+    if changed:
+        session.commit()
+
+    return undelivered
+
+
+def mark_events_narrated(event_ids: list[str]) -> None:
+    """Mark events as delivered to the player (called after a successful turn)."""
+    if not event_ids:
+        return
+    with get_session() as session:
+        events = session.query(Event).filter(Event.id.in_(event_ids)).all()
+        for event in events:
+            event.narrated_to_player = True
+        session.commit()
 
 
 def _check_faction_goals(session) -> list[dict]:
@@ -182,6 +260,13 @@ def format_world_tick_context(tick_result: dict[str, Any]) -> str:
         pressures = ", ".join(ns["world_pressures"])
         parts.append(f"  World pressures: {pressures}")
 
+    # Auto-escalation notice
+    if tick_result.get("auto_escalated"):
+        parts.append(
+            "\n**TENSION AUTO-ESCALATED TO 'rising'** — the world has been quiet too long. "
+            "Introduce a complication, rumor, or incident THIS turn, and update your plan with `update_dm_state`."
+        )
+
     # Fired events (important — these just happened)
     fired = tick_result.get("fired_events", [])
     if fired:
@@ -190,7 +275,14 @@ def format_world_tick_context(tick_result: dict[str, Any]) -> str:
             vis = " [player can learn about this]" if e["player_visible"] else " [hidden from player]"
             parts.append(f"  - {e['name']}: {e['description']}{vis}")
             if e["consequences"]:
-                parts.append(f"    Consequences: {', '.join(e['consequences'])}")
+                parts.append(f"    Consequences: {', '.join(e['consequences'])} — apply these with tools, don't just mention them.")
+
+    # Fired earlier but never narrated — these MUST reach the player
+    undelivered = tick_result.get("undelivered_events", [])
+    if undelivered:
+        parts.append("\n**EVENTS THE PLAYER STILL HASN'T HEARD ABOUT** (you fired these earlier but never narrated them — deliver them now):")
+        for e in undelivered:
+            parts.append(f"  - {e['name']}: {e['description']}")
 
     # Faction pressures (background)
     factions = tick_result.get("faction_pressures", [])
@@ -212,3 +304,39 @@ def format_world_tick_context(tick_result: dict[str, Any]) -> str:
         return ""
 
     return "\n### WORLD STATE (pre-turn briefing)\n" + "\n".join(parts)
+
+
+def snapshot_clock() -> tuple[int, int, int]:
+    """Return the current (day, hour, minute) for time-cost enforcement."""
+    with get_session() as session:
+        clock = session.query(WorldClock).first()
+        if not clock:
+            return (1, 8, 0)
+        return (clock.day, clock.hour, clock.minute or 0)
+
+
+def enforce_minimum_time_cost(start_clock: tuple[int, int, int], minimum_hours: float = 0.25) -> dict[str, Any]:
+    """Ensure game time advanced during a turn.
+
+    The DM is instructed to call `advance_time`, but if it forgot, the world
+    clock — and everything scheduled against it — freezes. This applies a
+    minimum cost per turn so scheduled events always eventually fire.
+
+    Args:
+        start_clock: (day, hour, minute) when the turn started.
+        minimum_hours: Time to apply if the DM didn't advance the clock.
+
+    Returns:
+        Dict with whether time was enforced and the current clock.
+    """
+    with get_session() as session:
+        clock = session.query(WorldClock).first()
+        if not clock:
+            return {"enforced": False}
+
+        if (clock.day, clock.hour, clock.minute or 0) != tuple(start_clock):
+            return {"enforced": False, "day": clock.day, "hour": clock.hour}
+
+        clock.advance(minimum_hours)
+        session.commit()
+        return {"enforced": True, "day": clock.day, "hour": clock.hour}

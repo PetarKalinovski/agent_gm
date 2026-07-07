@@ -4,6 +4,83 @@ from strands import tool
 
 from src.models.base import get_session
 from src.models.quests import Quest, QuestStatus
+from src.models.player import Player
+from src.models.item import Item
+from src.tools.world_write.player import _normalize_inventory
+
+
+def _get_player(session, player_id: str | None = None):
+    """Resolve the player: by id, or the sole player in a single-player world."""
+    if player_id:
+        return session.get(Player, player_id)
+    players = session.query(Player).all()
+    return players[0] if len(players) == 1 else None
+
+
+def _sync_player_quest_lists(player, quest_id: str, status: str) -> None:
+    """Keep Player.active_quests/completed_quests in sync with quest status."""
+    active = [q for q in (player.active_quests or []) if q != quest_id]
+    completed = [q for q in (player.completed_quests or []) if q != quest_id]
+
+    if status == QuestStatus.ACTIVE:
+        active.append(quest_id)
+    elif status == QuestStatus.COMPLETED:
+        completed.append(quest_id)
+    # failed/not_started: present in neither list
+
+    player.active_quests = active
+    player.completed_quests = completed
+
+
+def _apply_rewards(session, player, rewards: dict) -> list[str]:
+    """Apply quest rewards to the player. Returns human-readable summary lines."""
+    applied = []
+    if not rewards or not player:
+        return applied
+
+    # Currency: accept "currency" or "gold"
+    amount = rewards.get("currency", rewards.get("gold"))
+    if isinstance(amount, (int, float)) and amount:
+        player.currency = max(0, (player.currency or 0) + int(amount))
+        applied.append(f"+{int(amount)} currency (now {player.currency})")
+
+    # Items: list of names or item dicts
+    items = rewards.get("items") or []
+    if isinstance(items, list) and items:
+        inventory = _normalize_inventory(player.inventory)
+        for entry in items:
+            try:
+                if isinstance(entry, str):
+                    item = Item(id=entry.lower().replace(" ", "_"), name=entry, type="misc")
+                elif isinstance(entry, dict):
+                    entry.setdefault("id", str(entry.get("name", "item")).lower().replace(" ", "_"))
+                    entry.setdefault("name", entry["id"])
+                    entry.setdefault("type", "misc")
+                    item = Item.from_dict(entry)
+                else:
+                    continue
+            except Exception:
+                continue
+            for existing in inventory:
+                if existing.get("id") == item.id:
+                    existing["quantity"] = existing.get("quantity", 1) + item.quantity
+                    break
+            else:
+                inventory.append(item.to_dict())
+            applied.append(f"received {item.name}")
+        player.inventory = inventory
+
+    # Reputation: {faction_id: delta}
+    reputation = rewards.get("reputation") or {}
+    if isinstance(reputation, dict) and reputation:
+        rep = player.reputation.copy() if player.reputation else {}
+        for faction_id, delta in reputation.items():
+            if isinstance(delta, (int, float)):
+                rep[faction_id] = max(0, min(100, rep.get(faction_id, 50) + int(delta)))
+                applied.append(f"reputation with {faction_id}: {rep[faction_id]}")
+        player.reputation = rep
+
+    return applied
 
 
 @tool
@@ -39,6 +116,12 @@ def create_quest(
             status=QuestStatus.ACTIVE if start_active else QuestStatus.NOT_STARTED,
         )
         session.add(quest)
+
+        if start_active:
+            player = _get_player(session)
+            if player:
+                _sync_player_quest_lists(player, quest.id, QuestStatus.ACTIVE)
+
         session.commit()
 
         return {
@@ -71,14 +154,28 @@ def update_quest_status(quest_id: str, status: str) -> dict:
             return {"error": f"Quest {quest_id} not found"}
 
         quest.status = status
+
+        # Keep the player's quest lists in sync, and apply rewards on
+        # completion — in the same transaction
+        rewards_applied = []
+        player = _get_player(session)
+        if player:
+            _sync_player_quest_lists(player, quest.id, status)
+            if status == QuestStatus.COMPLETED:
+                rewards_applied = _apply_rewards(session, player, quest.rewards or {})
+
         session.commit()
 
-        return {
+        result = {
             "id": quest.id,
             "title": quest.title,
             "status": quest.status,
             "message": f"Quest '{quest.title}' marked as {status}",
         }
+        if rewards_applied:
+            result["rewards_applied"] = rewards_applied
+            result["message"] += f". Rewards applied: {', '.join(rewards_applied)} — narrate this to the player."
+        return result
 
 
 @tool
@@ -104,6 +201,11 @@ def activate_quest(quest_id: str) -> dict:
             return {"error": f"Quest '{quest.title}' is already {quest.status}"}
 
         quest.status = QuestStatus.ACTIVE
+
+        player = _get_player(session)
+        if player:
+            _sync_player_quest_lists(player, quest.id, QuestStatus.ACTIVE)
+
         session.commit()
 
         return {

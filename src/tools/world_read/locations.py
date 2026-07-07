@@ -7,6 +7,7 @@ from strands import tool
 from src.models import (
     Connection,
     Location,
+    LocationType,
     NPC,
     Player,
     get_session,
@@ -109,7 +110,12 @@ def get_all_locations(location_type: str | None = None, parent_id: str | None = 
         query = session.query(Location)
 
         if location_type:
-            query = query.filter(Location.type == location_type)
+            # Column is an Enum — compare against the enum member, not the
+            # raw string (a bare string silently matches nothing)
+            try:
+                query = query.filter(Location.type == LocationType(location_type))
+            except ValueError:
+                return {"error": f"Unknown location_type '{location_type}'"}
         if parent_id:
             query = query.filter(Location.parent_id == parent_id)
 

@@ -218,8 +218,14 @@ def prompt_creator_agent(player_id: str, instruction: str) -> dict[str, str]:
 ## CREATION REQUEST
 {instruction}"""
 
-    agent = CREATORAgent(player_id)
-    result = agent.process_input(enriched)
+    try:
+        agent = CREATORAgent(player_id)
+        result = agent.process_input(enriched)
+    except Exception as e:
+        return {
+            "text_response": "The creation could not be completed due to an internal error. Improvise narratively without new entities for now.",
+            "error": str(e),
+        }
 
     return {"text_response": str(result)}
 
@@ -281,65 +287,35 @@ def prompt_npc_agent(player_id: str, npc_id: str, player_input: str, is_first_in
     narrative_context = "\n\n".join(narrative_parts)
 
     # Create NPC agent with validated data
-    agent = NPCAgent(player_id, npc_id)
-    # Scene context goes into the system prompt so NPC always knows where it is
-    agent._scene_context = world_snapshot
+    try:
+        agent = NPCAgent(player_id, npc_id)
+        # Scene context goes into the system prompt so NPC always knows where it is
+        agent._scene_context = world_snapshot
 
-    if is_first_interaction:
-        # First interaction - start a new conversation with greeting
-        response = agent.start_conversation(npc=npc_data, relationship=relationship_dict, context=narrative_context)
-    else:
-        # Continuing conversation - pass the player's actual words
-        # Still need to initialize the agent with NPC data before responding
-        agent.npc = npc_data
-        agent.relationship = relationship_dict
-        player_data = get_player(player_id)
-        agent._player_name = player_data.get("name", "Unknown") if player_data else "Unknown"
-        agent._agent = agent._create_agent()
+        if is_first_interaction:
+            # First interaction - start a new conversation with greeting
+            response = agent.start_conversation(npc=npc_data, relationship=relationship_dict, context=narrative_context)
+        else:
+            # Continuing conversation - pass the player's actual words
+            # Still need to initialize the agent with NPC data before responding
+            agent.npc = npc_data
+            agent.relationship = relationship_dict
+            player_data = get_player(player_id)
+            agent._player_name = player_data.get("name", "Unknown") if player_data else "Unknown"
+            agent._agent = agent._create_agent()
 
-        result = agent.respond(player_input, context=narrative_context)
-        response = result.get("response", "...")
+            result = agent.respond(player_input, context=narrative_context)
+            response = result.get("response", "...")
+    except Exception as e:
+        return {
+            "text_response": f"{npc_data.get('name', 'The NPC')} seems distracted and doesn't respond right now. (internal error — narrate around it)",
+            "error": str(e),
+        }
 
-    return {"text_response": str(response)}
-
-
-@tool
-def prompt_economy_agent(player_id: str, instruction: str) -> dict[str, str]:
-    """Handle economy, inventory, items, and transactions.
-
-    Use this for:
-    - Player buying/selling items from merchants
-    - Giving items as loot or quest rewards
-    - Using consumable items (potions, food, etc.)
-    - Checking inventory contents
-    - Managing currency
-
-    Args:
-        player_id: The player's ID in the database.
-        instruction: Instruction for the Economy agent (e.g., "Player wants to buy health potion from merchant_abc").
-
-    Returns:
-        Dictionary with the agent's response.
-    """
-    from src.agents.economy_agent import EconomyAgent
-
-    # Bridge context: give Economy agent awareness of the current scene
-    dm_context = get_recent_dm_context(player_id, num_messages=4)
-    world_snapshot = _build_world_snapshot(player_id)
-
-    enriched = f"""## CURRENT SCENE
-{world_snapshot}
-
-## RECENT NARRATIVE
-{dm_context if dm_context else "(No recent context)"}
-
-## ECONOMY REQUEST
-{instruction}"""
-
-    agent = EconomyAgent(player_id)
-    result = agent.process_input(enriched)
-
-    return {"text_response": str(result)}
+    return {
+        "text_response": str(response),
+        "note": "This dialogue was ALREADY shown to the player. Do not repeat or paraphrase it — react to it or move the scene forward.",
+    }
 
 
 @tool
