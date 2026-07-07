@@ -29,12 +29,7 @@ class UnitOfWork:
     def __init__(self):
         """Initialize the Unit of Work."""
         self.session = None
-        self._players = None
         self._npcs = None
-        self._locations = None
-        self._items = None
-        self._factions = None
-        self._quests = None
 
     def __enter__(self) -> "UnitOfWork":
         """Enter the context and create a new session."""
@@ -48,20 +43,7 @@ class UnitOfWork:
         self.session.close()
         self.session = None
         # Clear cached repositories
-        self._players = None
         self._npcs = None
-        self._locations = None
-        self._items = None
-        self._factions = None
-        self._quests = None
-
-    @property
-    def players(self):
-        """Get the PlayerRepository instance."""
-        if self._players is None:
-            from src.repositories.player_repository import PlayerRepository
-            self._players = PlayerRepository(self.session)
-        return self._players
 
     @property
     def npcs(self):
@@ -70,38 +52,6 @@ class UnitOfWork:
             from src.repositories.npc_repository import NPCRepository
             self._npcs = NPCRepository(self.session)
         return self._npcs
-
-    @property
-    def locations(self):
-        """Get the LocationRepository instance."""
-        if self._locations is None:
-            from src.repositories.location_repository import LocationRepository
-            self._locations = LocationRepository(self.session)
-        return self._locations
-
-    @property
-    def items(self):
-        """Get the ItemRepository instance."""
-        if self._items is None:
-            from src.repositories.item_repository import ItemRepository
-            self._items = ItemRepository(self.session)
-        return self._items
-
-    @property
-    def factions(self):
-        """Get the FactionRepository instance."""
-        if self._factions is None:
-            from src.repositories.faction_repository import FactionRepository
-            self._factions = FactionRepository(self.session)
-        return self._factions
-
-    @property
-    def quests(self):
-        """Get the QuestRepository instance."""
-        if self._quests is None:
-            from src.repositories.quest_repository import QuestRepository
-            self._quests = QuestRepository(self.session)
-        return self._quests
 
     def commit(self):
         """Commit all pending changes."""
