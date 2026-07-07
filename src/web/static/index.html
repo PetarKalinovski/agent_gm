@@ -1918,12 +1918,14 @@
             players.forEach(p => {
                 const option = document.createElement('option');
                 option.value = p.id;
-                option.textContent = p.name;
+                option.textContent = p.health_status === 'dead' ? `${p.name} †` : p.name;
                 playerSelect.appendChild(option);
             });
-            // Auto-select if only one player
-            if (players.length === 1) {
-                playerSelect.value = players[0].id;
+            // Auto-select: the only living player, else the only player
+            const living = players.filter(p => p.health_status !== 'dead');
+            const pick = living.length === 1 ? living[0] : (players.length === 1 ? players[0] : null);
+            if (pick) {
+                playerSelect.value = pick.id;
                 playerSelect.dispatchEvent(new Event('change'));
             }
         }
@@ -2030,6 +2032,10 @@
             health.textContent = (state.health || 'healthy').replace(/_/g, ' ');
             health.className = state.health || 'healthy';
 
+            if (state.health === 'dead') {
+                showDeathScreen();
+            }
+
             document.getElementById('hud-gold').textContent = state.currency ?? 0;
             document.getElementById('hud-quests').textContent = (state.quests || []).length;
             document.getElementById('hud-bag').textContent =
@@ -2076,6 +2082,87 @@
 
         document.getElementById('hud-quests-chip').addEventListener('click', () => toggleHudPanel('quests'));
         document.getElementById('hud-bag-chip').addEventListener('click', () => toggleHudPanel('inventory'));
+
+        // --- Death & rebirth (the character dies; the world persists) ---
+        let deathScreenShown = false;
+
+        function showDeathScreen() {
+            if (deathScreenShown) return;
+            deathScreenShown = true;
+
+            userInput.disabled = true;
+            sendBtn.disabled = true;
+
+            const overlay = document.createElement('div');
+            overlay.id = 'death-overlay';
+            overlay.style.cssText =
+                'position:fixed;inset:0;z-index:2000;display:flex;align-items:center;justify-content:center;' +
+                'background:radial-gradient(ellipse at center, rgba(40,0,0,0.92) 0%, rgba(0,0,0,0.97) 100%);' +
+                'opacity:0;transition:opacity 2s ease;';
+
+            const playerName = playerSelect.options[playerSelect.selectedIndex]?.textContent || 'Your character';
+            overlay.innerHTML = `
+                <div style="text-align:center;max-width:480px;padding:2rem;">
+                    <div style="font-size:2.2rem;font-weight:700;color:#ef4444;letter-spacing:0.15em;margin-bottom:0.75rem;">YOUR STORY ENDS HERE</div>
+                    <div style="color:#d1d5db;margin-bottom:0.5rem;">${escapeHtml(playerName)} is gone.</div>
+                    <div style="color:#6b7280;font-size:0.9rem;margin-bottom:2rem;">
+                        But the world remains. The people they knew will remember them.
+                        Their debts, their enemies, their unfinished business — all of it persists.
+                    </div>
+                    <div id="rebirth-form" style="display:flex;flex-direction:column;gap:0.6rem;text-align:left;">
+                        <input id="rebirth-name" type="text" placeholder="New character's name"
+                            style="padding:0.6rem 0.8rem;border-radius:8px;border:1px solid #444;background:#16161f;color:#eee;">
+                        <textarea id="rebirth-desc" rows="3" placeholder="Who are they? (appearance, background — used for their sprite and story)"
+                            style="padding:0.6rem 0.8rem;border-radius:8px;border:1px solid #444;background:#16161f;color:#eee;resize:vertical;"></textarea>
+                        <button id="rebirth-btn"
+                            style="padding:0.7rem;border-radius:8px;border:none;background:#7c2d12;color:#fff;font-weight:600;cursor:pointer;">
+                            Rise Again in This World
+                        </button>
+                        <div id="rebirth-status" style="color:#9ca3af;font-size:0.8rem;min-height:1em;"></div>
+                        <button id="rebirth-dismiss"
+                            style="padding:0.3rem;border:none;background:transparent;color:#6b7280;font-size:0.8rem;cursor:pointer;">
+                            or close this and pick another character
+                        </button>
+                    </div>
+                </div>`;
+
+            document.body.appendChild(overlay);
+            requestAnimationFrame(() => { overlay.style.opacity = '1'; });
+
+            document.getElementById('rebirth-dismiss').addEventListener('click', () => {
+                overlay.remove();
+                deathScreenShown = false;
+            });
+
+            document.getElementById('rebirth-btn').addEventListener('click', async () => {
+                const name = document.getElementById('rebirth-name').value.trim();
+                const desc = document.getElementById('rebirth-desc').value.trim();
+                const status = document.getElementById('rebirth-status');
+                if (!name) { status.textContent = 'They need a name.'; return; }
+
+                status.textContent = 'A new soul stirs...';
+                try {
+                    const res = await fetch('/api/world/players', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ name, description: desc, predecessor_id: currentPlayerId })
+                    });
+                    const data = await res.json();
+                    if (!data.success) throw new Error(data.error || 'creation failed');
+
+                    // Reset UI state and enter the world as the new character
+                    overlay.remove();
+                    deathScreenShown = false;
+                    currentLocationId = null;
+                    chatMessages.innerHTML = '';
+                    await loadPlayers();
+                    playerSelect.value = data.player_id;
+                    playerSelect.dispatchEvent(new Event('change'));
+                } catch (err) {
+                    status.textContent = 'Something went wrong: ' + err.message;
+                }
+            });
+        }
 
         async function handleLocationChange(locationId, locationName) {
             if (!locationId || locationId === currentLocationId) return;

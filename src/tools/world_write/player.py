@@ -130,17 +130,24 @@ def update_player_reputation(player_id: str, faction_id: str, delta: int) -> dic
 
 
 @tool
-def update_player_health(player_id: str, new_status: str) -> dict[str, Any]:
+def update_player_health(player_id: str, new_status: str, cause: str = "") -> dict[str, Any]:
     """Update player's health status.
+
+    "dead" is final: it fails the player's active quests, records the death
+    as a permanent world event (NPCs and future characters will know), and
+    ends this character's story. Only use it when the fiction demands it —
+    after clear warnings, at critical health, or for plainly fatal choices.
 
     Args:
         player_id: The player's ID.
-        new_status: New health status (healthy, winded, hurt, badly_hurt, critical).
+        new_status: New health status (healthy, winded, hurt, badly_hurt, critical, dead).
+        cause: Required when new_status is "dead" — how they died (e.g.
+            "torn apart by the harbor leviathan").
 
     Returns:
         Dictionary with result.
     """
-    valid_statuses = ["healthy", "winded", "hurt", "badly_hurt", "critical"]
+    valid_statuses = ["healthy", "winded", "hurt", "badly_hurt", "critical", "dead"]
     if new_status not in valid_statuses:
         return {"error": f"Invalid status. Must be one of: {valid_statuses}"}
 
@@ -150,9 +157,52 @@ def update_player_health(player_id: str, new_status: str) -> dict[str, Any]:
             return {"error": "Player not found"}
 
         player.health_status = new_status
+
+        if new_status != "dead":
+            session.commit()
+            return {"success": True, "new_status": new_status}
+
+        # Death is permanent and the world remembers it
+        from src.models import Event, Quest, QuestStatus, WorldClock
+
+        clock = session.query(WorldClock).first()
+        day = clock.day if clock else 1
+        hour = clock.hour if clock else 8
+
+        failed_quests = []
+        active_ids = list(player.active_quests or [])
+        if active_ids:
+            for quest in session.query(Quest).filter(Quest.id.in_(active_ids)).all():
+                quest.status = QuestStatus.FAILED
+                failed_quests.append(quest.title)
+        player.active_quests = []
+
+        cause_text = cause or "unknown causes"
+        session.add(Event(
+            name=f"Death of {player.name}",
+            description=f"{player.name} died on Day {day}: {cause_text}.",
+            event_type="player",
+            occurred_day=day,
+            occurred_hour=hour,
+            locations_involved=[player.current_location_id] if player.current_location_id else [],
+            player_visible=True,
+            player_witnessed=True,
+            narrated_to_player=True,
+            consequences=[f"Quests abandoned: {', '.join(failed_quests)}"] if failed_quests else [],
+        ))
         session.commit()
 
-        return {"success": True, "new_status": new_status}
+        return {
+            "success": True,
+            "new_status": "dead",
+            "player_died": True,
+            "quests_failed": failed_quests,
+            "instruction": (
+                "The character is dead. Deliver a final, definitive epilogue narration "
+                "for this character — their last moments and what they leave behind. "
+                "Do not offer a way back; the death screen handles what happens next."
+            ),
+        }
 
 
 @tool
