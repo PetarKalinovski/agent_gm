@@ -34,10 +34,19 @@ class GameRenderer {
         this.keys = {};
 
         // Movement settings
-        this.moveSpeed = 0.3; // Normalized units per frame (slower for better control)
+        this.moveSpeed = 18; // Normalized units per second (frame-rate independent)
         this.syncInterval = 200; // ms between server syncs
         this.lastSync = 0;
         this.positionDirty = false;
+
+        // World-editor mode (gates NPC drag/scale editing; toggle with Ctrl+E)
+        this.editorMode = false;
+
+        // Exit/transition detection
+        this.exits = [];               // Available destinations for current location
+        this.edgePushTimer = 0;        // ms spent pushing against a walkable bound
+        this.edgePushThreshold = 350;  // push this long against an edge to trigger exit prompt
+        this.exitPromptCooldown = 0;   // don't re-prompt immediately after dismissal
 
         // Animation settings
         this.animationFrame = 0; // Current frame: 0=idle, 1=walk1, 2=idle, 3=walk2
@@ -81,14 +90,17 @@ class GameRenderer {
         this.worldContainer = new PIXI.Container();
         this.app.stage.addChild(this.worldContainer);
 
-        // Create render layers inside world container
+        // Create render layers inside world container.
+        // Player and NPCs share one z-sorted layer so depth (y position)
+        // decides who renders in front.
         this.backgroundLayer = new PIXI.Container();
-        this.npcLayer = new PIXI.Container();
-        this.playerLayer = new PIXI.Container();
+        this.entityLayer = new PIXI.Container();
+        this.entityLayer.sortableChildren = true;
+        this.npcLayer = this.entityLayer;
+        this.playerLayer = this.entityLayer;
 
         this.worldContainer.addChild(this.backgroundLayer);
-        this.worldContainer.addChild(this.npcLayer);
-        this.worldContainer.addChild(this.playerLayer);
+        this.worldContainer.addChild(this.entityLayer);
 
         // UI layer (doesn't move with camera)
         this.uiLayer = new PIXI.Container();
@@ -101,29 +113,60 @@ class GameRenderer {
         this.app.ticker.add(() => this.update());
 
         // Handle resize
-        window.addEventListener('resize', () => this.onResize());
+        this._onResize = () => this.onResize();
+        window.addEventListener('resize', this._onResize);
 
         console.log('GameRenderer initialized with camera system');
     }
 
     setupInput() {
-        window.addEventListener('keydown', (e) => {
+        this._onKeyDown = (e) => {
             if (document.activeElement.tagName === 'INPUT' ||
                 document.activeElement.tagName === 'TEXTAREA') {
                 return;
             }
 
             const key = e.key.toLowerCase();
+
+            // Ctrl+E toggles world-editor mode (NPC drag/scale)
+            if (e.ctrlKey && key === 'e') {
+                this.editorMode = !this.editorMode;
+                if (!this.editorMode && this.editingNpc) this.saveAndExitTransform();
+                window.dispatchEvent(new CustomEvent('editor-mode-changed', {
+                    detail: { enabled: this.editorMode }
+                }));
+                e.preventDefault();
+                return;
+            }
+
             if (['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(key)) {
                 this.keys[key] = true;
                 e.preventDefault();
             }
-        });
+        };
 
-        window.addEventListener('keyup', (e) => {
+        this._onKeyUp = (e) => {
             const key = e.key.toLowerCase();
             this.keys[key] = false;
-        });
+        };
+
+        window.addEventListener('keydown', this._onKeyDown);
+        window.addEventListener('keyup', this._onKeyUp);
+    }
+
+    destroy() {
+        // Full teardown so a new GameRenderer can be created (world switch)
+        // without leaking listeners, tickers, or a second canvas
+        window.removeEventListener('keydown', this._onKeyDown);
+        window.removeEventListener('keyup', this._onKeyUp);
+        window.removeEventListener('resize', this._onResize);
+        try {
+            this.app.destroy(true, { children: true, texture: false });
+        } catch (e) {
+            console.warn('GameRenderer destroy:', e);
+        }
+        this.npcs = {};
+        this.player = null;
     }
 
     async loadLocation(locationId, playerId) {
@@ -158,8 +201,9 @@ class GameRenderer {
             // Load background with zoom/crop
             await this.loadBackground(data.background_url);
 
-            // Store walkable bounds
+            // Store walkable bounds and available exits
             this.walkableBounds = data.walkable_bounds || { x_min: 5, x_max: 95, y_min: 5, y_max: 95 };
+            this.exits = data.exits || [];
 
             // Load player sprite
             await this.loadPlayer(data.player);
@@ -172,6 +216,21 @@ class GameRenderer {
 
             console.log(`Loaded location: ${data.location_name}`);
 
+            // Assets still generating server-side? Poll until the scene is
+            // complete (placeholders show meanwhile, the game stays playable)
+            if (data.pending && (this.pendingRetries || 0) < 20) {
+                this.pendingRetries = (this.pendingRetries || 0) + 1;
+                console.log(`Assets pending, re-checking in 6s (attempt ${this.pendingRetries})`);
+                setTimeout(() => {
+                    // Only reload if the player is still in this location
+                    if (this.locationId === locationId && !this.isLoading) {
+                        this.loadLocation(locationId, playerId);
+                    }
+                }, 6000);
+            } else if (!data.pending) {
+                this.pendingRetries = 0;
+            }
+
         } catch (error) {
             console.error('Failed to load location:', error);
             this.showError(error.message);
@@ -183,6 +242,15 @@ class GameRenderer {
 
     async loadBackground(url) {
         this.backgroundLayer.removeChildren();
+
+        if (!url) {
+            // Background still generating — dark placeholder, poll will replace it
+            const placeholder = new PIXI.Graphics();
+            placeholder.rect(0, 0, this.worldWidth, this.worldHeight);
+            placeholder.fill(0x1a1a25);
+            this.backgroundLayer.addChild(placeholder);
+            return;
+        }
 
         try {
             const texture = await PIXI.Assets.load(url);
@@ -225,7 +293,9 @@ class GameRenderer {
 
     async loadPlayer(playerData) {
         if (!this.playerLayer) return;
-        this.playerLayer.removeChildren();
+        if (this.player && this.player.sprite) {
+            this.entityLayer.removeChild(this.player.sprite);
+        }
 
         console.log("Setting up player sprite structure...");
         this.player = {
@@ -272,7 +342,10 @@ class GameRenderer {
 
      async loadNPCs(npcsData) {
         console.log(`loadNPCs called with ${npcsData?.length || 0} NPCs`, npcsData);
-        this.npcLayer.removeChildren();
+        // Remove only NPC sprites (the player shares this layer)
+        for (const id in this.npcs) {
+            this.entityLayer.removeChild(this.npcs[id].sprite);
+        }
         this.npcs = {};
 
         for (const npcData of npcsData) {
@@ -290,6 +363,7 @@ class GameRenderer {
                 sprite.anchor.set(0.5, 1);
                 sprite.x = this.normalizedToWorldX(npcData.x);
                 sprite.y = this.normalizedToWorldY(npcData.y);
+                sprite.zIndex = sprite.y;
 
                 // Store status with NPC data
                 const npcStatus = npcData.status || 'alive';
@@ -318,7 +392,9 @@ class GameRenderer {
                     });
 
                     sprite.on('rightclick', (e) => {
-                        // Prevent bubbling and select for move
+                        // NPC drag/scale editing is a world-builder tool —
+                        // only active in editor mode (Ctrl+E)
+                        if (!this.editorMode) return;
                         e.stopPropagation();
                         this.startTransform(sprite, npcData);
                     });
@@ -401,45 +477,77 @@ class GameRenderer {
         }
 
         const deltaTime = this.app.ticker.deltaMS;
+        const step = this.moveSpeed * (deltaTime / 1000); // frame-rate independent
+
+        if (this.exitPromptCooldown > 0) this.exitPromptCooldown -= deltaTime;
 
         let dx = 0;
         let dy = 0;
         let newDir = this.player.direction; // Default to current
 
         // Handle WASD
-        if (this.keys['w'] || this.keys['arrowup']) { dy = -this.moveSpeed; newDir = 'back'; }
-        else if (this.keys['s'] || this.keys['arrowdown']) { dy = this.moveSpeed; newDir = 'front'; }
-        else if (this.keys['a'] || this.keys['arrowleft']) { dx = -this.moveSpeed; newDir = 'left'; }
-        else if (this.keys['d'] || this.keys['arrowright']) { dx = this.moveSpeed; newDir = 'right'; }
+        if (this.keys['w'] || this.keys['arrowup']) { dy = -step; newDir = 'back'; }
+        else if (this.keys['s'] || this.keys['arrowdown']) { dy = step; newDir = 'front'; }
+        else if (this.keys['a'] || this.keys['arrowleft']) { dx = -step; newDir = 'left'; }
+        else if (this.keys['d'] || this.keys['arrowright']) { dx = step; newDir = 'right'; }
 
-        this.isMoving = (dx !== 0 || dy !== 0);
+        const wantsToMove = (dx !== 0 || dy !== 0);
+        this.isMoving = false;
 
-        if (this.isMoving) {
-            // Apply Movement
-            this.player.normalizedX = Math.max(0, Math.min(100, this.player.normalizedX + dx));
-            this.player.normalizedY = Math.max(0, Math.min(100, this.player.normalizedY + dy));
-
-            // CRITICAL: Update the direction in the player object
+        if (wantsToMove) {
             this.player.direction = newDir;
 
-            this.updatePlayerPosition();
-            this.positionDirty = true;
+            // Collision against walkable bounds, with axis slide
+            const targetX = Math.max(0, Math.min(100, this.player.normalizedX + dx));
+            const targetY = Math.max(0, Math.min(100, this.player.normalizedY + dy));
 
-            // Handle Animation Frames
-            this.animationTimer += deltaTime;
-            if (this.animationTimer >= this.animationSpeed) {
-                this.animationTimer = 0;
-                this.animationFrame = (this.animationFrame + 1) % 4;
+            let moved = false;
+            if (this.isWalkable(targetX, targetY)) {
+                this.player.normalizedX = targetX;
+                this.player.normalizedY = targetY;
+                moved = true;
+            } else if (dx !== 0 && this.isWalkable(targetX, this.player.normalizedY)) {
+                this.player.normalizedX = targetX;
+                moved = true;
+            } else if (dy !== 0 && this.isWalkable(this.player.normalizedX, targetY)) {
+                this.player.normalizedY = targetY;
+                moved = true;
             }
-            this.syncPlayerPosition();
+
+            if (moved) {
+                this.isMoving = true;
+                this.edgePushTimer = 0;
+                this.updatePlayerPosition();
+                this.positionDirty = true;
+
+                // Handle Animation Frames
+                this.animationTimer += deltaTime;
+                if (this.animationTimer >= this.animationSpeed) {
+                    this.animationTimer = 0;
+                    this.animationFrame = (this.animationFrame + 1) % 4;
+                }
+                this.syncPlayerPosition();
+            } else {
+                // Blocked by a walkable bound: pushing against it long enough
+                // means the player wants to leave the scene
+                this.animationFrame = 0;
+                this.edgePushTimer += deltaTime;
+                if (this.edgePushTimer >= this.edgePushThreshold && this.exitPromptCooldown <= 0) {
+                    this.edgePushTimer = 0;
+                    this.exitPromptCooldown = 2000;
+                    window.dispatchEvent(new CustomEvent('location-exit', {
+                        detail: { direction: newDir, exits: this.exits }
+                    }));
+                }
+            }
         } else {
             this.animationFrame = 0; // Return to idle frame
+            this.edgePushTimer = 0;
         }
 
         // Apply visual updates
         this.applyAnimationFrame();
         this.updateCamera();
-        this.sortByDepth();
     }
 
     updateCamera() {
@@ -549,10 +657,13 @@ class GameRenderer {
         const loadJobs = [];
 
         directions.forEach(dir => {
-            // LOAD IDLE (Append .png)
+            // LOAD IDLE (Append .png) — sprite may still be generating (404):
+            // fall back to placeholder, the pending-poll reload picks it up later
             loadJobs.push(
                 PIXI.Assets.load(`${playerUrlBase}/${dir}.png`).then(tex => {
                     this.player.sprites[dir] = tex;
+                }).catch(() => {
+                    this.player.sprites[dir] = null;
                 })
             );
 
@@ -736,14 +847,6 @@ class GameRenderer {
         }
     }
 
-    sortByDepth() {
-        // Sort NPC layer children by Y position
-        this.npcLayer.children.sort((a, b) => a.y - b.y);
-
-        // Insert player in correct position among NPCs for proper depth
-        // (Player is in separate layer, but we could merge them for better sorting)
-    }
-
     onNpcClick(npcData) {
         console.log('NPC clicked:', npcData.name);
 
@@ -834,9 +937,7 @@ class GameRenderer {
         // Convert 0-100 coordinates to actual world pixels
         this.player.sprite.x = this.normalizedToWorldX(this.player.normalizedX);
         this.player.sprite.y = this.normalizedToWorldY(this.player.normalizedY);
-
-        // Debugging to ensure coordinates are valid
-        // console.log(`Player Pos: ${this.player.sprite.x}, ${this.player.sprite.y}`);
+        this.player.sprite.zIndex = this.player.sprite.y;
     }
 
     // Coordinate conversions (normalized 0-100 <-> world pixels)

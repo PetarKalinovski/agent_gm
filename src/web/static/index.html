@@ -448,6 +448,73 @@
             font-weight: 600;
         }
 
+        /* HUD chips (health, gold, quests, inventory) */
+        .game-overlay {
+            display: flex;
+            align-items: center;
+            gap: 0.6rem;
+            flex-wrap: wrap;
+        }
+
+        .hud-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.3rem;
+            padding: 0.1rem 0.5rem;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.08);
+            font-size: 0.75rem;
+            color: var(--text-primary);
+            white-space: nowrap;
+        }
+
+        .hud-chip.clickable { cursor: pointer; }
+        .hud-chip.clickable:hover { background: rgba(255, 255, 255, 0.16); }
+
+        #hud-health.healthy    { color: #4ade80; }
+        #hud-health.winded     { color: #fbbf24; }
+        #hud-health.hurt       { color: #fb923c; }
+        #hud-health.badly_hurt { color: #f87171; }
+        #hud-health.critical   { color: #ef4444; font-weight: 700; }
+        #hud-health.dead       { color: #6b7280; font-weight: 700; }
+
+        .hud-panel {
+            position: absolute;
+            top: 52px;
+            left: 10px;
+            min-width: 240px;
+            max-width: 340px;
+            max-height: 50vh;
+            overflow-y: auto;
+            background: rgba(10, 10, 18, 0.95);
+            border: 1px solid var(--border, #333);
+            border-radius: 10px;
+            padding: 0.75rem 1rem;
+            z-index: 20;
+            font-size: 0.85rem;
+            box-shadow: 0 8px 32px rgba(0,0,0,.5);
+        }
+
+        .hud-panel h4 {
+            margin: 0 0 0.5rem 0;
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-secondary);
+        }
+
+        .hud-panel .hud-item {
+            display: flex;
+            justify-content: space-between;
+            gap: 0.75rem;
+            padding: 0.25rem 0;
+            border-bottom: 1px solid rgba(255,255,255,0.06);
+        }
+
+        .hud-panel .hud-item:last-child { border-bottom: none; }
+        .hud-panel .muted { color: var(--text-secondary); font-size: 0.75rem; }
+        .hud-panel.hidden { display: none; }
+
         /* Controls hint */
         .controls-hint {
             position: absolute;
@@ -1128,8 +1195,13 @@
         <div class="game-overlay">
             <span class="location" id="game-location">No location</span>
             <span id="game-time"></span>
+            <span class="hud-chip" id="hud-health-chip">&#10084; <span id="hud-health" class="healthy">healthy</span></span>
+            <span class="hud-chip" id="hud-gold-chip">&#9679; <span id="hud-gold">0</span></span>
+            <span class="hud-chip clickable" id="hud-quests-chip" title="Active quests">&#9873; <span id="hud-quests">0</span></span>
+            <span class="hud-chip clickable" id="hud-bag-chip" title="Inventory">&#128188; <span id="hud-bag">0</span></span>
         </div>
-        <div class="controls-hint">WASD to move | Click NPCs to talk</div>
+        <div class="hud-panel hidden" id="hud-panel"></div>
+        <div class="controls-hint">WASD to move | Walk to an edge to travel | Click NPCs to talk</div>
         <div id="travel-overlay">
             <div class="loader"></div>
             <div id="travel-text">Traveling...</div>
@@ -1586,6 +1658,7 @@
         let currentLocationId = null;
         let isProcessing = false;
         let currentNpcId = null;
+        let currentNpcName = null;
         let selectedWorldPath = null;
 
         // World Selection DOM elements
@@ -1734,18 +1807,25 @@
                 const reader = res.body.getReader();
                 const decoder = new TextDecoder();
                 let outputText = '';
+                let sseBuffer = '';
 
                 while (true) {
                     const { done, value } = await reader.read();
                     if (done) break;
 
-                    const text = decoder.decode(value);
-                    const lines = text.split('\n');
+                    // Buffer across network chunks — a data: line can be
+                    // split mid-JSON (or mid-UTF-8 char) between reads
+                    sseBuffer += decoder.decode(value, { stream: true });
 
-                    for (const line of lines) {
-                        if (line.startsWith('data: ')) {
+                    let boundary;
+                    while ((boundary = sseBuffer.indexOf('\n\n')) !== -1) {
+                        const rawEvent = sseBuffer.slice(0, boundary);
+                        sseBuffer = sseBuffer.slice(boundary + 2);
+
+                    for (const line of rawEvent.split('\n')) {
+                        if (line.startsWith('data:')) {
                             try {
-                                const data = JSON.parse(line.substring(6));
+                                const data = JSON.parse(line.slice(5).trim());
                                 if (data.type === 'status') {
                                     generationStatus.textContent = data.message;
                                 } else if (data.type === 'token') {
@@ -1767,6 +1847,7 @@
                                 }
                             } catch (e) { }
                         }
+                    }
                     }
                 }
 
@@ -1802,6 +1883,11 @@
         // Initialize game renderer
         async function initGame() {
             console.log("Initializing Game Renderer...");
+            // Tear down any previous renderer (world switch) — otherwise the
+            // old PIXI app keeps ticking and a second canvas piles up
+            if (game && game.destroy) {
+                game.destroy();
+            }
             game = new GameRenderer('game-container');
         }
 
@@ -1922,8 +2008,91 @@
             gameTime.textContent = ` - ${session.time}`;
             chatLocation.textContent = session.location;
             chatTime.textContent = ` (${session.time_of_day})`;
+            if (session.state) applyPlayerState(session.state);
 
             return session;
+        }
+
+        // --- Live HUD (fed by the post-turn `state` SSE event) ---
+        let lastPlayerState = null;
+        let hudPanelMode = null; // 'quests' | 'inventory' | null
+
+        function applyPlayerState(state) {
+            if (!state) return;
+            lastPlayerState = state;
+
+            gameLocation.textContent = state.location;
+            gameTime.textContent = ` - Day ${state.day}, ${String(state.hour).padStart(2, '0')}:${String(state.minute || 0).padStart(2, '0')}`;
+            chatLocation.textContent = state.location;
+            chatTime.textContent = ` (${state.time_of_day})`;
+
+            const health = document.getElementById('hud-health');
+            health.textContent = (state.health || 'healthy').replace(/_/g, ' ');
+            health.className = state.health || 'healthy';
+
+            document.getElementById('hud-gold').textContent = state.currency ?? 0;
+            document.getElementById('hud-quests').textContent = (state.quests || []).length;
+            document.getElementById('hud-bag').textContent =
+                (state.inventory || []).reduce((sum, i) => sum + (i.quantity || 1), 0);
+
+            renderHudPanel();
+        }
+
+        function renderHudPanel() {
+            const panel = document.getElementById('hud-panel');
+            if (!hudPanelMode || !lastPlayerState) {
+                panel.classList.add('hidden');
+                return;
+            }
+            panel.classList.remove('hidden');
+
+            if (hudPanelMode === 'inventory') {
+                const items = lastPlayerState.inventory || [];
+                panel.innerHTML = '<h4>Inventory</h4>' + (items.length
+                    ? items.map(i =>
+                        `<div class="hud-item"><span>${escapeHtml(i.name)}${i.quantity > 1 ? ` &times;${i.quantity}` : ''}</span>` +
+                        `<span class="muted">${escapeHtml(i.type || '')}</span></div>`
+                      ).join('')
+                    : '<div class="muted">Empty. Go find something shiny.</div>');
+            } else if (hudPanelMode === 'quests') {
+                const quests = lastPlayerState.quests || [];
+                panel.innerHTML = '<h4>Active Quests</h4>' + (quests.length
+                    ? quests.map(q =>
+                        `<div class="hud-item" style="flex-direction:column;align-items:flex-start;">` +
+                        `<span>${escapeHtml(q.title)}</span>` +
+                        (q.objectives && q.objectives.length
+                            ? `<span class="muted">${q.objectives.map(o => escapeHtml(String(o))).join(' &middot; ')}</span>`
+                            : '') +
+                        `</div>`
+                      ).join('')
+                    : '<div class="muted">No active quests. Talk to people.</div>');
+            }
+        }
+
+        function toggleHudPanel(mode) {
+            hudPanelMode = (hudPanelMode === mode) ? null : mode;
+            renderHudPanel();
+        }
+
+        document.getElementById('hud-quests-chip').addEventListener('click', () => toggleHudPanel('quests'));
+        document.getElementById('hud-bag-chip').addEventListener('click', () => toggleHudPanel('inventory'));
+
+        async function handleLocationChange(locationId, locationName) {
+            if (!locationId || locationId === currentLocationId) return;
+            console.log("Movement detected! Moving to:", locationName);
+
+            const travelOverlay = document.getElementById('travel-overlay');
+            const travelText = document.getElementById('travel-text');
+            if (travelOverlay) {
+                if (travelText) travelText.textContent = `Entering ${locationName || '...'}...`;
+                travelOverlay.style.display = 'flex';
+            }
+
+            currentLocationId = locationId;
+            if (game) {
+                await game.loadLocation(currentLocationId, currentPlayerId);
+            }
+            if (travelOverlay) travelOverlay.style.display = 'none';
         }
 
         // THE CORE TRIGGER
@@ -1966,11 +2135,11 @@
                     }
                 } else {
                     // No history, show welcome message
-                    addMessage('assistant', `Welcome back! You are at the ${session.location}.`);
+                    addMessage('assistant', `Your story begins at the ${session.location}. What do you do?`);
                 }
             } catch (e) {
                 console.error('Failed to load chat history:', e);
-                addMessage('assistant', `Welcome back! You are at the ${session.location}.`);
+                addMessage('assistant', `You are at the ${session.location}.`);
             }
         });
 
@@ -2017,9 +2186,25 @@
             }
         });
 
+        // Portraits 404 while generating in the background — hide and retry
+        let portraitRetryTimer = null;
+        npcPortrait.addEventListener('error', () => {
+            npcPortrait.classList.add('hidden');
+            const npcId = currentNpcId;
+            if (!npcId || portraitRetryTimer) return;
+            portraitRetryTimer = setTimeout(() => {
+                portraitRetryTimer = null;
+                if (currentNpcId === npcId) {
+                    npcPortrait.classList.remove('hidden');
+                    npcPortrait.src = `/api/assets/portrait/${npcId}?t=${Date.now()}`;
+                }
+            }, 8000);
+        });
+
         window.addEventListener('npc-interact', async (e) => {
             const { npcId, npcName: name } = e.detail;
             currentNpcId = npcId;
+            currentNpcName = name;
 
             // Show NPC portrait in sidebar
             npcPortrait.classList.remove('hidden');
@@ -2036,9 +2221,91 @@
             userInput.focus();
         });
 
+        // --- Canvas exit / travel chooser ---
+        let exitChooser = null;
+
+        function dismissExitChooser() {
+            if (exitChooser) {
+                exitChooser.remove();
+                exitChooser = null;
+            }
+        }
+
+        window.addEventListener('location-exit', (e) => {
+            if (isProcessing) return;
+            const exits = e.detail.exits || [];
+            dismissExitChooser();
+
+            exitChooser = document.createElement('div');
+            exitChooser.style.cssText =
+                'position:fixed;top:20%;left:50%;transform:translateX(-50%);z-index:1000;' +
+                'background:var(--bg-secondary, #16161f);border:1px solid var(--border, #333);' +
+                'border-radius:12px;padding:1rem 1.25rem;box-shadow:0 8px 32px rgba(0,0,0,.5);' +
+                'display:flex;flex-direction:column;gap:.5rem;min-width:220px;max-width:320px;';
+
+            const title = document.createElement('div');
+            title.textContent = exits.length ? 'Leave this place?' : 'No known ways out';
+            title.style.cssText = 'font-weight:600;margin-bottom:.25rem;';
+            exitChooser.appendChild(title);
+
+            if (!exits.length) {
+                const hint = document.createElement('div');
+                hint.textContent = 'Try asking the DM about ways to leave — new paths may reveal themselves.';
+                hint.style.cssText = 'font-size:.85rem;opacity:.7;';
+                exitChooser.appendChild(hint);
+            }
+
+            for (const exit of exits.slice(0, 8)) {
+                const btn = document.createElement('button');
+                btn.textContent = exit.name;
+                btn.style.cssText =
+                    'padding:.5rem .75rem;border-radius:8px;border:1px solid var(--border, #333);' +
+                    'background:var(--bg-tertiary, #1e1e2a);color:inherit;cursor:pointer;text-align:left;';
+                btn.addEventListener('mouseenter', () => btn.style.borderColor = 'var(--accent, #6366f1)');
+                btn.addEventListener('mouseleave', () => btn.style.borderColor = 'var(--border, #333)');
+                btn.addEventListener('click', () => {
+                    dismissExitChooser();
+                    sendMessage(`I head to ${exit.name}.`);
+                });
+                exitChooser.appendChild(btn);
+            }
+
+            const cancel = document.createElement('button');
+            cancel.textContent = 'Stay here';
+            cancel.style.cssText =
+                'padding:.4rem .75rem;border-radius:8px;border:none;background:transparent;' +
+                'color:inherit;opacity:.6;cursor:pointer;margin-top:.25rem;';
+            cancel.addEventListener('click', dismissExitChooser);
+            exitChooser.appendChild(cancel);
+
+            document.body.appendChild(exitChooser);
+            // Auto-dismiss if ignored
+            setTimeout(() => dismissExitChooser(), 12000);
+        });
+
+        // Editor mode indicator (Ctrl+E toggles NPC drag/scale editing)
+        window.addEventListener('editor-mode-changed', (e) => {
+            let badge = document.getElementById('editor-mode-badge');
+            if (e.detail.enabled) {
+                if (!badge) {
+                    badge = document.createElement('div');
+                    badge.id = 'editor-mode-badge';
+                    badge.textContent = 'EDITOR MODE — right-click an NPC to move/scale, Ctrl+E to exit';
+                    badge.style.cssText =
+                        'position:fixed;top:10px;left:50%;transform:translateX(-50%);z-index:1001;' +
+                        'background:#b45309;color:#fff;padding:.35rem .8rem;border-radius:999px;' +
+                        'font-size:.8rem;font-weight:600;box-shadow:0 2px 12px rgba(0,0,0,.4);';
+                    document.body.appendChild(badge);
+                }
+            } else if (badge) {
+                badge.remove();
+            }
+        });
+
         // Clear NPC selection when clicking on empty space
         window.addEventListener('npc-deselect', () => {
             currentNpcId = null;
+            currentNpcName = null;
             npcPortrait.classList.add('hidden');
             npcPortrait.src = '';
             npcName.textContent = '';
@@ -2056,14 +2323,27 @@
         function createStreamingMessage() {
             const messageEl = document.createElement('div');
             messageEl.className = 'message assistant';
-            messageEl.innerHTML = `<div class="tools-container"></div><div class="message-content"></div>`;
+            messageEl.innerHTML = `<div class="tools-container"></div><div class="thinking"><span></span><span></span><span></span></div><div class="message-content"></div>`;
             chatMessages.appendChild(messageEl);
             return messageEl;
         }
 
+        function clearThinking(messageEl) {
+            const dots = messageEl.querySelector('.thinking');
+            if (dots) dots.remove();
+        }
+
+        function escapeHtml(text) {
+            return text.replace(/&/g, '&amp;')
+                       .replace(/</g, '&lt;')
+                       .replace(/>/g, '&gt;')
+                       .replace(/"/g, '&quot;');
+        }
+
         function formatText(text) {
             if (!text) return '';
-            return text.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+            return escapeHtml(text)
+                       .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
                        .replace(/\*([^*]+)\*/g, '<em>$1</em>')
                        .replace(/\n/g, '<br>');
         }
@@ -2123,6 +2403,8 @@
             }
         }
 
+        let currentAbort = null;
+
         async function sendMessage(inputText = null) {
             const input = inputText || userInput.value.trim();
             if (!input || !currentPlayerId || isProcessing) return;
@@ -2130,7 +2412,8 @@
             isProcessing = true;
             if (!inputText) userInput.value = '';
             userInput.disabled = true;
-            sendBtn.disabled = true;
+            sendBtn.textContent = 'Stop';
+            currentAbort = new AbortController();
 
             // Add user message
             addMessage('user', input);
@@ -2140,12 +2423,19 @@
             const toolsContainer = messageEl.querySelector('.tools-container');
             const contentEl = messageEl.querySelector('.message-content');
             let textBuffer = '';
+            let turnState = null;
 
             try {
                 const response = await fetch('/api/play', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ player_id: currentPlayerId, player_input: input })
+                    signal: currentAbort.signal,
+                    body: JSON.stringify({
+                        player_id: currentPlayerId,
+                        player_input: input,
+                        npc_id: currentNpcId,
+                        npc_name: currentNpcName
+                    })
                 });
 
                 if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
@@ -2172,15 +2462,20 @@
                                 try {
                                     const payload = JSON.parse(line.slice(5).trim());
                                     if (payload.type === 'token' && payload.data) {
+                                        clearThinking(messageEl);
                                         textBuffer += payload.data;
                                         contentEl.innerHTML = formatText(textBuffer);
                                     } else if (payload.type === 'narration' && payload.content) {
+                                        clearThinking(messageEl);
                                         textBuffer += payload.content;
                                         contentEl.innerHTML = formatText(textBuffer);
                                     } else if (payload.type === 'tool_update' && payload.tool) {
                                         renderToolPill(toolsContainer, payload.tool);
                                     } else if (payload.type === 'tool_summary' && payload.payload && payload.payload.tools) {
                                         payload.payload.tools.forEach(t => renderToolPill(toolsContainer, t));
+                                    } else if (payload.type === 'state' && payload.state) {
+                                        turnState = payload.state;
+                                        applyPlayerState(payload.state);
                                     } else if (payload.type === 'npc_death' && payload.npc_id) {
                                         console.log(`NPC Death Event: ${payload.npc_name} (${payload.npc_id})`);
                                         if (game && game.playDeathAnimation) {
@@ -2194,61 +2489,43 @@
                     }
                 }
 
-                  const session = await getSessionData(currentPlayerId);
-
-            // 2. Now 'session' is defined, so we can check for movement
-            if (session && session.location_id && session.location_id !== currentLocationId) {
-                console.log("Movement detected! Moving to:", session.location);
-
-                const travelOverlay = document.getElementById('travel-overlay');
-                const travelText = document.getElementById('travel-text');
-
-                if (travelOverlay) {
-                    if (travelText) travelText.textContent = `Entering ${session.location}...`;
-                    travelOverlay.style.display = 'flex';
+                // The turn's state event carries the fresh location — only
+                // fall back to a session poll if we never received one
+                if (turnState) {
+                    await handleLocationChange(turnState.location_id, turnState.location);
+                } else {
+                    const session = await getSessionData(currentPlayerId);
+                    if (session) await handleLocationChange(session.location_id, session.location);
                 }
-
-                currentLocationId = session.location_id;
-
-                if (game) {
-                    await game.loadLocation(currentLocationId, currentPlayerId);
-                }
-
-                if (travelOverlay) travelOverlay.style.display = 'none';
-            }
-
-                // 2. CHECK IF LOCATION ID CHANGED
-            if (session.location_id && session.location_id !== currentLocationId) {
-                console.log("Movement detected! Moving to:", session.location);
-
-                // Show the Travel Overlay
-                const travelOverlay = document.getElementById('travel-overlay');
-                document.getElementById('travel-text').textContent = `Entering ${session.location}...`;
-                travelOverlay.style.display = 'flex';
-
-                currentLocationId = session.location_id;
-
-                if (game) {
-                    // This triggers the full background/NPC generation for the new room
-                    await game.loadLocation(currentLocationId, currentPlayerId);
-                }
-
-                // Hide overlay
-                travelOverlay.style.display = 'none';
-            }
             } catch (error) {
-                console.error('Play error:', error);
-                contentEl.innerHTML = `<span style="color: var(--error);">Error: ${error.message}</span>`;
+                clearThinking(messageEl);
+                if (error.name === 'AbortError') {
+                    contentEl.innerHTML += `<span style="color: var(--text-secondary);"><em> (stopped)</em></span>`;
+                    // The turn may have partially executed server-side — resync the HUD
+                    getSessionData(currentPlayerId).catch(() => {});
+                } else {
+                    console.error('Play error:', error);
+                    contentEl.innerHTML = `<span style="color: var(--error);">Error: ${escapeHtml(error.message)}</span>`;
+                }
             } finally {
+                clearThinking(messageEl);
                 isProcessing = false;
+                currentAbort = null;
                 userInput.disabled = false;
+                sendBtn.textContent = 'Send';
                 sendBtn.disabled = false;
                 userInput.focus();
             }
         }
 
-        // Send button and enter key
-        sendBtn.addEventListener('click', () => sendMessage());
+        // Send button doubles as Stop while a turn is streaming
+        sendBtn.addEventListener('click', () => {
+            if (isProcessing && currentAbort) {
+                currentAbort.abort();
+            } else {
+                sendMessage();
+            }
+        });
         userInput.addEventListener('keypress', (e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();

@@ -1,41 +1,46 @@
 """FastAPI server for Forge web frontend."""
 
+import asyncio
 import hashlib
 import json
 import logging
+import time
 from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from src.agents.base import setup_api_keys
 from src.agents.dm_orchestrator import DMOrchestrator
 from src.config import load_settings, get_active_db_path, set_runtime_db_path
-from src.models import Location, Player, get_session, init_db, reset_engine
+from src.models import Location, NPC, Player, get_session, init_db, reset_engine
 from src.models.location import Connection
 from src.tools.world_read import (
     get_current_location,
     get_player,
     get_world_clock,
     get_active_quests,
+    get_available_destinations,
 )
 from src.tools.narration import set_web_output_callback
 from src.web.streaming import ToolUsageTracker
 from src.agents.callback_context import set_callback_handler, clear_callback_handler
 from src.services.asset_manager import AssetManager
+from src.services.world_tick import snapshot_clock, enforce_minimum_time_cost
 
 load_dotenv()
 
-# Set up logging
-logging.basicConfig(level=logging.DEBUG)
+# Set up logging (set FORGE_DEBUG=1 for verbose stream/token logging)
+import os as _os
+_log_level = logging.DEBUG if _os.environ.get("FORGE_DEBUG") else logging.INFO
+logging.basicConfig(level=_log_level)
 logger = logging.getLogger(__name__)
-# Also make sure strands logging is visible
-logging.getLogger("strands").setLevel(logging.DEBUG)
+logging.getLogger("strands").setLevel(_log_level)
 
 # Initialize
 app = FastAPI(title="Forge", description="AI-powered world building and text adventure game")
@@ -52,11 +57,19 @@ app.add_middleware(
 # Store active sessions - DMOrchestrator + ToolUsageTracker
 sessions: dict[str, dict[str, Any]] = {}
 
+# Cap on cached DM sessions — each holds a full conversation history in memory
+MAX_SESSIONS = 8
+
+# Serializes /api/play turns (narration/tool callbacks are process-wide)
+_play_lock = asyncio.Lock()
+
 
 class GameRequest(BaseModel):
     """Request model for game input."""
     player_input: str
     player_id: str
+    npc_id: str | None = None
+    npc_name: str | None = None
 
 
 class SessionInfo(BaseModel):
@@ -92,11 +105,19 @@ class WorldSelectRequest(BaseModel):
 def get_or_create_session(player_id: str) -> dict[str, Any]:
     """Get or create a session with DM and tool tracker."""
     if player_id in sessions:
+        sessions[player_id]["last_used"] = time.monotonic()
         return sessions[player_id]
 
     settings = load_settings()
     setup_api_keys()
     init_db(get_active_db_path())
+
+    # Evict the least-recently-used session if at capacity (DM history is
+    # persisted via FileSessionManager, so eviction only costs a reload)
+    if len(sessions) >= MAX_SESSIONS:
+        oldest = min(sessions, key=lambda k: sessions[k].get("last_used", 0))
+        del sessions[oldest]
+        logger.info(f"Evicted idle DM session for player {oldest}")
 
     # Create tool tracker first (must be passed during agent creation)
     tool_tracker = ToolUsageTracker()
@@ -107,6 +128,7 @@ def get_or_create_session(player_id: str) -> dict[str, Any]:
     sessions[player_id] = {
         "dm": dm,
         "tool_tracker": tool_tracker,
+        "last_used": time.monotonic(),
     }
 
     return sessions[player_id]
@@ -140,6 +162,57 @@ async def list_players():
         ]
 
 
+def build_player_state(player_id: str) -> dict[str, Any]:
+    """Snapshot of everything the HUD needs — sent as an SSE `state` event
+    after each turn and included in /api/session."""
+    location = get_current_location(player_id)
+    clock = get_world_clock()
+
+    with get_session() as db:
+        p = db.query(Player).filter(Player.id == player_id).first()
+        health = p.health_status if p else "healthy"
+        currency = p.currency if p else 0
+        inventory_raw = list(p.inventory or []) if p else []
+
+    inventory = []
+    for entry in inventory_raw:
+        if isinstance(entry, dict):
+            inventory.append({
+                "name": entry.get("name", "?"),
+                "quantity": entry.get("quantity", 1),
+                "type": entry.get("type", "misc"),
+                "description": entry.get("description", ""),
+            })
+        elif isinstance(entry, str):
+            inventory.append({"name": entry, "quantity": 1, "type": "misc", "description": ""})
+
+    try:
+        quests = [
+            {"id": q.get("id"), "title": q.get("title", "?"), "objectives": q.get("objectives") or []}
+            for q in (get_active_quests() or []) if isinstance(q, dict)
+        ]
+    except Exception:
+        quests = []
+
+    with get_session() as db:
+        from src.models import WorldClock
+        wc = db.query(WorldClock).first()
+        minute = (wc.minute or 0) if wc else 0
+
+    return {
+        "location_id": location.get("id"),
+        "location": location.get("name", "Unknown"),
+        "day": clock.get("day", 1),
+        "hour": clock.get("hour", 8),
+        "minute": minute,
+        "time_of_day": clock.get("time_of_day", "day"),
+        "health": health,
+        "currency": currency,
+        "inventory": inventory,
+        "quests": quests,
+    }
+
+
 @app.get("/api/session/{player_id}")
 async def get_session_info(player_id: str):
     """Get current session info for a player."""
@@ -154,11 +227,12 @@ async def get_session_info(player_id: str):
         "player_id": player_id,
         "player_name": player.get("name", "Unknown"),
         "location": location.get("name", "Unknown"),
-        "location_id": location.get("id"),  # <--- ADD THIS LINE
+        "location_id": location.get("id"),
         "location_description": location.get("description", ""),
         "time": f"Day {clock.get('day', 1)}, {clock.get('hour', 8)}:00",
         "time_of_day": clock.get("time_of_day", "day"),
         "npcs_present": location.get("npcs_present", []),
+        "state": build_player_state(player_id),
     }
 
 
@@ -295,39 +369,54 @@ async def debug_messages(player_id: str, limit: int = 10):
 
 @app.post("/api/play")
 async def play_sse(request: GameRequest):
-    """Stream game response via SSE using stream_async pattern."""
+    """Stream game response via SSE using stream_async pattern.
+
+    Turns are serialized under a lock: the narration/tool-tracking callbacks
+    are process-wide (they must survive thread boundaries inside the agent
+    runtime), so two concurrent turns would cross-wire each other's output
+    and corrupt the shared DM conversation history. A second request queues
+    until the current turn finishes.
+    """
     session = get_or_create_session(request.player_id)
     dm: DMOrchestrator = session["dm"]
     tool_tracker: ToolUsageTracker = session["tool_tracker"]
 
-    # Reset tool tracker for new request
-    tool_tracker.reset()
-
-    # Build context like DMOrchestrator.process_input does
-    location = get_current_location(request.player_id)
-    clock = get_world_clock()
-
-    context = f"""Current context:
-- Location: {location.get('name', 'Unknown')} ({location.get('type', 'unknown')})
-- Time: Day {clock.get('day', 1)}, {clock.get('hour', 8)}:00 ({clock.get('time_of_day', 'day')})
-- NPCs here: {', '.join(n['name'] for n in location.get('npcs_present', [])) or 'None'}
-
-Player says: {request.player_input}"""
-
-    # Set up narration callback
-    narration_buffer: list[str] = []
-
-    def narration_callback(text: str):
-        narration_buffer.append(text)
-
-    set_web_output_callback(narration_callback)
-
-    # Set callback handler in context so sub-agents can use it
-    set_callback_handler(tool_tracker)
-
     async def event_stream():
         """Generate SSE events from agent stream."""
+        async with _play_lock:
+            async for chunk in _run_turn():
+                yield chunk
+
+    async def _run_turn():
         try:
+            # All setup happens under the lock — a queued second turn must
+            # see the world state the first turn left behind
+            tool_tracker.reset()
+
+            # Snapshot the clock so we can enforce a minimum time cost after the turn
+            turn_start_clock = snapshot_clock()
+
+            # Build the full DM context — runs the world tick (fires scheduled
+            # events) and includes player health/inventory/quests, same as the
+            # CLI path.
+            context = dm._build_context(request.player_input)
+
+            # If the player clicked an NPC on the canvas, tell the DM who they're addressing
+            if request.npc_id:
+                npc_label = f"{request.npc_name} (npc_id={request.npc_id})" if request.npc_name else f"npc_id={request.npc_id}"
+                context += f"\n\n[The player is currently addressing {npc_label} — route dialogue to this NPC via prompt_npc_agent.]"
+
+            # Set up narration callback
+            narration_buffer: list[str] = []
+
+            def narration_callback(text: str):
+                narration_buffer.append(text)
+
+            set_web_output_callback(narration_callback)
+
+            # Set callback handler in context so sub-agents can use it
+            set_callback_handler(tool_tracker)
+
             logger.info(f"Starting stream for player {request.player_id}")
             logger.info(f"Context: {context[:200]}...")  # Log first 200 chars
 
@@ -362,6 +451,19 @@ Player says: {request.player_input}"""
                     yield f"data: {json.dumps(narration_event)}\n\n"
 
             logger.info(f"Stream finished with {event_count} events")
+
+            # If the DM forgot to advance time this turn, apply a minimum cost
+            # so the world clock (and scheduled events) can't freeze.
+            time_result = enforce_minimum_time_cost(turn_start_clock)
+            if time_result.get("enforced"):
+                logger.info("Minimum time cost enforced for this turn")
+
+            # Post-turn state snapshot so the HUD updates without polling
+            try:
+                state_event = {"type": "state", "state": build_player_state(request.player_id)}
+                yield f"data: {json.dumps(state_event, ensure_ascii=False, default=str)}\n\n"
+            except Exception as e:
+                logger.warning(f"Could not build state event: {e}")
 
             # Final payload with tool summary
             final_payload = {
@@ -461,8 +563,9 @@ async def get_quests(player_id: str):
 # Asset Endpoints (Visual RPG)
 # =====================
 
-# Global asset manager instance
-_asset_manager: AssetManager | None = None
+# Asset managers keyed by world name — a singleton would stay bound to the
+# first world after a world switch and write assets to the wrong directory
+_asset_managers: dict[str, AssetManager] = {}
 
 
 def _get_world_name() -> str:
@@ -472,11 +575,11 @@ def _get_world_name() -> str:
 
 
 def get_asset_manager() -> AssetManager:
-    """Get or create asset manager singleton."""
-    global _asset_manager
-    if _asset_manager is None:
-        _asset_manager = AssetManager(_get_world_name())
-    return _asset_manager
+    """Get or create the asset manager for the active world."""
+    world_name = _get_world_name()
+    if world_name not in _asset_managers:
+        _asset_managers[world_name] = AssetManager(world_name)
+    return _asset_managers[world_name]
 
 
 @app.get("/api/assets/location/{location_id}")
@@ -488,15 +591,37 @@ async def get_location_assets(location_id: str, player_id: str):
     get_or_create_session(player_id)  # Ensure DB is initialized
     asset_manager = get_asset_manager()
 
+    def _url(path):
+        return asset_manager.get_asset_url(path) if path else None
+
     try:
-        assets = await asset_manager.get_location_assets(location_id, player_id)
+        # Never blocks: cached assets return immediately, misses generate in
+        # background tasks and the client polls while "pending" is true
+        assets = await asset_manager.get_location_assets_fast(location_id, player_id)
+
+        # Pre-warm backgrounds for connected locations so travel feels instant
+        asset_manager.prewarm_connected_locations(location_id)
+
+        # Available exits so the canvas can offer transitions at scene edges
+        try:
+            destinations = get_available_destinations(location_id)
+            exits = []
+            seen_exit_ids = set()
+            for d in (destinations or []):
+                if isinstance(d, dict) and d.get("id") and d["id"] not in seen_exit_ids:
+                    seen_exit_ids.add(d["id"])
+                    exits.append({"id": d["id"], "name": d.get("name"), "type": d.get("type", "")})
+        except Exception:
+            exits = []
 
         # Convert paths to URLs
         return {
             "location_id": assets["location_id"],
             "location_name": assets["location_name"],
-            "background_url": asset_manager.get_asset_url(assets["background_path"]),
+            "background_url": _url(assets["background_path"]),
             "walkable_bounds": assets["walkable_bounds"],
+            "exits": exits,
+            "pending": assets.get("pending", False),
             "player": {
                 "id": assets["player"]["id"],
                 "name": assets["player"]["name"],
@@ -505,7 +630,7 @@ async def get_location_assets(location_id: str, player_id: str):
                 "scale": assets["player"].get("scale", 1.0),
                 "status": assets["player"].get("status", "healthy"),
                 "direction": assets["player"]["direction"],
-                "sprite_url": asset_manager.get_asset_url(assets["player"]["sprite_path"])
+                "sprite_url": _url(assets["player"]["sprite_path"])
             },
             "npcs": [
                 {
@@ -515,7 +640,7 @@ async def get_location_assets(location_id: str, player_id: str):
                     "y": npc["y"],
                     "scale": npc.get("scale", 1.0),
                     "status": npc.get("status", "alive"),
-                    "sprite_url": asset_manager.get_asset_url(npc["sprite_path"]),
+                    "sprite_url": _url(npc["sprite_path"]),
                     "tier": npc["tier"]
                 }
                 for npc in assets["npcs"]
@@ -523,49 +648,63 @@ async def get_location_assets(location_id: str, player_id: str):
         }
     except Exception as e:
         logger.error(f"Error getting location assets: {e}", exc_info=True)
-        return {"error": str(e)}
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 @app.get("/api/assets/sprite/{character_type}/{character_id}/{direction}")
 async def get_sprite(character_type: str, character_id: str, direction: str):
-    """Get or generate character sprite."""
-    # 1. STRIP EXTENSION FIRST
+    """Serve a character sprite from cache.
+
+    On a miss the full sprite set is generated in a deduplicated background
+    task and 404 is returned — the client shows a placeholder and retries.
+    Never blocks the request on image generation, and never returns JSON
+    with HTTP 200 where an <img> expects a PNG.
+    """
+    # Strip extension
     if "." in direction:
         direction = direction.split(".")[0]
 
     asset_manager = get_asset_manager()
     try:
-        # 2. NOW parse the walk frame
-        if "_walk" in direction:
-            parts = direction.rsplit("_walk", 1)
-            base_direction = parts[0]
-            try:
-                frame = int(parts[1])  # This will now be "1" or "2"
-                path = await asset_manager.get_walk_frame(character_id, base_direction, frame, character_type)
-            except ValueError:
-                # Fallback if parsing fails
-                path = await asset_manager.get_player_sprite(character_id, base_direction)
-        elif character_type == "player":
-            path = await asset_manager.get_player_sprite(character_id, direction)
-        else:
-            path = await asset_manager.get_npc_sprite(character_id, direction)
+        sprite_path = asset_manager.assets_dir / "sprites" / f"{character_id}_{direction}.png"
+        if sprite_path.exists() and sprite_path.stat().st_size > 0:
+            return FileResponse(str(sprite_path), media_type="image/png")
 
-        return FileResponse(path, media_type="image/png")
+        # Miss: kick off (deduplicated) generation of the full sprite set
+        include_walk = character_type == "player"
+        asset_manager.spawn_generation(
+            f"sprites:{character_id}",
+            lambda: asset_manager.ensure_all_sprites_generated(
+                character_id, character_type, include_walk=include_walk
+            ),
+        )
+        return JSONResponse({"status": "generating"}, status_code=404)
     except Exception as e:
         logger.error(f"Error getting sprite: {e}", exc_info=True)
-        return {"error": str(e)}
+        return JSONResponse({"error": str(e)}, status_code=500)
+
 
 @app.get("/api/assets/portrait/{npc_id}")
 async def get_portrait(npc_id: str):
-    """Get or generate NPC portrait for dialogue."""
+    """Serve an NPC portrait from cache; generate in background on miss."""
     asset_manager = get_asset_manager()
 
     try:
-        path = await asset_manager.get_npc_portrait(npc_id)
-        return FileResponse(path, media_type="image/png")
+        with get_session() as db:
+            npc = db.query(NPC).filter(NPC.id == npc_id).first()
+            cached = npc.portrait_path if npc else None
+
+        if cached and Path(cached).exists():
+            return FileResponse(cached, media_type="image/png")
+
+        asset_manager.spawn_generation(
+            f"portrait:{npc_id}",
+            lambda: asset_manager.get_npc_portrait(npc_id),
+        )
+        return JSONResponse({"status": "generating"}, status_code=404)
     except Exception as e:
         logger.error(f"Error getting portrait: {e}", exc_info=True)
-        return {"error": str(e)}
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 class MoveRequest(BaseModel):
