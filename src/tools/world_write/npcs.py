@@ -315,15 +315,16 @@ def update_npc_relationship(
         if new_disposition:
             rel.current_disposition = new_disposition
 
-        # Add key moment
+        # Add key moment (copy — mutating the loaded list in place makes
+        # SQLAlchemy see old == new and skip the UPDATE)
         if add_key_moment:
-            moments = rel.key_moments if rel.key_moments else []
+            moments = list(rel.key_moments or [])
             moments.append(add_key_moment)
             rel.key_moments = moments
 
         # Add message
         if add_message:
-            messages = rel.recent_messages if rel.recent_messages else []
+            messages = list(rel.recent_messages or [])
             messages.append(add_message)
             rel.recent_messages = messages[-20:]
 

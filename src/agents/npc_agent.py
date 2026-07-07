@@ -57,6 +57,9 @@ def build_npc_system_prompt(npc: dict[str, Any], relationship: dict[str, Any], s
 **Key moments in your history together:**
 {chr(10).join(f'- {m}' for m in relationship.get('key_moments', [])) if relationship.get('key_moments') else '- None yet'}
 
+**Your most recent exchanges with them (your durable memory — trust this even if the conversation feels new):**
+{chr(10).join(f"- {m.get('role', '?')}: {m.get('content', '')}" for m in relationship.get('recent_messages', [])) if relationship.get('recent_messages') else '- No previous exchanges'}
+
 **Your Secrets (never reveal unless trust is very high 80+):**
 {chr(10).join(f'- {s}' for s in hidden_secrets) if hidden_secrets else '- None'}
 

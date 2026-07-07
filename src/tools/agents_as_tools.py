@@ -95,6 +95,80 @@ def get_recent_dm_context(player_id: str, num_messages: int = 20, stop_at_npc_id
         return ""
 
 
+def _record_npc_exchange(
+    npc_id: str,
+    player_id: str,
+    player_input: str,
+    npc_response: str,
+    is_first_interaction: bool = False,
+    conversation_ended: bool = False,
+) -> None:
+    """Persist one dialogue exchange to the NPC relationship (DB-backed memory).
+
+    This is the canonical memory write path: the session file is a cache,
+    but the relationship row is what survives restarts, session compaction,
+    and corrupted-session self-heals. Never raises — memory writes must not
+    break dialogue.
+    """
+    try:
+        from src.config import load_settings
+        from src.models import NPCRelationship, WorldClock, get_session
+
+        settings = load_settings()
+        keep = getattr(settings.game, "recent_messages_limit", 10) * 2  # pairs
+        compress_at = getattr(settings.game, "summary_trigger_threshold", 20)
+
+        with get_session() as session:
+            rel = session.query(NPCRelationship).filter(
+                NPCRelationship.npc_id == npc_id,
+                NPCRelationship.player_id == player_id,
+            ).first()
+            if not rel:
+                rel = NPCRelationship(npc_id=npc_id, player_id=player_id)
+                session.add(rel)
+
+            clock = session.query(WorldClock).first()
+            day = clock.day if clock else 1
+
+            messages = list(rel.recent_messages or [])
+            if player_input:
+                messages.append({"role": "player", "content": player_input[:500], "day": day})
+            if npc_response:
+                messages.append({"role": "npc", "content": npc_response[:500], "day": day})
+
+            # Fold overflow into the summary so old exchanges compress
+            # instead of vanishing
+            if len(messages) > compress_at:
+                overflow = messages[:-keep] if keep < len(messages) else []
+                messages = messages[-keep:]
+                if overflow:
+                    lines = [
+                        f"(Day {m.get('day', '?')}) {m.get('role', '?')}: {m.get('content', '')[:120]}"
+                        for m in overflow
+                    ]
+                    summary = (rel.summary or "") + "\n" + "\n".join(lines)
+                    rel.summary = summary[-3000:]  # keep the tail
+
+            rel.recent_messages = messages
+            rel.last_interaction_day = day
+
+            key_moments = list(rel.key_moments or [])
+            if is_first_interaction and not key_moments:
+                key_moments.append(f"First met on Day {day}")
+                rel.key_moments = key_moments
+            elif conversation_ended:
+                key_moments.append(f"Talked on Day {day}: \"{(player_input or '')[:80]}\"")
+                rel.key_moments = key_moments[-15:]
+
+            session.commit()
+    except Exception:
+        # Memory write failures must never surface as dialogue errors
+        import logging
+        logging.getLogger(__name__).warning(
+            f"Failed to record NPC exchange for {npc_id}", exc_info=True
+        )
+
+
 def _build_world_snapshot(player_id: str) -> str:
     """Build a snapshot of current world state for sub-agent context bridging.
 
@@ -264,12 +338,15 @@ def prompt_npc_agent(player_id: str, npc_id: str, player_input: str, is_first_in
         rel_result = uow.npcs.get_with_relationship(npc_id, player_id)
         _, relationship = rel_result.data if rel_result.success else (None, None)
 
+        from src.config import load_settings
+        recent_limit = getattr(load_settings().game, "recent_messages_limit", 10)
+
         relationship_dict = {
             "summary": relationship.summary if relationship else "You have not met this person before.",
             "trust_level": relationship.trust_level if relationship else 50,
             "current_disposition": relationship.current_disposition if relationship else "neutral",
             "key_moments": relationship.key_moments if relationship else [],
-            "recent_messages": (relationship.recent_messages or [])[-10:] if relationship else [],
+            "recent_messages": (relationship.recent_messages or [])[-recent_limit * 2:] if relationship else [],
             "revealed_secrets": relationship.revealed_secrets if relationship else [],
         }
 
@@ -287,6 +364,7 @@ def prompt_npc_agent(player_id: str, npc_id: str, player_input: str, is_first_in
     narrative_context = "\n\n".join(narrative_parts)
 
     # Create NPC agent with validated data
+    conversation_ended = False
     try:
         agent = NPCAgent(player_id, npc_id)
         # Scene context goes into the system prompt so NPC always knows where it is
@@ -295,6 +373,8 @@ def prompt_npc_agent(player_id: str, npc_id: str, player_input: str, is_first_in
         if is_first_interaction:
             # First interaction - start a new conversation with greeting
             response = agent.start_conversation(npc=npc_data, relationship=relationship_dict, context=narrative_context)
+            conversation_ended = "[END_CONVERSATION]" in str(response)
+            response = str(response).replace("[END_CONVERSATION]", "").strip()
         else:
             # Continuing conversation - pass the player's actual words
             # Still need to initialize the agent with NPC data before responding
@@ -306,14 +386,27 @@ def prompt_npc_agent(player_id: str, npc_id: str, player_input: str, is_first_in
 
             result = agent.respond(player_input, context=narrative_context)
             response = result.get("response", "...")
+            conversation_ended = result.get("conversation_ended", False)
     except Exception as e:
         return {
             "text_response": f"{npc_data.get('name', 'The NPC')} seems distracted and doesn't respond right now. (internal error — narrate around it)",
             "error": str(e),
         }
 
+    # Canonical memory write: this is what makes the NPC remember across
+    # sessions regardless of what happens to the session file
+    _record_npc_exchange(
+        npc_id=npc_id,
+        player_id=player_id,
+        player_input=player_input,
+        npc_response=str(response),
+        is_first_interaction=is_first_interaction,
+        conversation_ended=conversation_ended,
+    )
+
     return {
         "text_response": str(response),
+        "conversation_ended": conversation_ended,
         "note": "This dialogue was ALREADY shown to the player. Do not repeat or paraphrase it — react to it or move the scene forward.",
     }
 
