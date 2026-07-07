@@ -32,6 +32,7 @@ from src.web.streaming import ToolUsageTracker
 from src.agents.callback_context import set_callback_handler, clear_callback_handler
 from src.services.asset_manager import AssetManager
 from src.services.world_tick import snapshot_clock, enforce_minimum_time_cost
+from src.services.world_simulation import maybe_advance_world
 
 load_dotenv()
 
@@ -157,6 +158,7 @@ async def list_players():
                 "name": p.name,
                 "description": p.description,
                 "location_id": p.current_location_id,
+                "health_status": p.health_status,
             }
             for p in players
         ]
@@ -457,6 +459,10 @@ async def play_sse(request: GameRequest):
             time_result = enforce_minimum_time_cost(turn_start_clock)
             if time_result.get("enforced"):
                 logger.info("Minimum time cost enforced for this turn")
+
+            # A new in-game day? Advance the world in the background —
+            # factions move, consequences ripple, all offscreen
+            asyncio.create_task(asyncio.to_thread(maybe_advance_world))
 
             # Post-turn state snapshot so the HUD updates without polling
             try:
@@ -1223,6 +1229,51 @@ async def get_player_detail(player_id: str):
             "scale": player.scale,
             "facing_direction": player.facing_direction,
         }
+
+
+class PlayerCreate(BaseModel):
+    """Request model for creating a new player character."""
+    name: str
+    description: str = ""
+    background: str = ""
+    location_id: str | None = None       # Defaults to a sensible spawn point
+    predecessor_id: str | None = None    # Dead character being succeeded
+
+
+@app.post("/api/world/players")
+async def create_player(req: PlayerCreate):
+    """Create a new player character in the current world.
+
+    Used by the death/rebirth flow: the world (and everything the previous
+    character did to it) persists; a new character steps into it.
+    """
+    init_db(get_active_db_path())
+
+    with get_session() as db:
+        location_id = req.location_id
+
+        # Spawn where the predecessor fell, else any visited location,
+        # else the first location in the world
+        if not location_id and req.predecessor_id:
+            predecessor = db.query(Player).filter(Player.id == req.predecessor_id).first()
+            if predecessor:
+                location_id = predecessor.current_location_id
+        if not location_id:
+            loc = (db.query(Location).filter(Location.visited == True).first()  # noqa: E712
+                   or db.query(Location).first())
+            location_id = loc.id if loc else None
+
+        player = Player(
+            name=req.name,
+            description=req.description,
+            background=req.background,
+            current_location_id=location_id,
+            currency=25,
+        )
+        db.add(player)
+        db.commit()
+
+        return {"success": True, "player_id": player.id, "location_id": location_id}
 
 
 @app.put("/api/world/players/{player_id}")

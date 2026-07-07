@@ -157,6 +157,9 @@ class DMState(Base):
     # when the world has been quiet too long
     turns_since_event: Mapped[int | None] = mapped_column(Integer, nullable=True, default=0)
 
+    # Last in-game day the offscreen world simulation ran (one turn per day)
+    last_world_turn_day: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
     def __repr__(self) -> str:
         return f"<DMState(arc={self.current_arc!r}, tension={self.tension})>"
 

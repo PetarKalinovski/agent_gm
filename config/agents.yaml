@@ -36,6 +36,13 @@ agents:
     max_tokens: 4096
     description: "On-demand world expansion during gameplay - lazy loading of locations, NPCs, quests"
 
+  # Offscreen world simulation — runs once per in-game day in the background
+  world_sim:
+    model: "openrouter/deepseek/deepseek-v3.2"
+    temperature: 0.7
+    max_tokens: 2048
+    description: "Advances faction goals, NPC agendas, and consequences while the player isn't looking"
+
   # World Forge agents
   world_forge:
     model: "openrouter/deepseek/deepseek-v3.2"

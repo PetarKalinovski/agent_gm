@@ -10,8 +10,11 @@ from rich.text import Text
 from src.agents.base import setup_api_keys
 from src.agents.dm_orchestrator import DMOrchestrator
 from src.config import load_settings
+import threading
+
 from src.game.context import assemble_context
 from src.services.world_tick import snapshot_clock, enforce_minimum_time_cost
+from src.services.world_simulation import maybe_advance_world
 from src.models import (
     Location,
     NPC,
@@ -263,6 +266,23 @@ class GameSession:
                 # If the DM forgot to advance time, apply a minimum cost so
                 # the world clock (and scheduled events) can't freeze
                 enforce_minimum_time_cost(turn_start_clock)
+
+                # New in-game day → advance the world offscreen (background
+                # thread so the player isn't kept waiting)
+                threading.Thread(target=maybe_advance_world, daemon=True).start()
+
+                # Death ends this character's story — the world persists
+                with get_session() as session:
+                    player = session.get(Player, self.player_id)
+                    if player and player.health_status == "dead":
+                        self.console.print(Panel(
+                            f"[bold red]{player.name} has died.[/bold red]\n\n"
+                            "This world remembers them. Start the game again to "
+                            "create a new character in the same world.",
+                            title="THE END",
+                            border_style="red"
+                        ))
+                        break
 
             except KeyboardInterrupt:
                 self.console.print("\n\nFarewell, adventurer!")
