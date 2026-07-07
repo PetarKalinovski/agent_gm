@@ -25,10 +25,59 @@ class AssetManager:
     Assets are generated on-demand and cached to the database.
     """
 
+    # Don't retry a failed generation for this many seconds (avoid re-billing
+    # a broken prompt/model on every page load)
+    FAILURE_COOLDOWN_SECONDS = 300
+
     def __init__(self, world_name: str):
         self.image_gen = ImageGenerator(world_name)
         self.ref_search = ReferenceImageSearch(world_name)
         self.assets_dir = Path("data/assets") / world_name
+        # In-flight background generation tasks, keyed by asset key
+        self._pending_tasks: dict[str, "asyncio.Task"] = {}
+        # Recent generation failures: asset key -> monotonic timestamp
+        self._failures: dict[str, float] = {}
+
+    # ------------------------------------------------------------------
+    # Background generation plumbing
+    # ------------------------------------------------------------------
+
+    def _recently_failed(self, key: str) -> bool:
+        import time
+        ts = self._failures.get(key)
+        return ts is not None and (time.monotonic() - ts) < self.FAILURE_COOLDOWN_SECONDS
+
+    def is_generating(self, key: str) -> bool:
+        task = self._pending_tasks.get(key)
+        return task is not None and not task.done()
+
+    def spawn_generation(self, key: str, coro_factory) -> bool:
+        """Start a deduplicated background generation task.
+
+        Args:
+            key: Unique key for this asset (e.g. "bg:<location_id>").
+            coro_factory: Zero-arg callable returning the coroutine to run.
+
+        Returns:
+            True if a task was started (or already running), False if skipped
+            due to a recent failure.
+        """
+        if self.is_generating(key):
+            return True
+        if self._recently_failed(key):
+            return False
+
+        async def _run():
+            import time
+            try:
+                await coro_factory()
+                self._failures.pop(key, None)
+            except Exception as e:
+                logger.error(f"Background generation failed for {key}: {e}")
+                self._failures[key] = time.monotonic()
+
+        self._pending_tasks[key] = asyncio.create_task(_run())
+        return True
 
     def _get_world_bible(self, db_session) -> WorldBible | None:
         """Get the world bible for style consistency."""
@@ -41,6 +90,9 @@ class AssetManager:
             - background_path: Path to background image
             - walkable_bounds: Collision bounds
         """
+        # Fetch what we need, then RELEASE the session before the slow
+        # network calls (image generation can take minutes — never hold a
+        # DB connection across it)
         with get_session() as db:
             location = db.query(Location).filter(Location.id == location_id).first()
             if not location:
@@ -54,21 +106,29 @@ class AssetManager:
                     "walkable_bounds": location.walkable_bounds
                 }
 
-            # Generate new background
             world_bible = self._get_world_bible(db)
-            ref = await self.ref_search.find_reference(
-                location.id, location.reference_search_query
-            )
-            path = await self.image_gen.generate_location_background(location, world_bible, reference_image=ref)
+            ref_query = location.reference_search_query
+            walkable_bounds = location.walkable_bounds
+            # Detach with attributes loaded so they stay readable
+            db.expunge(location)
+            if world_bible is not None:
+                db.expunge(world_bible)
 
-            # Cache path in database
-            location.background_image_path = path
-            db.commit()
+        # Generate new background (no session held)
+        ref = await self.ref_search.find_reference(location_id, ref_query)
+        path = await self.image_gen.generate_location_background(location, world_bible, reference_image=ref)
 
-            return {
-                "background_path": path,
-                "walkable_bounds": location.walkable_bounds
-            }
+        # Cache path in database (fresh, short-lived session)
+        with get_session() as db:
+            fresh = db.get(Location, location_id)
+            if fresh:
+                fresh.background_image_path = path
+                db.commit()
+
+        return {
+            "background_path": path,
+            "walkable_bounds": walkable_bounds
+        }
 
     def _check_all_sprites_exist(self, character_id: str, include_walk: bool = True) -> bool:
         """Check if all sprites exist for a character."""
@@ -106,21 +166,29 @@ class AssetManager:
             if front_path.exists() and front_path.stat().st_size > 0:
                 return {"front": str(front_path)}
 
-            # If not, generate ONLY front
+            # If not, generate ONLY front (release the session before generating)
             with get_session() as db:
                 character = db.query(NPC).filter(NPC.id == character_id).first()
+                if not character:
+                    raise ValueError(f"npc {character_id} not found")
                 world_bible = self._get_world_bible(db)
-                # Search for a web reference image before generating
-                ref = await self.ref_search.find_reference(
-                    character.id, character.reference_search_query
-                )
-                path = await self.image_gen.generate_character_sprite(
-                    character, world_bible, "front", reference_image=ref
-                )
-                paths = {"front": path}
-                character.sprite_path = paths.get("front")
-                db.commit()
-                return paths
+                ref_query = character.reference_search_query
+                db.expunge(character)
+                if world_bible is not None:
+                    db.expunge(world_bible)
+
+            ref = await self.ref_search.find_reference(character_id, ref_query)
+            path = await self.image_gen.generate_character_sprite(
+                character, world_bible, "front", reference_image=ref
+            )
+            paths = {"front": path}
+
+            with get_session() as db:
+                fresh = db.get(NPC, character_id)
+                if fresh:
+                    fresh.sprite_path = path
+                    db.commit()
+            return paths
 
         # Check if all sprites already exist
         if self._check_all_sprites_exist(character_id, include_walk):
@@ -135,7 +203,8 @@ class AssetManager:
                         )
             return paths
 
-        # Need to generate - get character from DB
+        # Need to generate — fetch character, then release the session before
+        # the (potentially minutes-long) generation calls
         with get_session() as db:
             if character_type == "player":
                 character = db.query(Player).filter(Player.id == character_id).first()
@@ -146,45 +215,46 @@ class AssetManager:
                 raise ValueError(f"{character_type} {character_id} not found")
 
             world_bible = self._get_world_bible(db)
+            ref_query = getattr(character, 'reference_search_query', None)
+            db.expunge(character)
+            if world_bible is not None:
+                db.expunge(world_bible)
 
-            # Search for a web reference image before generating
-            ref = await self.ref_search.find_reference(
-                character.id, getattr(character, 'reference_search_query', None)
-            )
+        # Search for a web reference image before generating
+        ref = await self.ref_search.find_reference(character_id, ref_query)
 
-            # Generate ALL sprites at once (with style consistency)
-            logger.info(f"Generating all sprites for {character.name}...")
-            if character_type == "player":
-                # For players, pass reference to the front sprite generation
-                # The front sprite then becomes the reference for other directions
-                if ref:
-                    # Generate front with web reference, then use front for rest
-                    front_path = await self.image_gen.generate_character_sprite(
-                        character, world_bible, "front", reference_image=ref
-                    )
-                    # Now generate remaining sprites using front as reference (existing behavior)
-                    paths = await self.image_gen.generate_all_sprites_for_character(
-                        character, world_bible, include_walk_frames=include_walk
-                    )
-                else:
-                    paths = await self.image_gen.generate_all_sprites_for_character(
-                        character, world_bible, include_walk_frames=include_walk
-                    )
-            else:
-                path = await self.image_gen.generate_character_sprite(
+        # Generate ALL sprites at once (with style consistency)
+        logger.info(f"Generating all sprites for {character.name}...")
+        if character_type == "player":
+            # For players, pass reference to the front sprite generation
+            # The front sprite then becomes the reference for other directions
+            if ref:
+                # Generate front with web reference, then use front for rest
+                front_path = await self.image_gen.generate_character_sprite(
                     character, world_bible, "front", reference_image=ref
                 )
-                paths = { "front": path }
+            paths = await self.image_gen.generate_all_sprites_for_character(
+                character, world_bible, include_walk_frames=include_walk
+            )
+        else:
+            path = await self.image_gen.generate_character_sprite(
+                character, world_bible, "front", reference_image=ref
+            )
+            paths = { "front": path }
 
-
-            # Update database with base sprite path
+        # Update database with base sprite path (fresh, short-lived session)
+        with get_session() as db:
             if character_type == "player":
-                character.sprite_base_path = paths.get("front")
+                fresh = db.get(Player, character_id)
+                if fresh:
+                    fresh.sprite_base_path = paths.get("front")
             else:
-                character.sprite_path = paths.get("front")
+                fresh = db.get(NPC, character_id)
+                if fresh:
+                    fresh.sprite_path = paths.get("front")
             db.commit()
 
-            return paths
+        return paths
 
     async def get_npc_sprite(self, npc_id: str, direction: str = "front") -> str:
         """Get or generate NPC sprite for given direction.
@@ -257,18 +327,24 @@ class AssetManager:
                 logger.info(f"Using cached portrait for NPC: {npc.name}")
                 return npc.portrait_path
 
-            # Generate new portrait
             world_bible = self._get_world_bible(db)
-            ref = await self.ref_search.find_reference(
-                npc.id, npc.reference_search_query
-            )
-            path = await self.image_gen.generate_portrait(npc, world_bible, reference_image=ref)
+            ref_query = npc.reference_search_query
+            db.expunge(npc)
+            if world_bible is not None:
+                db.expunge(world_bible)
 
-            # Cache path in database
-            npc.portrait_path = path
-            db.commit()
+        # Generate new portrait (no session held)
+        ref = await self.ref_search.find_reference(npc_id, ref_query)
+        path = await self.image_gen.generate_portrait(npc, world_bible, reference_image=ref)
 
-            return path
+        # Cache path in database
+        with get_session() as db:
+            fresh = db.get(NPC, npc_id)
+            if fresh:
+                fresh.portrait_path = path
+                db.commit()
+
+        return path
 
     async def get_location_assets(self, location_id: str, player_id: str) -> dict:
         """Get all assets needed to render a location.
@@ -282,6 +358,31 @@ class AssetManager:
 
         logger.info(f"--- ASSET MANAGER: Requesting assets for {location_id} ---")
 
+        scene = self._load_scene_data(location_id, player_id)
+
+        # Generate/fetch everything concurrently — no DB session held here
+        results = await asyncio.gather(
+            self.get_location_background(location_id),
+            self.get_player_sprite(player_id, scene["player"]["direction"]),
+            *(self.get_npc_sprite(npc["id"], "front") for npc in scene["npcs"]),
+        )
+
+        bg_data = results[0]
+        scene["player"]["sprite_path"] = results[1]
+        for i, npc in enumerate(scene["npcs"]):
+            npc["sprite_path"] = results[2 + i]
+
+        return {
+            "location_id": location_id,
+            "location_name": scene["location_name"],
+            "background_path": bg_data["background_path"],
+            "walkable_bounds": bg_data["walkable_bounds"],
+            "player": scene["player"],
+            "npcs": scene["npcs"],
+        }
+
+    def _load_scene_data(self, location_id: str, player_id: str) -> dict:
+        """Load location/player/NPC data as plain dicts (short-lived session)."""
         with get_session() as db:
             location = db.query(Location).filter(Location.id == location_id).first()
             if not location:
@@ -291,47 +392,12 @@ class AssetManager:
             if not player:
                 raise ValueError(f"Player {player_id} not found")
 
-            # Get background
-            bg_data = self.get_location_background(location_id)
-
-            # Get player sprite
-            player_sprite_path =self.get_player_sprite(player_id, player.facing_direction)
-
-            # Get NPCs at this location
             npcs = db.query(NPC).filter(NPC.current_location_id == location_id).all()
 
-            npc_tasks = [self.get_npc_sprite(npc.id, "front") for npc in npcs]
-
-            results = await asyncio.gather(
-                bg_data,
-                player_sprite_path,
-                *npc_tasks
-            )
-
-            bg_data = results[0]
-            player_sprite_path = results[1]
-            npc_paths = results[2:]
-
-            npc_data = []
-            for i, npc in enumerate(npcs):
-                npc_scale = getattr(npc, 'scale', 1.0) or 1.0
-                logger.info(f"Loading NPC {npc.name}: scale={npc_scale} (raw={npc.scale})")
-                npc_data.append({
-                    "id": npc.id,
-                    "name": npc.name,
-                    "x": npc.position_x,
-                    "y": npc.position_y,
-                    "scale": npc_scale,
-                    "status": npc.status,
-                    "sprite_path": npc_paths[i],
-                    "tier": npc.tier.value if hasattr(npc.tier, 'value') else str(npc.tier)
-                })
-
             return {
-                "location_id": location_id,
                 "location_name": location.name,
-                "background_path": bg_data["background_path"],
-                "walkable_bounds": bg_data["walkable_bounds"],
+                "background_path_cached": location.background_image_path,
+                "walkable_bounds": location.walkable_bounds,
                 "player": {
                     "id": player_id,
                     "name": player.name,
@@ -340,10 +406,112 @@ class AssetManager:
                     "scale": getattr(player, 'scale', 1.0) or 1.0,
                     "status": player.health_status,
                     "direction": player.facing_direction,
-                    "sprite_path": player_sprite_path
+                    "sprite_path": None,
                 },
-                "npcs": npc_data
+                "npcs": [
+                    {
+                        "id": npc.id,
+                        "name": npc.name,
+                        "x": npc.position_x,
+                        "y": npc.position_y,
+                        "scale": getattr(npc, 'scale', 1.0) or 1.0,
+                        "status": npc.status,
+                        "sprite_path": None,
+                        "tier": npc.tier.value if hasattr(npc.tier, 'value') else str(npc.tier),
+                    }
+                    for npc in npcs
+                ],
             }
+
+    async def get_location_assets_fast(self, location_id: str, player_id: str) -> dict:
+        """Like get_location_assets, but NEVER blocks on generation.
+
+        Returns whatever is already cached immediately; anything missing is
+        generated in deduplicated background tasks and reported via the
+        "pending" flag so the client can poll until the scene is complete.
+        """
+        scene = self._load_scene_data(location_id, player_id)
+        pending = False
+
+        # Background
+        bg_path = scene["background_path_cached"]
+        if bg_path and Path(bg_path).exists():
+            background_path = bg_path
+        else:
+            background_path = None
+            if self.spawn_generation(f"bg:{location_id}", lambda: self.get_location_background(location_id)):
+                pending = True
+
+        # Player sprite (full set generated in background if anything missing)
+        direction = scene["player"]["direction"]
+        player_sprite = self.assets_dir / "sprites" / f"{player_id}_{direction}.png"
+        if player_sprite.exists():
+            scene["player"]["sprite_path"] = str(player_sprite)
+        if not self._check_all_sprites_exist(player_id, include_walk=True):
+            if self.spawn_generation(
+                f"sprites:{player_id}",
+                lambda: self.ensure_all_sprites_generated(player_id, "player", include_walk=True),
+            ):
+                pending = True
+
+        # NPC front sprites
+        for npc in scene["npcs"]:
+            npc_sprite = self.assets_dir / "sprites" / f"{npc['id']}_front.png"
+            if npc_sprite.exists():
+                npc["sprite_path"] = str(npc_sprite)
+            else:
+                npc_id = npc["id"]
+                if self.spawn_generation(
+                    f"sprites:{npc_id}",
+                    lambda npc_id=npc_id: self.ensure_all_sprites_generated(npc_id, "npc"),
+                ):
+                    pending = True
+
+        return {
+            "location_id": location_id,
+            "location_name": scene["location_name"],
+            "background_path": background_path,
+            "walkable_bounds": scene["walkable_bounds"],
+            "player": scene["player"],
+            "npcs": scene["npcs"],
+            "pending": pending,
+        }
+
+    def prewarm_connected_locations(self, location_id: str, limit: int = 3) -> None:
+        """Kick off background-image generation for connected locations.
+
+        Only backgrounds (not sprites) to keep generation costs bounded —
+        by the time the player travels, the scene image is usually ready.
+        """
+        try:
+            from src.models.location import Connection
+
+            with get_session() as db:
+                conns = db.query(Connection).filter(
+                    ((Connection.from_location_id == location_id) |
+                     ((Connection.to_location_id == location_id) & (Connection.bidirectional == True)))  # noqa: E712
+                ).limit(10).all()
+
+                neighbor_ids = []
+                for c in conns:
+                    other = c.to_location_id if c.from_location_id == location_id else c.from_location_id
+                    if other and other not in neighbor_ids:
+                        neighbor_ids.append(other)
+
+                # Only pre-warm locations without a cached background
+                to_warm = []
+                for loc_id in neighbor_ids:
+                    loc = db.get(Location, loc_id)
+                    if loc and not (loc.background_image_path and Path(loc.background_image_path).exists()):
+                        to_warm.append(loc_id)
+                    if len(to_warm) >= limit:
+                        break
+
+            for loc_id in to_warm:
+                self.spawn_generation(f"bg:{loc_id}", lambda loc_id=loc_id: self.get_location_background(loc_id))
+                logger.info(f"Pre-warming background for connected location {loc_id}")
+        except Exception as e:
+            logger.warning(f"Pre-warm of connected locations failed: {e}")
 
     async def pregenerate_location_assets(self, location_id: str) -> None:
         """Pre-generate all assets for a location (background + all NPC sprites/portraits)."""

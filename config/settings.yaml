@@ -38,7 +38,9 @@ image_generation:
   provider: "gemini"
   # Model names per provider
   openrouter_model: "google/gemini-2.5-pro-image"
-  gemini_model: "gemini-3.1-flash-image-preview"
+  # Must be an image-capable model. "gemini-3.1-flash-image-preview" does not
+  # exist (the API returns 400 for it).
+  gemini_model: "gemini-2.5-flash-image"
 
 # Display settings
 display:

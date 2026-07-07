@@ -633,35 +633,51 @@ CRITICAL: Output ONE character only. NOT a sprite sheet, NOT multiple frames sid
         if only_front:
             return paths
 
-        # 2. Generate other directions using front as reference (only if missing)
-        for direction in ["back", "left", "right"]:
+        # 2. Generate other directions using front as reference — in parallel
+        #    (each direction only depends on the front sprite)
+        import asyncio
+
+        async def _gen_direction(direction: str) -> tuple[str, str]:
             direction_path = sprites_dir / f"{character.id}_{direction}.png"
             if direction_path.exists():
                 logger.info(f"Using existing {direction} sprite for {character.name}")
-                paths[direction] = str(direction_path)
-            else:
-                logger.info(f"Generating {direction} sprite for {character.name}")
-                paths[direction] = await self.generate_character_sprite_with_reference(
-                    character, world_bible, direction, front_image
-                )
+                return direction, str(direction_path)
+            logger.info(f"Generating {direction} sprite for {character.name}")
+            path = await self.generate_character_sprite_with_reference(
+                character, world_bible, direction, front_image
+            )
+            return direction, path
 
-        # 3. Generate walk animation frames (2 frames per direction, only if missing)
+        direction_results = await asyncio.gather(
+            *(_gen_direction(d) for d in ["back", "left", "right"])
+        )
+        for direction, path in direction_results:
+            paths[direction] = path
+
+        # 3. Generate walk animation frames in parallel — each frame only
+        #    depends on its direction's idle sprite, which now exists
         if include_walk_frames:
-            for direction in ["front", "back", "left", "right"]:
-                # Read the idle sprite for this direction as reference
-                idle_path = paths[direction]
-                idle_image = Path(idle_path).read_bytes()
+            async def _gen_walk(direction: str, frame: int, idle_image: bytes) -> tuple[str, str]:
+                key = f"{direction}_walk{frame}"
+                walk_path = sprites_dir / f"{character.id}_{key}.png"
+                if walk_path.exists():
+                    logger.info(f"Using existing {key} sprite for {character.name}")
+                    return key, str(walk_path)
+                logger.info(f"Generating {key} sprite for {character.name}")
+                path = await self.generate_walk_frame(
+                    character, world_bible, direction, frame, idle_image
+                )
+                return key, path
 
+            walk_jobs = []
+            for direction in ["front", "back", "left", "right"]:
+                idle_image = Path(paths[direction]).read_bytes()
                 for frame in [1, 2]:
-                    walk_path = sprites_dir / f"{character.id}_{direction}_walk{frame}.png"
-                    if walk_path.exists():
-                        logger.info(f"Using existing {direction}_walk{frame} sprite for {character.name}")
-                        paths[f"{direction}_walk{frame}"] = str(walk_path)
-                    else:
-                        logger.info(f"Generating {direction}_walk{frame} sprite for {character.name}")
-                        paths[f"{direction}_walk{frame}"] = await self.generate_walk_frame(
-                            character, world_bible, direction, frame, idle_image
-                        )
+                    walk_jobs.append(_gen_walk(direction, frame, idle_image))
+
+            walk_results = await asyncio.gather(*walk_jobs)
+            for key, path in walk_results:
+                paths[key] = path
 
         logger.info(f"Prepared {len(paths)} sprites for {character.name}")
         return paths

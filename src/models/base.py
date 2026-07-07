@@ -7,6 +7,7 @@ from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 # Global engine and session factory
 _engine = None
 _SessionLocal = None
+_current_db_path: Path | None = None
 
 
 class Base(DeclarativeBase):
@@ -17,13 +18,26 @@ class Base(DeclarativeBase):
 def init_db(db_path: str | Path = "data/game.db") -> None:
     """Initialize the database and create all tables.
 
+    Idempotent: calling again with the same path is a no-op, so this is safe
+    to call from request handlers. A different path disposes the old engine
+    and switches.
+
     Args:
         db_path: Path to the SQLite database file.
     """
-    global _engine, _SessionLocal
+    global _engine, _SessionLocal, _current_db_path
+
+    db_path = Path(db_path)
+
+    # Already initialized for this database — nothing to do
+    if _engine is not None and _current_db_path == db_path:
+        return
+
+    # Switching databases: dispose the old engine instead of leaking it
+    if _engine is not None:
+        _engine.dispose()
 
     # Ensure directory exists
-    db_path = Path(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
 
     print(f"[init_db] Initializing database: {db_path}")
@@ -31,6 +45,7 @@ def init_db(db_path: str | Path = "data/game.db") -> None:
     # Create engine
     _engine = create_engine(f"sqlite:///{db_path}", echo=False)
     _SessionLocal = sessionmaker(bind=_engine)
+    _current_db_path = db_path
 
     # Create all tables (only creates new tables, doesn't add columns)
     Base.metadata.create_all(_engine)
@@ -94,8 +109,9 @@ def reset_engine() -> None:
 
     This must be called before init_db() when switching to a different database.
     """
-    global _engine, _SessionLocal
+    global _engine, _SessionLocal, _current_db_path
     if _engine is not None:
         _engine.dispose()
     _engine = None
     _SessionLocal = None
+    _current_db_path = None

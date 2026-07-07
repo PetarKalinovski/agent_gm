@@ -53,10 +53,15 @@ class DisplayConfig(BaseModel):
 
 
 class ImageGenerationConfig(BaseModel):
-    """Image generation configuration."""
-    provider: str = "openrouter"
+    """Image generation configuration.
+
+    Defaults match settings.yaml's provider so a missing settings file
+    doesn't silently switch providers. The gemini fallback must be an
+    IMAGE-capable model (the old default was a text model).
+    """
+    provider: str = "gemini"
     openrouter_model: str = "google/gemini-2.5-pro-image"
-    gemini_model: str = "gemini-2.5-pro-preview-06-05"
+    gemini_model: str = "gemini-2.5-flash-image"
 
 
 class Settings(BaseModel):
