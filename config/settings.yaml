@@ -42,6 +42,23 @@ image_generation:
   # exist (the API returns 400 for it).
   gemini_model: "gemini-2.5-flash-image"
 
+# Audio: music palette (Suno) + NPC dialogue TTS (ElevenLabs / local Qwen3-TTS)
+audio:
+  music_enabled: true
+  suno_key_env: "SUNO_API_KEY"
+  suno_model: "V5"
+  tts_enabled: true
+  elevenlabs_key_env: "ELEVENLABS_API_KEY"
+  elevenlabs_model: "eleven_v3"
+  # Local voice-cloning server; used when reachable and the NPC has a
+  # reference clip at data/assets/{world}/voices/refs/{npc_id}.wav
+  qwen3_tts_url: "http://localhost:8002"
+  max_tts_chars: 900
+  # voice_pool: override the default ElevenLabs premade voices here
+  # - voice_id: "..."
+  #   name: "..."
+  #   tags: "female young calm"
+
 # Display settings
 display:
   # Use rich formatting for CLI output

@@ -1199,6 +1199,7 @@
             <span class="hud-chip" id="hud-gold-chip">&#9679; <span id="hud-gold">0</span></span>
             <span class="hud-chip clickable" id="hud-quests-chip" title="Active quests">&#9873; <span id="hud-quests">0</span></span>
             <span class="hud-chip clickable" id="hud-bag-chip" title="Inventory">&#128188; <span id="hud-bag">0</span></span>
+            <span class="hud-chip clickable" id="hud-audio-chip" title="Audio"><span id="hud-audio-icon">&#128266;</span></span>
         </div>
         <div class="hud-panel hidden" id="hud-panel"></div>
         <div class="controls-hint">WASD to move | Walk to an edge to travel | Click NPCs to talk</div>
@@ -1650,6 +1651,7 @@
 
     <!-- Game Renderer -->
     <script src="/static/js/game.js"></script>
+    <script src="/static/js/audio.js"></script>
 
     <script>
         // State
@@ -1889,6 +1891,10 @@
                 game.destroy();
             }
             game = new GameRenderer('game-container');
+            // Kick off (or resume) the world's music palette + start ambient theme
+            if (window.forgeAudio) {
+                window.forgeAudio.loadManifest().then(() => window.forgeAudio.setMood('explore'));
+            }
         }
 
         // Load players for the dropdown
@@ -2548,6 +2554,7 @@
                             if (line.startsWith('data:')) {
                                 try {
                                     const payload = JSON.parse(line.slice(5).trim());
+                                    if (window.forgeAudio) window.forgeAudio.handlePlayEvent(payload);
                                     if (payload.type === 'token' && payload.data) {
                                         clearThinking(messageEl);
                                         textBuffer += payload.data;

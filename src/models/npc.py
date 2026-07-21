@@ -57,6 +57,9 @@ class NPC(Base):
     description_personality: Mapped[str] = mapped_column(Text, default="")
     voice_pattern: Mapped[str] = mapped_column(Text, default="")  # Speech style notes
 
+    # TTS voice (ElevenLabs voice ID, auto-assigned on first spoken line)
+    voice_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
     # Goals and secrets
     goals: Mapped[list] = mapped_column(JSON, default=list)
     secrets: Mapped[list] = mapped_column(JSON, default=list)

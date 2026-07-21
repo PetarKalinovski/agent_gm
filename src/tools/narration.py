@@ -156,7 +156,17 @@ def speak(
 
     _output_text(plain_text, console_output)
 
-    return {"success": True, "npc": npc_name, "tone": tone}
+    # The "event" key surfaces this through the tool-result stream as a
+    # structured SSE event (same mechanism as npc_death) — the web layer
+    # uses it to drive TTS and speaker portraits.
+    return {
+        "success": True,
+        "npc": npc_name,
+        "tone": tone,
+        "event": "speech",
+        "text": text,
+        "action": action,
+    }
 
 
 @tool
@@ -209,7 +219,14 @@ def describe_location(
 
     _output_text(plain_text, console_output)
 
-    return {"success": True, "location": name}
+    # Structured scene event for the web layer (music/atmosphere cues)
+    return {
+        "success": True,
+        "location": name,
+        "event": "scene",
+        "time_of_day": time_of_day,
+        "atmosphere": atmosphere or [],
+    }
 
 
 @tool

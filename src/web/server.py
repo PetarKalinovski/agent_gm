@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -31,6 +32,8 @@ from src.tools.narration import set_web_output_callback
 from src.web.streaming import ToolUsageTracker
 from src.agents.callback_context import set_callback_handler, clear_callback_handler
 from src.services.asset_manager import AssetManager
+from src.services.music_generator import MOODS, MusicGenerator
+from src.services.voice_generator import VoiceGenerator, compute_audio_id
 from src.services.world_tick import snapshot_clock, enforce_minimum_time_cost
 from src.services.world_simulation import maybe_advance_world
 
@@ -201,6 +204,15 @@ def build_player_state(player_id: str) -> dict[str, Any]:
         wc = db.query(WorldClock).first()
         minute = (wc.minute or 0) if wc else 0
 
+    # Tension drives the adaptive music layer client-side
+    try:
+        with get_session() as db:
+            from src.models.world_state import DMState
+            dm_state = db.query(DMState).first()
+            tension = dm_state.tension if dm_state else "low"
+    except Exception:
+        tension = "low"
+
     return {
         "location_id": location.get("id"),
         "location": location.get("name", "Unknown"),
@@ -212,6 +224,7 @@ def build_player_state(player_id: str) -> dict[str, Any]:
         "currency": currency,
         "inventory": inventory,
         "quests": quests,
+        "tension": tension,
     }
 
 
@@ -435,6 +448,11 @@ async def play_sse(request: GameRequest):
                 # Yield tool notifications
                 for notification in tool_tracker.drain_notifications():
                     logger.debug(f"Tool notification: {notification.get('type', 'unknown')}")
+                    if notification.get("type") == "speech":
+                        try:
+                            _enrich_speech_event(notification)
+                        except Exception as e:
+                            logger.warning(f"Speech TTS enrichment failed: {e}")
                     encoded = json.dumps(notification, ensure_ascii=False, default=str)
                     yield f"data: {encoded}\n\n"
 
@@ -586,6 +604,113 @@ def get_asset_manager() -> AssetManager:
     if world_name not in _asset_managers:
         _asset_managers[world_name] = AssetManager(world_name)
     return _asset_managers[world_name]
+
+
+# Audio generators, keyed by world name like the asset managers
+_voice_generators: dict[str, VoiceGenerator] = {}
+_music_generators: dict[str, MusicGenerator] = {}
+
+
+def get_voice_generator() -> VoiceGenerator:
+    world_name = _get_world_name()
+    if world_name not in _voice_generators:
+        _voice_generators[world_name] = VoiceGenerator(world_name)
+    return _voice_generators[world_name]
+
+
+def get_music_generator() -> MusicGenerator:
+    world_name = _get_world_name()
+    if world_name not in _music_generators:
+        _music_generators[world_name] = MusicGenerator(world_name)
+    return _music_generators[world_name]
+
+
+def _enrich_speech_event(notification: dict[str, Any]) -> None:
+    """Resolve the speaking NPC and kick off background TTS for the line.
+
+    Adds npc_id, audio_id, and audio_ready to the speech SSE event; the
+    client polls /api/assets/voice/{audio_id} until the clip exists.
+    """
+    settings = load_settings()
+    if not settings.audio.tts_enabled:
+        return
+
+    npc_name = (notification.get("npc_name") or "").strip()
+    text = (notification.get("text") or "").strip()
+    tone = notification.get("tone") or "normal"
+    if not npc_name or not text:
+        return
+
+    with get_session() as db:
+        npc = db.query(NPC).filter(NPC.name.ilike(npc_name)).first()
+        npc_id = npc.id if npc else None
+    if not npc_id:
+        return
+    notification["npc_id"] = npc_id
+
+    voice_gen = get_voice_generator()
+    if not voice_gen.available() or len(text) > settings.audio.max_tts_chars:
+        return
+
+    audio_id = compute_audio_id(npc_id, text, tone)
+    notification["audio_id"] = audio_id
+    if voice_gen.line_path(audio_id):
+        notification["audio_ready"] = True
+    else:
+        notification["audio_ready"] = False
+        get_asset_manager().spawn_generation(
+            f"voice:{audio_id}",
+            lambda: voice_gen.generate_line(npc_id, text, tone, audio_id),
+        )
+
+
+@app.get("/api/assets/voice/{audio_id}")
+async def get_voice_line(audio_id: str):
+    """Serve a generated TTS clip; 404 with pending status while generating."""
+    if not re.fullmatch(r"[0-9a-f]{6,40}", audio_id):
+        return JSONResponse({"error": "bad audio id"}, status_code=400)
+    path = get_voice_generator().line_path(audio_id)
+    if path:
+        media = "audio/mpeg" if path.suffix == ".mp3" else "audio/wav"
+        return FileResponse(str(path), media_type=media)
+    return JSONResponse({"status": "pending"}, status_code=404)
+
+
+@app.get("/api/assets/music/manifest")
+async def get_music_manifest():
+    """Mood -> track manifest for the active world.
+
+    Calling this also kicks off (deduplicated) background generation of
+    any missing palette tracks, so the frontend polls it while pending.
+    """
+    settings = load_settings()
+    if not settings.audio.music_enabled:
+        return {"enabled": False, "moods": {}, "generating": False}
+
+    music_gen = get_music_generator()
+    asset_manager = get_asset_manager()
+
+    generating = False
+    if music_gen.api_key and music_gen.missing_moods():
+        generating = asset_manager.spawn_generation("music:palette", music_gen.generate_palette)
+
+    moods = {}
+    for mood in MOODS:
+        path = music_gen.track_path(mood)
+        if path:
+            status = "ready"
+        elif generating:
+            status = "generating"
+        elif music_gen.api_key:
+            status = "missing"  # recent failure cooldown — retried on a later poll
+        else:
+            status = "unavailable"  # no API key configured
+        moods[mood] = {
+            "status": status,
+            "url": asset_manager.get_asset_url(str(path)) if path else None,
+        }
+
+    return {"enabled": True, "moods": moods, "generating": generating}
 
 
 @app.get("/api/assets/location/{location_id}")

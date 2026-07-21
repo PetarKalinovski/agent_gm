@@ -192,13 +192,35 @@ class ToolUsageTracker:
             if not isinstance(output_data, dict):
                 return
 
+            event = output_data.get("event")
+
             # Detect NPC death events
-            if output_data.get("event") == "npc_death":
+            if event == "npc_death":
                 self._notifications.append({
                     "type": "npc_death",
                     "npc_id": output_data.get("npc_id"),
                     "npc_name": output_data.get("npc_name"),
                     "cause": output_data.get("cause_of_death"),
+                })
+
+            # NPC dialogue (from the speak tool) — the server layer enriches
+            # this with npc_id + a TTS audio_id before it reaches the client
+            elif event == "speech":
+                self._notifications.append({
+                    "type": "speech",
+                    "npc_name": output_data.get("npc"),
+                    "text": output_data.get("text"),
+                    "tone": output_data.get("tone", "normal"),
+                    "action": output_data.get("action"),
+                })
+
+            # Scene description (from describe_location) — music/atmosphere cues
+            elif event == "scene":
+                self._notifications.append({
+                    "type": "scene",
+                    "location": output_data.get("location"),
+                    "time_of_day": output_data.get("time_of_day", "day"),
+                    "atmosphere": output_data.get("atmosphere") or [],
                 })
         except (json.JSONDecodeError, TypeError, ValueError, SyntaxError):
             pass  # Not parseable as dict, ignore

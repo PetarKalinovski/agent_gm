@@ -32,6 +32,8 @@ uv run main.py play --db path/to/game.db
 ```
 
 **Environment:** Requires `OPENROUTER_API_KEY` environment variable.
+Optional: `SUNO_API_KEY` (music palette generation), `ELEVENLABS_API_KEY`
+(NPC dialogue TTS) — audio degrades gracefully without them.
 
 ## Architecture
 
@@ -97,8 +99,22 @@ No migration tool — schema evolution uses nullable columns with `DEFAULT NULL`
 - **AssetManager** (`asset_manager.py`) - Orchestrates sprite/portrait/background generation with DB-backed caching. Entry point for all asset requests.
 - **ImageGenerator** (`image_generator.py`) - Generates sprites, portraits, and location backgrounds via LLM image APIs.
 - **ReferenceImageSearch** (`reference_search.py`) - Searches Bing Images for reference photos of known-IP characters/locations. Uses entity-ID-based caching (`references/{entity_id}.png`). Controlled by `reference_search_query` field on NPC/Location models — `NULL` means no web search.
+- **MusicGenerator** (`music_generator.py`) - Per-world mood palette (explore/tension/danger/somber/night/triumph) via the Suno API; style prompts built from the WorldBible. Cached as `music/{mood}.mp3`; `GET /api/assets/music/manifest` triggers background generation and reports status.
+- **VoiceGenerator** (`voice_generator.py`) - NPC dialogue TTS: local Qwen3-TTS voice cloning when a reference clip exists at `voices/refs/{npc_id}.wav`, else ElevenLabs using `NPC.voice_id` (auto-assigned from the `audio.voice_pool` by tag-matching NPC descriptions). Lines cached as `voices/{sha1(npc|text|tone)}.mp3`.
 
 Asset pipeline: `reference_search` finds web images → `image_generator` creates assets using reference + text description → `asset_manager` caches results to disk and DB.
+
+### Audio / cinematic event flow
+
+`speak()` and `describe_location()` return an `"event"` key in their tool-result
+dicts; `ToolUsageTracker._parse_tool_output_for_events` (same mechanism as
+`npc_death`) converts these into structured SSE events: `speech`
+(npc_name/text/tone/action, enriched server-side with npc_id + a TTS
+`audio_id`) and `scene` (location/time_of_day/atmosphere). The post-turn
+`state` event carries `tension`. The frontend `ForgeAudio` class
+(`static/js/audio.js`) maps tension/time/death to a music mood, crossfades
+palette tracks, and plays voice clips sequentially (polling
+`/api/assets/voice/{audio_id}`), ducking music during speech.
 
 ### Data Storage
 

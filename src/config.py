@@ -64,6 +64,55 @@ class ImageGenerationConfig(BaseModel):
     gemini_model: str = "gemini-2.5-flash-image"
 
 
+class VoicePoolEntry(BaseModel):
+    """One assignable TTS voice: an ElevenLabs voice ID plus descriptor tags
+    that the auto-assignment heuristic matches against NPC descriptions."""
+    voice_id: str
+    name: str = ""
+    tags: str = ""  # space-separated: gender, age, quality words
+
+
+# ElevenLabs premade voices — always available on any account. Overridable
+# via the audio.voice_pool list in settings.yaml.
+DEFAULT_VOICE_POOL = [
+    VoicePoolEntry(voice_id="21m00Tcm4TlvDq8ikWAM", name="Rachel", tags="female young calm gentle"),
+    VoicePoolEntry(voice_id="AZnzlk1XvdvUeBnXmlld", name="Domi", tags="female young strong confident"),
+    VoicePoolEntry(voice_id="EXAVITQu4vr4xnSDxMaL", name="Bella", tags="female young soft warm"),
+    VoicePoolEntry(voice_id="MF3mGyEYCl7XYWbV9V6O", name="Elli", tags="female young emotional bright"),
+    VoicePoolEntry(voice_id="XB0fDUnXU5powFXDhCwa", name="Charlotte", tags="female middle smooth sly"),
+    VoicePoolEntry(voice_id="pFZP5JQG7iQjIQuC4Bku", name="Lily", tags="female middle warm noble refined"),
+    VoicePoolEntry(voice_id="ThT5KcBeYPX3keUQqHPh", name="Dorothy", tags="female old pleasant kindly"),
+    VoicePoolEntry(voice_id="pNInz6obpgDQGcFmaJgB", name="Adam", tags="male middle deep authoritative"),
+    VoicePoolEntry(voice_id="ErXwobaYiN019PkySvjV", name="Antoni", tags="male young friendly warm"),
+    VoicePoolEntry(voice_id="TxGEqnHWrfWFTfGW9XjX", name="Josh", tags="male young deep serious"),
+    VoicePoolEntry(voice_id="VR6AewLTigWG4xSOukaG", name="Arnold", tags="male middle crisp gruff strong"),
+    VoicePoolEntry(voice_id="yoZ06aMxZJJ28mfd3POQ", name="Sam", tags="male young raspy rough"),
+    VoicePoolEntry(voice_id="JBFqnCBsd6RMkjVDRZzb", name="George", tags="male old warm noble refined"),
+    VoicePoolEntry(voice_id="N2lVS1w4EtoT3dr4eOWO", name="Callum", tags="male middle intense menacing"),
+    VoicePoolEntry(voice_id="onwK4e9ZLuTAKqWW03F9", name="Daniel", tags="male old deep formal stern"),
+    VoicePoolEntry(voice_id="2EiwWnXFnvU5JabPnv8n", name="Clyde", tags="male old gruff veteran rough"),
+]
+
+
+class AudioConfig(BaseModel):
+    """Music generation (Suno) and TTS (ElevenLabs / local Qwen3-TTS)."""
+    # Music palette — one looping track per mood, generated once per world
+    music_enabled: bool = True
+    suno_key_env: str = "SUNO_API_KEY"
+    suno_model: str = "V5"
+
+    # NPC dialogue TTS
+    tts_enabled: bool = True
+    elevenlabs_key_env: str = "ELEVENLABS_API_KEY"
+    elevenlabs_model: str = "eleven_v3"
+    # Local voice-cloning server (used when reachable AND the NPC has a
+    # reference clip at data/assets/{world}/voices/refs/{npc_id}.wav|.mp3)
+    qwen3_tts_url: str = "http://localhost:8002"
+    # Skip TTS for lines longer than this (cost guard)
+    max_tts_chars: int = 900
+    voice_pool: list[VoicePoolEntry] = Field(default_factory=lambda: list(DEFAULT_VOICE_POOL))
+
+
 class Settings(BaseModel):
     """Full application settings."""
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)
@@ -71,6 +120,7 @@ class Settings(BaseModel):
     api: ApiConfig = Field(default_factory=ApiConfig)
     display: DisplayConfig = Field(default_factory=DisplayConfig)
     image_generation: ImageGenerationConfig = Field(default_factory=ImageGenerationConfig)
+    audio: AudioConfig = Field(default_factory=AudioConfig)
 
 
 # Global config instances
