@@ -62,6 +62,9 @@ class ImageGenerationConfig(BaseModel):
     provider: str = "gemini"
     openrouter_model: str = "google/gemini-2.5-pro-image"
     gemini_model: str = "gemini-2.5-flash-image"
+    # Text+vision model used for scene understanding (obstacle detection).
+    # "gemini-2.5-flash" is sunset (404 for new users); 3.5 works.
+    vision_model: str = "gemini-3.5-flash"
 
 
 class VoicePoolEntry(BaseModel):

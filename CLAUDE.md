@@ -104,6 +104,27 @@ No migration tool — schema evolution uses nullable columns with `DEFAULT NULL`
 
 Asset pipeline: `reference_search` finds web images → `image_generator` creates assets using reference + text description → `asset_manager` caches results to disk and DB.
 
+### Scene collision & canvas liveliness
+
+- **Collision**: `Location.obstacles` holds polygons (normalized 0-100).
+  Auto-detected from the background image at generation time via the vision
+  model (`ImageGenerator.detect_obstacles`; boxes are reduced to bottom-slice
+  footprints since characters walk behind the upper part of objects in the
+  3/4 view). Re-runnable via `POST /api/world/locations/{id}/detect-obstacles`.
+  In-game editor: Ctrl+E then C — click vertices, Enter closes, right-click
+  deletes, G auto-detects. Frontend blocks movement by point-in-polygon.
+  NOTE: `gemini-2.5-flash` is sunset (404); `vision_model` is `gemini-3.5-flash`.
+- **Ambient NPC wandering** (client-side only, not persisted): alive NPCs
+  stroll between walkable points near their DB position, pause near the
+  player; drag-editing an NPC rebases its wander home.
+- **Day/night tint**: the frontend tints the world container from the state
+  event's `time_of_day` (evening amber, night blue, etc.).
+- **Combat gray-box prototype**: Ctrl+K spawns a test enemy (no art, no DM
+  integration). Space = dodge-roll with i-frames, J = melee arc. Enemy runs a
+  chase → telegraph → lunge → recover state machine; hitstop, knockback,
+  screenshake, room exits lock during combat. This is the feel prototype for
+  in-world combat — archetype/skin system and DM result reporting come later.
+
 ### Audio / cinematic event flow
 
 `speak()` and `describe_location()` return an `"event"` key in their tool-result

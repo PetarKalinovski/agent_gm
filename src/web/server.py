@@ -751,6 +751,7 @@ async def get_location_assets(location_id: str, player_id: str):
             "location_name": assets["location_name"],
             "background_url": _url(assets["background_path"]),
             "walkable_bounds": assets["walkable_bounds"],
+            "obstacles": assets.get("obstacles", []),
             "exits": exits,
             "pending": assets.get("pending", False),
             "player": {
@@ -863,6 +864,37 @@ async def move_player(request: MoveRequest):
         db.commit()
 
     return {"success": True, "x": request.x, "y": request.y, "direction": request.direction}
+
+
+@app.post("/api/world/locations/{location_id}/detect-obstacles")
+async def detect_location_obstacles(location_id: str):
+    """Run obstacle detection on a location's existing background image.
+
+    Used by the collision editor's auto-detect and for upgrading locations
+    generated before obstacle detection existed. Overwrites stored polygons.
+    """
+    init_db(get_active_db_path())
+    with get_session() as db:
+        loc = db.query(Location).filter(Location.id == location_id).first()
+        if not loc:
+            return JSONResponse({"error": "Location not found"}, status_code=404)
+        bg_path = loc.background_image_path
+    if not bg_path or not Path(bg_path).exists():
+        return JSONResponse({"error": "No background image yet"}, status_code=409)
+
+    asset_manager = get_asset_manager()
+    try:
+        obstacles = await asset_manager.image_gen.detect_obstacles(Path(bg_path).read_bytes())
+    except Exception as e:
+        logger.error(f"Obstacle detection failed: {e}", exc_info=True)
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+    with get_session() as db:
+        loc = db.query(Location).filter(Location.id == location_id).first()
+        if loc:
+            loc.obstacles = obstacles
+            db.commit()
+    return {"success": True, "obstacles": obstacles}
 
 
 @app.post("/api/assets/pregenerate/{location_id}")
@@ -1015,6 +1047,7 @@ class LocationUpdate(BaseModel):
     controlling_faction_id: str | None = None
     visited: bool | None = None
     discovered: bool | None = None
+    obstacles: list | None = None  # collision polygons, normalized 0-100
     reference_search_query: str | None = None
 
 
@@ -1507,6 +1540,8 @@ async def update_location(location_id: str, update: LocationUpdate):
             loc.visited = update.visited
         if update.discovered is not None:
             loc.discovered = update.discovered
+        if update.obstacles is not None:
+            loc.obstacles = update.obstacles
         if update.reference_search_query is not None:
             old_query = loc.reference_search_query
             loc.reference_search_query = update.reference_search_query if update.reference_search_query != "" else None

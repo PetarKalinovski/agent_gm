@@ -118,11 +118,20 @@ class AssetManager:
         ref = await self.ref_search.find_reference(location_id, ref_query)
         path = await self.image_gen.generate_location_background(location, world_bible, reference_image=ref)
 
+        # Detect collision obstacles in the fresh background (best-effort)
+        obstacles = None
+        try:
+            obstacles = await self.image_gen.detect_obstacles(Path(path).read_bytes())
+        except Exception as e:
+            logger.warning(f"Obstacle detection failed for {location_id}: {e}")
+
         # Cache path in database (fresh, short-lived session)
         with get_session() as db:
             fresh = db.get(Location, location_id)
             if fresh:
                 fresh.background_image_path = path
+                if obstacles is not None and fresh.obstacles is None:
+                    fresh.obstacles = obstacles
                 db.commit()
 
         return {
@@ -398,6 +407,7 @@ class AssetManager:
                 "location_name": location.name,
                 "background_path_cached": location.background_image_path,
                 "walkable_bounds": location.walkable_bounds,
+                "obstacles": location.obstacles or [],
                 "player": {
                     "id": player_id,
                     "name": player.name,
@@ -472,6 +482,7 @@ class AssetManager:
             "location_name": scene["location_name"],
             "background_path": background_path,
             "walkable_bounds": scene["walkable_bounds"],
+            "obstacles": scene["obstacles"],
             "player": scene["player"],
             "npcs": scene["npcs"],
             "pending": pending,

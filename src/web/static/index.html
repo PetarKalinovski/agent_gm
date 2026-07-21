@@ -2029,6 +2029,9 @@
             if (!state) return;
             lastPlayerState = state;
 
+            // Day/night scene tint follows the game clock
+            if (game && game.setTimeOfDay) game.setTimeOfDay(state.time_of_day);
+
             gameLocation.textContent = state.location;
             gameTime.textContent = ` - Day ${state.day}, ${String(state.hour).padStart(2, '0')}:${String(state.minute || 0).padStart(2, '0')}`;
             chatLocation.textContent = state.location;
@@ -2383,10 +2386,29 @@
                 if (!badge) {
                     badge = document.createElement('div');
                     badge.id = 'editor-mode-badge';
-                    badge.textContent = 'EDITOR MODE — right-click an NPC to move/scale, Ctrl+E to exit';
+                    badge.textContent = 'EDITOR MODE — right-click NPC: move/scale · C: collision editor · Ctrl+E: exit';
                     badge.style.cssText =
                         'position:fixed;top:10px;left:50%;transform:translateX(-50%);z-index:1001;' +
                         'background:#b45309;color:#fff;padding:.35rem .8rem;border-radius:999px;' +
+                        'font-size:.8rem;font-weight:600;box-shadow:0 2px 12px rgba(0,0,0,.4);';
+                    document.body.appendChild(badge);
+                }
+            } else if (badge) {
+                badge.remove();
+            }
+        });
+
+        // Collision editor indicator (C inside editor mode)
+        window.addEventListener('collision-mode-changed', (e) => {
+            let badge = document.getElementById('collision-mode-badge');
+            if (e.detail.enabled) {
+                if (!badge) {
+                    badge = document.createElement('div');
+                    badge.id = 'collision-mode-badge';
+                    badge.textContent = 'COLLISION — click: vertices · Enter: close · right-click: delete · G: auto-detect · Esc: cancel';
+                    badge.style.cssText =
+                        'position:fixed;top:48px;left:50%;transform:translateX(-50%);z-index:1001;' +
+                        'background:#b91c1c;color:#fff;padding:.35rem .8rem;border-radius:999px;' +
                         'font-size:.8rem;font-weight:600;box-shadow:0 2px 12px rgba(0,0,0,.4);';
                     document.body.appendChild(badge);
                 }

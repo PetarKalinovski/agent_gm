@@ -20,6 +20,41 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+# Footprint = bottom slice of a detected box that actually blocks walking
+FOOTPRINT_TOP_FRACTION = 0.55   # skip the upper 55% of each box
+MIN_OBSTACLE_AREA = 0.0015      # ignore boxes under 0.15% of the scene
+MAX_OBSTACLES = 12
+
+
+def boxes_to_footprint_polygons(boxes: list) -> list[list[list[float]]]:
+    """Convert Gemini box_2d detections ([ymin, xmin, ymax, xmax], 0-1000)
+    into footprint rectangles as polygons in normalized 0-100 coordinates."""
+    polygons: list[list[list[float]]] = []
+    for box in boxes if isinstance(boxes, list) else []:
+        coords = box.get("box_2d") if isinstance(box, dict) else None
+        if not (isinstance(coords, list) and len(coords) == 4):
+            continue
+        try:
+            ymin, xmin, ymax, xmax = (float(c) / 10.0 for c in coords)  # -> 0-100
+        except (TypeError, ValueError):
+            continue
+        if xmax <= xmin or ymax <= ymin:
+            continue
+        if ((xmax - xmin) / 100.0) * ((ymax - ymin) / 100.0) < MIN_OBSTACLE_AREA:
+            continue
+        foot_top = ymin + (ymax - ymin) * FOOTPRINT_TOP_FRACTION
+        clamp = lambda v: max(0.0, min(100.0, round(v, 2)))
+        polygons.append([
+            [clamp(xmin), clamp(foot_top)],
+            [clamp(xmax), clamp(foot_top)],
+            [clamp(xmax), clamp(ymax)],
+            [clamp(xmin), clamp(ymax)],
+        ])
+        if len(polygons) >= MAX_OBSTACLES:
+            break
+    return polygons
+
+
 class ImageGenerator:
     """Generate game assets via Gemini image generation API (OpenRouter or direct)."""
 
@@ -173,6 +208,52 @@ class ImageGenerator:
                     return base64.b64decode(part["inlineData"]["data"])
 
         raise ValueError("No image returned from Gemini API")
+
+    async def detect_obstacles(self, background_image: bytes) -> list[list[list[float]]]:
+        """Detect solid obstacles in a scene background via Gemini vision.
+
+        Returns a list of polygons in normalized 0-100 scene coordinates.
+        Each detected bounding box is reduced to its FOOTPRINT (the bottom
+        slice) — in the 3/4 view, characters walk behind the upper part of
+        an object, so only its base should block movement.
+        """
+        settings = load_settings()
+        model = settings.image_generation.vision_model
+        api_key = os.getenv("GEMINI_API_KEY")
+        if not api_key:
+            logger.info("No GEMINI_API_KEY — skipping obstacle detection")
+            return []
+
+        prompt = """This is a scene background from a 2D RPG, viewed from a three-quarter top-down angle. Characters walk on the floor/ground.
+
+Identify SOLID OBSTACLES a walking character could not pass through: furniture, tables, counters, market stalls, wells, fountains, statues, trees, boulders, crates, carts, water pools, fire pits.
+
+Do NOT include: the open floor or ground itself, paths, rugs, doorways, shadows, wall surfaces at the edges of the scene, or anything a person could simply step over.
+
+Return a JSON array (no other text): [{"label": "<short name>", "box_2d": [ymin, xmin, ymax, xmax]}] with coordinates in the 0-1000 range. Return at most 12 boxes, largest and most important obstacles first. Return [] if there are none."""
+
+        payload = {
+            "contents": [{"parts": [
+                {"inline_data": {"mime_type": "image/png", "data": base64.b64encode(background_image).decode()}},
+                {"text": prompt},
+            ]}],
+            "generationConfig": {"responseMimeType": "application/json"},
+        }
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                response = await client.post(url, headers={"Content-Type": "application/json"}, json=payload)
+                response.raise_for_status()
+                result = response.json()
+            text = result["candidates"][0]["content"]["parts"][0]["text"]
+            import json as _json
+            boxes = _json.loads(text)
+        except Exception as e:
+            logger.warning(f"Obstacle detection failed: {e}")
+            return []
+
+        return boxes_to_footprint_polygons(boxes)
 
     def _save_image(self, image_data: bytes, relative_path: str) -> str:
         """Save image to assets directory. Returns absolute path."""
