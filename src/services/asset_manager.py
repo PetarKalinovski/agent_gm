@@ -137,7 +137,7 @@ class AssetManager:
             if not (self.assets_dir / "sprites" / f"{character_id}_{direction}.png").exists():
                 return False
             if include_walk:
-                for frame in [1, 2]:
+                for frame in range(1, ImageGenerator.WALK_FRAME_COUNT + 1):
                     if not (self.assets_dir / "sprites" / f"{character_id}_{direction}_walk{frame}.png").exists():
                         return False
         return True
@@ -197,7 +197,7 @@ class AssetManager:
             for direction in ["front", "back", "left", "right"]:
                 paths[direction] = str(self.assets_dir / "sprites" / f"{character_id}_{direction}.png")
                 if include_walk:
-                    for frame in [1, 2]:
+                    for frame in range(1, ImageGenerator.WALK_FRAME_COUNT + 1):
                         paths[f"{direction}_walk{frame}"] = str(
                             self.assets_dir / "sprites" / f"{character_id}_{direction}_walk{frame}.png"
                         )

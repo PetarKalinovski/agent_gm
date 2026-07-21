@@ -534,65 +534,186 @@ CRITICAL: Output ONE character only. NOT a sprite sheet, NOT multiple views side
         path = self._save_image(image_data, f"sprites/{character.id}_{direction}.png")
         return path
 
-    async def generate_walk_frame(
+    # One Gemini call per direction produces the whole cycle as a filmstrip.
+    # Frames generated together stay consistent (style, scale, proportions);
+    # frames generated one-by-one visibly morph between poses.
+    WALK_FRAME_COUNT = 6
+
+    _WALK_CHOREOGRAPHY = {
+        "left": """Frame 1 — CONTACT: legs wide apart in a full stride, front (left) leg extended
+  forward with heel touching down, back leg stretched behind with heel lifted.
+  Left arm swung back, right arm swung forward.
+Frame 2 — DOWN: weight settles onto the front leg, knees slightly bent, body lowest.
+Frame 3 — PASSING: back leg swings past the planted leg, body at its highest,
+  arms passing by the sides.
+Frame 4 — CONTACT (mirror of frame 1): right leg extended forward, left leg
+  stretched behind, arms swapped.
+Frame 5 — DOWN (mirror of frame 2).
+Frame 6 — PASSING (mirror of frame 3).
+Every frame is a strict FULL SIDE PROFILE view facing left (never three-quarter view).""",
+        "front": """Frame 1 — CONTACT: left leg stepping forward toward the viewer (left knee bent
+  forward, foot slightly larger due to perspective), right leg back; right arm
+  swings forward, left arm back.
+Frame 2 — DOWN: weight onto the left leg, body drops slightly lower.
+Frame 3 — PASSING: legs close together, body at its highest point.
+Frame 4 — CONTACT (mirror): right leg stepping forward, left leg back, arms swapped.
+Frame 5 — DOWN (mirror of frame 2).
+Frame 6 — PASSING (mirror of frame 3).
+Add a subtle left-right body sway between contact frames, as in a natural front-view
+walk. Every frame the character faces the viewer directly.""",
+        "back": """Frame 1 — CONTACT: left leg stepping away from the viewer, right leg trailing;
+  right arm swings forward (away), left arm back.
+Frame 2 — DOWN: weight onto the left leg, body drops slightly lower.
+Frame 3 — PASSING: legs close together, body at its highest point.
+Frame 4 — CONTACT (mirror): right leg stepping away, left leg trailing, arms swapped.
+Frame 5 — DOWN (mirror of frame 2).
+Frame 6 — PASSING (mirror of frame 3).
+Add a subtle left-right body sway between contact frames. Every frame shows the
+character from directly behind, walking away from the viewer.""",
+    }
+
+    async def generate_walk_cycle(
         self,
         character: "NPC | Player",
         world_bible: "WorldBible",
         direction: str,
-        frame: int,
         reference_image: bytes
-    ) -> str:
-        """Generate a single walk animation frame.
+    ) -> dict[str, str]:
+        """Generate a full walk cycle for one direction from a single API call.
 
-        Args:
-            character: The character
-            world_bible: World configuration
-            direction: Facing direction
-            frame: Frame number (1 = left foot forward, 2 = right foot forward)
-            reference_image: The idle sprite as reference
+        The model draws a 6-frame filmstrip which is sliced, background-removed,
+        and normalized so every frame renders at the same on-screen size and
+        baseline as the idle sprite.
 
         Returns:
-            Path to saved frame
+            Dict mapping "{direction}_walk{n}" to saved file path.
         """
         visual_style = world_bible.visual_style if world_bible else "fantasy RPG game art"
-        name = character.name
+        n = self.WALK_FRAME_COUNT
+        choreography = self._WALK_CHOREOGRAPHY.get(direction, self._WALK_CHOREOGRAPHY["left"])
 
-        direction_desc = {
-            "front": "facing the viewer",
-            "back": "facing away from viewer",
-            "left": "facing left (profile)",
-            "right": "facing right (profile)"
-        }
+        prompt = f"""The attached image shows the character "{character.name}" standing idle, from a 2D RPG.
+Draw a sprite sheet: this EXACT character performing a {n}-frame walking animation.
 
-        foot_desc = "left foot forward" if frame == 1 else "right foot forward"
+Format: a single horizontal filmstrip of {n} frames. Divide the image into {n} equal
+vertical columns; place exactly one full-body pose centered in each column, with
+clear empty space between poses (poses never touch the image edges).
 
-        prompt = f"""The attached image shows a character standing idle. Draw this SAME character in a walking pose with {foot_desc}, mid-stride.
+The walk must look energetic and clearly readable, like classic game animation:
+{choreography}
+The cycle loops seamlessly back to frame 1.
 
-Character: {name}
-Direction: {direction_desc.get(direction, direction)}
+Every frame: identical character with clothing, colors, face and proportions matching
+the reference image EXACTLY (do not redesign or simplify the outfit), identical art
+style ({visual_style}), identical scale, feet on one shared ground line, pronounced
+opposite arm swing with relaxed open hands (never clenched fists).
+The ENTIRE canvas must be one continuous solid white background from edge to edge —
+no black areas, no cards, no panels, no grid lines, no frame borders, no numbers,
+no text, no shadows."""
 
-CRITICAL: Output ONE character only. NOT a sprite sheet, NOT multiple frames side by side. Just ONE figure, centered, in a walking pose.
+        logger.info(f"Generating {n}-frame walk cycle ({direction}) for {character.name}")
 
-- Same character, same art style, clothing, colors, proportions as the reference
-- {foot_desc} — show the character mid-step
-- {direction_desc.get(direction, direction)}
-- Full body visible from head to feet, large and centered in the image
-- Solid bright green background (#00FF00) for chroma key removal
-- No other objects, no shadows, no text, no duplicates
-- Style: {visual_style}"""
+        strip_data = await self._call_api(prompt, aspect_ratio="21:9", reference_image=reference_image)
+        cells = self._slice_walk_strip(strip_data, n)
+        frames = self._normalize_walk_frames(cells, reference_image)
 
-        logger.info(f"Generating walk frame {frame} ({direction}) for {name}")
+        paths: dict[str, str] = {}
+        for i, frame_img in enumerate(frames, start=1):
+            buf = io.BytesIO()
+            frame_img.save(buf, format="PNG")
+            key = f"{direction}_walk{i}"
+            paths[key] = self._save_image(buf.getvalue(), f"sprites/{character.id}_{key}.png")
+        return paths
 
-        image_data = await self._call_api(
-            prompt,
-            aspect_ratio="1:1",
-            image_size="1K",
-            reference_image=reference_image
-        )
+    def _slice_walk_strip(self, strip_data: bytes, n: int) -> list["Image.Image"]:
+        """Slice a filmstrip into n cells, immune to Gemini's decorations.
 
-        image_data = self._remove_background(image_data)
-        path = self._save_image(image_data, f"sprites/{character.id}_{direction}_walk{frame}.png")
-        return path
+        The model spaces poses evenly but unpredictably adds grid lines,
+        ground lines, or letterbox cards. Mask = not-near-white, then clear
+        any row/column masked across (almost) its full span — that kills
+        lines and borders while keeping the character, which never spans a
+        full cell. Cells are inset 2% so neighboring-cell slivers don't leak.
+        """
+        import numpy as np
+
+        img = Image.open(io.BytesIO(strip_data)).convert("RGB")
+        w, h = img.size
+        cell_w = w // n
+        inset = max(2, cell_w // 50)
+        cells: list[Image.Image] = []
+        for i in range(n):
+            cell = img.crop((i * cell_w + inset, 0, (i + 1) * cell_w - inset, h))
+            arr = np.asarray(cell.convert("L"))
+            mask = arr <= 240
+            mask[mask.mean(axis=1) > 0.8, :] = False
+            mask[:, mask.mean(axis=0) > 0.8] = False
+            ys, xs = np.nonzero(mask)
+            if len(xs) == 0:
+                raise ValueError(f"Walk strip cell {i + 1} came back empty")
+            pad = 6
+            box = (
+                max(0, int(xs.min()) - pad), max(0, int(ys.min()) - pad),
+                min(cell.width, int(xs.max()) + pad), min(cell.height, int(ys.max()) + pad),
+            )
+            cells.append(cell.crop(box))
+        return cells
+
+    def _normalize_walk_frames(
+        self, cells: list["Image.Image"], idle_sprite: bytes
+    ) -> list["Image.Image"]:
+        """Background-remove each cell and match the idle sprite's framing.
+
+        One uniform scale per strip (preserves the cycle's natural bob) and a
+        shared canvas whose character-height ratio and baseline fraction match
+        the idle sprite — so the frontend's height-based scaling renders walk
+        frames at exactly the idle character's size, feet planted at the same
+        line, with no per-frame upscaling blur.
+        """
+        idle = Image.open(io.BytesIO(idle_sprite)).convert("RGBA")
+        idle_bbox = idle.getchannel("A").getbbox() or (0, 0, idle.width, idle.height)
+        idle_ratio = (idle_bbox[3] - idle_bbox[1]) / idle.height
+        idle_baseline_frac = idle_bbox[3] / idle.height
+
+        transparent: list[Image.Image] = []
+        for cell in cells:
+            buf = io.BytesIO()
+            cell.save(buf, format="PNG")
+            cut = Image.open(io.BytesIO(self._remove_background(buf.getvalue()))).convert("RGBA")
+            bbox = cut.getchannel("A").getbbox()
+            transparent.append(cut.crop(bbox) if bbox else cut)
+
+        max_char_h = max(f.height for f in transparent)
+        canvas_h = max(1, round(max_char_h / idle_ratio))
+        canvas_w = canvas_h  # square, like idle sprites
+        baseline_y = round(canvas_h * idle_baseline_frac)
+
+        frames: list[Image.Image] = []
+        for f in transparent:
+            canvas = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
+            canvas.paste(f, ((canvas_w - f.width) // 2, baseline_y - f.height), f)
+            frames.append(canvas)
+        return frames
+
+    def mirror_walk_cycle(self, character_id: str, source_direction: str, target_direction: str) -> dict[str, str]:
+        """Create walk frames for target_direction by mirroring source frames.
+
+        Left/right cycles are mirror images — one API call covers both, and
+        the mirrored pair is guaranteed to animate symmetrically.
+        """
+        from PIL import ImageOps
+
+        paths: dict[str, str] = {}
+        sprites_dir = self.assets_dir / "sprites"
+        for i in range(1, self.WALK_FRAME_COUNT + 1):
+            src = sprites_dir / f"{character_id}_{source_direction}_walk{i}.png"
+            if not src.exists():
+                continue
+            mirrored = ImageOps.mirror(Image.open(src).convert("RGBA"))
+            key = f"{target_direction}_walk{i}"
+            dest = sprites_dir / f"{character_id}_{key}.png"
+            mirrored.save(dest)
+            paths[key] = str(dest)
+        return paths
 
     async def generate_all_sprites_for_character(
         self,
@@ -654,30 +775,41 @@ CRITICAL: Output ONE character only. NOT a sprite sheet, NOT multiple frames sid
         for direction, path in direction_results:
             paths[direction] = path
 
-        # 3. Generate walk animation frames in parallel — each frame only
-        #    depends on its direction's idle sprite, which now exists
+        # 3. Generate walk cycles — one filmstrip call per direction (frames
+        #    drawn together stay consistent; right is mirrored from left)
         if include_walk_frames:
-            async def _gen_walk(direction: str, frame: int, idle_image: bytes) -> tuple[str, str]:
-                key = f"{direction}_walk{frame}"
-                walk_path = sprites_dir / f"{character.id}_{key}.png"
-                if walk_path.exists():
-                    logger.info(f"Using existing {key} sprite for {character.name}")
-                    return key, str(walk_path)
-                logger.info(f"Generating {key} sprite for {character.name}")
-                path = await self.generate_walk_frame(
-                    character, world_bible, direction, frame, idle_image
+            def _cycle_complete(direction: str) -> bool:
+                return all(
+                    (sprites_dir / f"{character.id}_{direction}_walk{f}.png").exists()
+                    for f in range(1, self.WALK_FRAME_COUNT + 1)
                 )
-                return key, path
+
+            async def _gen_cycle(direction: str, idle_image: bytes) -> dict[str, str]:
+                if _cycle_complete(direction):
+                    logger.info(f"Using existing {direction} walk cycle for {character.name}")
+                    return {
+                        f"{direction}_walk{f}": str(sprites_dir / f"{character.id}_{direction}_walk{f}.png")
+                        for f in range(1, self.WALK_FRAME_COUNT + 1)
+                    }
+                return await self.generate_walk_cycle(character, world_bible, direction, idle_image)
 
             walk_jobs = []
-            for direction in ["front", "back", "left", "right"]:
+            for direction in ["front", "back", "left"]:
                 idle_image = Path(paths[direction]).read_bytes()
-                for frame in [1, 2]:
-                    walk_jobs.append(_gen_walk(direction, frame, idle_image))
+                walk_jobs.append(_gen_cycle(direction, idle_image))
 
-            walk_results = await asyncio.gather(*walk_jobs)
-            for key, path in walk_results:
-                paths[key] = path
+            cycle_results = await asyncio.gather(*walk_jobs)
+            for cycle_paths in cycle_results:
+                paths.update(cycle_paths)
+
+            # Right cycle: mirror of left — free, and guaranteed symmetric
+            if _cycle_complete("right"):
+                paths.update({
+                    f"right_walk{f}": str(sprites_dir / f"{character.id}_right_walk{f}.png")
+                    for f in range(1, self.WALK_FRAME_COUNT + 1)
+                })
+            else:
+                paths.update(self.mirror_walk_cycle(character.id, "left", "right"))
 
         logger.info(f"Prepared {len(paths)} sprites for {character.name}")
         return paths

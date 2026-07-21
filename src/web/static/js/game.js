@@ -49,10 +49,17 @@ class GameRenderer {
         this.exitPromptCooldown = 0;   // don't re-prompt immediately after dismissal
 
         // Animation settings
-        this.animationFrame = 0; // Current frame: 0=idle, 1=walk1, 2=idle, 3=walk2
+        this.walkFrameCount = 6;   // full generated cycle; legacy sets have 2
+        this.animationFrame = 0;   // free-running counter, wrapped per-cycle at lookup
         this.animationTimer = 0;
-        this.animationSpeed = 150; // ms per frame
         this.isMoving = false;
+
+        // Game-feel (juice) state
+        this.particles = [];               // live dust puffs
+        this.walkPhase = 0;                // drives bob/lean oscillation
+        this.bobOffset = 0;                // current vertical bob (px, <= 0)
+        this.leanAngle = 0;                // current sprite lean (radians)
+        this.lookAhead = { x: 0, y: 0 };   // camera leads the movement direction
 
         // Initialize
         this.init();
@@ -94,12 +101,17 @@ class GameRenderer {
         // Player and NPCs share one z-sorted layer so depth (y position)
         // decides who renders in front.
         this.backgroundLayer = new PIXI.Container();
+        // Shadows and dust render above the background but below every entity
+        this.shadowLayer = new PIXI.Container();
+        this.particleLayer = new PIXI.Container();
         this.entityLayer = new PIXI.Container();
         this.entityLayer.sortableChildren = true;
         this.npcLayer = this.entityLayer;
         this.playerLayer = this.entityLayer;
 
         this.worldContainer.addChild(this.backgroundLayer);
+        this.worldContainer.addChild(this.shadowLayer);
+        this.worldContainer.addChild(this.particleLayer);
         this.worldContainer.addChild(this.entityLayer);
 
         // UI layer (doesn't move with camera)
@@ -179,6 +191,9 @@ class GameRenderer {
         // 1. CLEAR PREVIOUS SCENE IMMEDIATELY
         this.backgroundLayer.removeChildren();
         this.npcLayer.removeChildren();
+        this.shadowLayer.removeChildren();
+        this.particleLayer.removeChildren();
+        this.particles = [];
         // Keep the player, but maybe hide them or move them to center
         if (this.player) {
             this.player.normalizedX = 50;
@@ -291,10 +306,33 @@ class GameRenderer {
         }
     }
 
+    /** Soft elliptical ground shadow — grounds sprites in the painted scene. */
+    _makeShadow() {
+        const g = new PIXI.Graphics();
+        g.ellipse(0, 0, 30, 9);
+        g.fill({ color: 0x000000, alpha: 0.28 });
+        return g;
+    }
+
+    /** Size and place a shadow under a sprite (call after scale/texture changes). */
+    _fitShadow(shadow, sprite, groundY = null) {
+        if (!shadow || !sprite) return;
+        const w = sprite.width;
+        if (w > 2) {
+            shadow.width = w * 0.58;
+            shadow.height = w * 0.17;
+        }
+        shadow.x = sprite.x;
+        shadow.y = (groundY !== null ? groundY : sprite.y) + 2;
+    }
+
     async loadPlayer(playerData) {
         if (!this.playerLayer) return;
         if (this.player && this.player.sprite) {
             this.entityLayer.removeChild(this.player.sprite);
+        }
+        if (this.player && this.player.shadow) {
+            this.shadowLayer.removeChild(this.player.shadow);
         }
 
         console.log("Setting up player sprite structure...");
@@ -318,6 +356,9 @@ class GameRenderer {
         s.anchor.set(0.5, 1);
         s.tint = 0x6366f1; // Purple (loading indicator)
         this.playerLayer.addChild(s);
+
+        this.player.shadow = this._makeShadow();
+        this.shadowLayer.addChild(this.player.shadow);
 
         // Initial positioning
         this.updatePlayerPosition();
@@ -404,7 +445,13 @@ class GameRenderer {
                 }
 
                 this.npcLayer.addChild(sprite);
-                this.npcs[npcData.id] = { sprite: sprite, data: npcData, status: npcStatus, baseScale: baseScale };
+
+                const shadow = this._makeShadow();
+                if (npcStatus === 'dead') shadow.alpha = 0.3;
+                this.shadowLayer.addChild(shadow);
+                this._fitShadow(shadow, sprite);
+
+                this.npcs[npcData.id] = { sprite: sprite, data: npcData, status: npcStatus, baseScale: baseScale, shadow: shadow };
 
             } catch (error) { console.error("NPC Load Error", error); }
         }
@@ -437,8 +484,9 @@ class GameRenderer {
             const fallDistance = sprite.height * 0.3;
             sprite.y = originalY + (fallDistance * progress);
 
-            // Fade to 50% alpha
+            // Fade to 50% alpha; shadow fades with the body
             sprite.alpha = 1 - (0.5 * progress);
+            if (npc.shadow) npc.shadow.alpha = 1 - (0.7 * progress);
 
             if (progress < 1) {
                 requestAnimationFrame(animate);
@@ -520,11 +568,17 @@ class GameRenderer {
                 this.updatePlayerPosition();
                 this.positionDirty = true;
 
-                // Handle Animation Frames
+                // Advance the walk cycle (length varies: 6 generated frames,
+                // or the legacy idle-interleaved 4-step shuffle)
+                const anim = this._getWalkCycle();
                 this.animationTimer += deltaTime;
-                if (this.animationTimer >= this.animationSpeed) {
+                if (this.animationTimer >= anim.speed) {
                     this.animationTimer = 0;
-                    this.animationFrame = (this.animationFrame + 1) % 4;
+                    this.animationFrame++;
+                    // Footstep on contact frames: dust + shadow pulse
+                    if (anim.stepEvery > 0 && this.animationFrame % anim.stepEvery === 0) {
+                        this._spawnDust();
+                    }
                 }
                 this.syncPlayerPosition();
             } else {
@@ -542,20 +596,131 @@ class GameRenderer {
             }
         } else {
             this.animationFrame = 0; // Return to idle frame
+            this.animationTimer = 0;
             this.edgePushTimer = 0;
         }
 
         // Apply visual updates
+        this._updateJuice(deltaTime);
         this.applyAnimationFrame();
         this.updateCamera();
+    }
+
+    /** Ordered walk textures for the current direction, with timing metadata. */
+    _getWalkCycle() {
+        const dir = this.player.direction;
+        const walk = this.player.walkSprites[dir] || {};
+        const idle = this.player.sprites[dir];
+        const frames = [];
+        for (let f = 1; f <= this.walkFrameCount; f++) {
+            // 404 fallbacks alias to the idle texture — exclude them so a
+            // legacy 2-frame set doesn't masquerade as a 6-frame cycle
+            if (walk[f] && walk[f] !== idle) frames.push(walk[f]);
+        }
+        if (frames.length >= 4) {
+            // Full generated cycle: contact frames sit at 0 and mid-cycle
+            return { cycle: frames, speed: 95, stepEvery: Math.round(frames.length / 2) };
+        }
+        return { cycle: [idle, walk[1] || idle, idle, walk[2] || idle], speed: 150, stepEvery: 2 };
+    }
+
+    /** Per-tick game-feel: walk bob/lean easing, shadow fit, dust particles. */
+    _updateJuice(deltaTime) {
+        const s = this.player.sprite;
+
+        // Bob + lean while moving; ease both back to rest when idle.
+        // The generated frames carry most of the bob — this layer adds a
+        // subtle continuous motion that hides frame quantization.
+        if (this.isMoving && !this.playerDead) {
+            this.walkPhase += deltaTime * 0.014;
+            const amp = s.height * 0.012;
+            this.bobOffset = -Math.abs(Math.sin(this.walkPhase)) * amp;
+            const leanTarget =
+                this.player.direction === 'left' ? -0.035 :
+                this.player.direction === 'right' ? 0.035 :
+                Math.sin(this.walkPhase) * 0.02; // front/back: gentle sway
+            this.leanAngle += (leanTarget - this.leanAngle) * Math.min(1, deltaTime / 120);
+        } else {
+            this.bobOffset += (0 - this.bobOffset) * Math.min(1, deltaTime / 90);
+            this.leanAngle += (0 - this.leanAngle) * Math.min(1, deltaTime / 90);
+        }
+        if (!this.playerDead) {
+            s.rotation = this.leanAngle;
+            // Bob is visual-only: it rides on top of the ground position
+            if (this._playerGroundY !== undefined) s.y = this._playerGroundY + this.bobOffset;
+        }
+
+        // Keep the player's shadow glued to the ground line (bob excluded)
+        this._fitShadow(this.player.shadow, s, this._playerGroundY ?? s.y);
+
+        // Simulate dust puffs
+        for (let i = this.particles.length - 1; i >= 0; i--) {
+            const p = this.particles[i];
+            p.life += deltaTime;
+            const t = p.life / p.maxLife;
+            if (t >= 1) {
+                this.particleLayer.removeChild(p.g);
+                p.g.destroy();
+                this.particles.splice(i, 1);
+                continue;
+            }
+            p.g.x += p.vx * deltaTime;
+            p.g.y += p.vy * deltaTime;
+            p.g.alpha = p.startAlpha * (1 - t);
+            const sc = 1 + t * 1.1;
+            p.g.scale.set(sc);
+        }
+    }
+
+    /** Kick up a few dust puffs at the player's feet (footstep feedback). */
+    _spawnDust() {
+        if (!this.player || !this.player.sprite || this.playerDead) return;
+        const s = this.player.sprite;
+        const groundY = this._playerGroundY ?? s.y;
+        const count = 2 + (Math.random() < 0.5 ? 1 : 0);
+        for (let i = 0; i < count; i++) {
+            const g = new PIXI.Graphics();
+            const r = 2 + Math.random() * 2.5;
+            g.circle(0, 0, r);
+            g.fill({ color: 0xcfc4b0, alpha: 1 });
+            g.x = s.x + (Math.random() - 0.5) * s.width * 0.35;
+            g.y = groundY - Math.random() * 3;
+            const startAlpha = 0.28 + Math.random() * 0.12;
+            g.alpha = startAlpha;
+            this.particleLayer.addChild(g);
+            this.particles.push({
+                g,
+                vx: (Math.random() - 0.5) * 0.02 - (this.player.direction === 'left' ? -0.01 : this.player.direction === 'right' ? 0.01 : 0),
+                vy: -0.008 - Math.random() * 0.01,
+                life: 0,
+                maxLife: 350 + Math.random() * 200,
+                startAlpha,
+            });
+        }
     }
 
     updateCamera() {
         if (!this.player) return;
 
-        // Target camera position (center player on screen)
-        const targetX = this.player.sprite.x - this.app.screen.width / 2;
-        const targetY = this.player.sprite.y - this.app.screen.height / 2;
+        const dt = this.app.ticker.deltaMS;
+
+        // Look-ahead: the camera leads the movement direction so the player
+        // sees more of where they're going (eases in and out)
+        const leadDist = Math.min(this.app.screen.width, this.app.screen.height) * 0.07;
+        let leadX = 0, leadY = 0;
+        if (this.isMoving && !this.playerDead) {
+            if (this.player.direction === 'left') leadX = -leadDist;
+            else if (this.player.direction === 'right') leadX = leadDist;
+            else if (this.player.direction === 'back') leadY = -leadDist;
+            else if (this.player.direction === 'front') leadY = leadDist;
+        }
+        const leadEase = 1 - Math.pow(0.9975, dt);
+        this.lookAhead.x += (leadX - this.lookAhead.x) * leadEase;
+        this.lookAhead.y += (leadY - this.lookAhead.y) * leadEase;
+
+        // Target camera position (player centered, plus look-ahead)
+        const targetX = this.player.sprite.x + this.lookAhead.x - this.app.screen.width / 2;
+        const targetY = this.player.sprite.y + this.lookAhead.y - this.app.screen.height / 2;
 
         // Clamp camera to world bounds
         const maxX = this.worldWidth - this.app.screen.width;
@@ -564,9 +729,10 @@ class GameRenderer {
         const clampedX = Math.max(0, Math.min(maxX, targetX));
         const clampedY = Math.max(0, Math.min(maxY, targetY));
 
-        // Smooth camera follow
-        this.camera.x += (clampedX - this.camera.x) * this.cameraSmoothing;
-        this.camera.y += (clampedY - this.camera.y) * this.cameraSmoothing;
+        // Frame-rate-independent smoothing (equivalent feel at any refresh rate)
+        const t = 1 - Math.pow(1 - this.cameraSmoothing, dt / 16.67);
+        this.camera.x += (clampedX - this.camera.x) * t;
+        this.camera.y += (clampedY - this.camera.y) * t;
 
         // Apply camera offset to world container
         this.worldContainer.x = -this.camera.x;
@@ -632,7 +798,7 @@ class GameRenderer {
             this.player.walkSprites[direction] = {};
         }
 
-        for (const frame of [1, 2]) {
+        for (let frame = 1; frame <= this.walkFrameCount; frame++) {
             if (!this.player.walkSprites[direction][frame]) {
                 try {
                     const url = `/api/assets/sprite/player/${this.playerId}/${direction}_walk${frame}`;
@@ -640,8 +806,8 @@ class GameRenderer {
                     this.player.walkSprites[direction][frame] = texture;
                     console.log(`Loaded walk sprite: ${direction}_walk${frame}`);
                 } catch (error) {
-                    console.error(`Failed to preload walk sprite ${direction}_walk${frame}:`, error);
-                    // Fall back to idle sprite
+                    // Frame not generated (legacy 2-frame set) — alias to idle,
+                    // _getWalkCycle filters these out
                     this.player.walkSprites[direction][frame] = this.player.sprites[direction] || null;
                 }
             }
@@ -650,7 +816,7 @@ class GameRenderer {
 
     async preloadAllSprites() {
         const directions = ['front', 'back', 'left', 'right'];
-        const frames = [1, 2];
+        const frames = Array.from({ length: this.walkFrameCount }, (_, i) => i + 1);
         // Add .png to the base if you like, or just in the loop
         const playerUrlBase = `/api/assets/sprite/player/${this.playerId}`;
 
@@ -760,6 +926,8 @@ class GameRenderer {
             const newPos = event.getLocalPosition(this.worldContainer);
             this.editingNpc.sprite.x = newPos.x;
             this.editingNpc.sprite.y = newPos.y;
+            const stored = this.npcs[this.editingNpc.data.id];
+            if (stored) this._fitShadow(stored.shadow, this.editingNpc.sprite);
         }
     }
 
@@ -788,14 +956,8 @@ class GameRenderer {
         if (!this.isMoving) {
             tex = this.player.sprites[dir];
         } else {
-            const walk = this.player.walkSprites[dir] || {};
-            const cycle = [
-                this.player.sprites[dir],
-                walk[1] || this.player.sprites[dir],
-                this.player.sprites[dir],
-                walk[2] || this.player.sprites[dir]
-            ];
-            tex = cycle[this.animationFrame];
+            const anim = this._getWalkCycle();
+            tex = anim.cycle[this.animationFrame % anim.cycle.length];
         }
 
         // Final safety fallback
@@ -934,10 +1096,14 @@ class GameRenderer {
     updatePlayerPosition() {
         if (!this.player || !this.player.sprite) return;
 
-        // Convert 0-100 coordinates to actual world pixels
+        // Convert 0-100 coordinates to actual world pixels. The ground Y is
+        // authoritative for depth-sorting and the shadow; the visible sprite
+        // additionally rides the walk-bob offset.
+        const groundY = this.normalizedToWorldY(this.player.normalizedY);
+        this._playerGroundY = groundY;
         this.player.sprite.x = this.normalizedToWorldX(this.player.normalizedX);
-        this.player.sprite.y = this.normalizedToWorldY(this.player.normalizedY);
-        this.player.sprite.zIndex = this.player.sprite.y;
+        this.player.sprite.y = groundY + (this.bobOffset || 0);
+        this.player.sprite.zIndex = groundY;
     }
 
     // Coordinate conversions (normalized 0-100 <-> world pixels)
@@ -987,6 +1153,7 @@ class GameRenderer {
             const npc = this.npcs[npcId];
             npc.sprite.x = this.normalizedToWorldX(npc.data.x);
             npc.sprite.y = this.normalizedToWorldY(npc.data.y);
+            this._fitShadow(npc.shadow, npc.sprite);
         }
 
         // Re-center camera
