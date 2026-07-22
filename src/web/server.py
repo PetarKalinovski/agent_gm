@@ -926,6 +926,42 @@ async def get_portrait(npc_id: str):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+class CombatResultRequest(BaseModel):
+    """Outcome of a real-time canvas fight, reported by the frontend."""
+    player_id: str
+    outcome: str                        # "victory" | "defeat" | "fled"
+    hits_taken: int = 0
+    defeated_npc_ids: list[str] = []
+
+
+@app.post("/api/combat/result")
+async def combat_result(request: CombatResultRequest):
+    """Apply a finished real-time fight to the world — code enforces.
+
+    Health mapping and NPC deaths land here, BEFORE the DM sees anything;
+    the frontend then auto-sends the returned `dm_message` through /api/play
+    so the DM narrates an aftermath that is already true.
+    """
+    from src.services.combat import apply_combat_result, combat_outcome_message
+
+    init_db(get_active_db_path())
+    changes = apply_combat_result(
+        request.player_id,
+        request.outcome,
+        hits_taken=request.hits_taken,
+        defeated_npc_ids=request.defeated_npc_ids,
+    )
+    if "error" in changes:
+        return JSONResponse(changes, status_code=400)
+
+    return {
+        "success": True,
+        "changes": changes,
+        "dm_message": combat_outcome_message(changes),
+        "state": build_player_state(request.player_id),
+    }
+
+
 class MoveRequest(BaseModel):
     """Request model for player movement."""
     player_id: str

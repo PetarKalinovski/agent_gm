@@ -64,6 +64,9 @@ from src.tools.world_write.world_bible import (
 # Time tools
 from src.tools.world_write.time import advance_time
 
+# Combat tools
+from src.tools.world_write.combat import start_combat
+
 # Quest tools
 from src.tools.world_write.quests import (
     activate_quest,
@@ -116,6 +119,8 @@ __all__ = [
     "create_historical_event",
     # Time
     "advance_time",
+    # Combat
+    "start_combat",
     # Quests
     "create_quest",
     "activate_quest",

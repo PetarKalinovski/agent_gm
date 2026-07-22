@@ -2093,6 +2093,7 @@
             if (!state) return;
             try { spawnStateFloaters(lastPlayerState, state); } catch (e) { /* cosmetic only */ }
             lastPlayerState = state;
+            window.lastPlayerState = state; // game.js reads health for combat HP
 
             // Day/night scene tint follows the game clock
             if (game && game.setTimeOfDay) game.setTimeOfDay(state.time_of_day);
@@ -2502,6 +2503,35 @@
             }
         });
 
+        // A real-time fight ended: apply mechanics server-side (code
+        // enforces), then hand the DM an aftermath that is already true
+        window.addEventListener('combat-ended', async (e) => {
+            const { outcome, hitsTaken, defeated } = e.detail || {};
+            if (!currentPlayerId) return;
+            try {
+                const res = await fetch('/api/combat/result', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        player_id: currentPlayerId,
+                        outcome,
+                        hits_taken: hitsTaken || 0,
+                        defeated_npc_ids: defeated || [],
+                    }),
+                });
+                const data = await res.json();
+                if (data.state) applyPlayerState(data.state);
+                if (data.dm_message) {
+                    const label = outcome === 'victory' ? '⚔ The fight is over.'
+                        : outcome === 'defeat' ? '⚔ You fall.'
+                        : '⚔ You break away from the fight.';
+                    sendMessage(data.dm_message, { display: label, noNpc: true });
+                }
+            } catch (err) {
+                console.error('Failed to report combat result:', err);
+            }
+        });
+
         // Clear NPC selection when clicking on empty space
         window.addEventListener('npc-deselect', () => {
             currentNpcId = null;
@@ -2631,7 +2661,7 @@
 
         let currentAbort = null;
 
-        async function sendMessage(inputText = null) {
+        async function sendMessage(inputText = null, opts = {}) {
             const input = inputText || userInput.value.trim();
             if (!input || !currentPlayerId || isProcessing) return;
 
@@ -2641,8 +2671,9 @@
             sendBtn.textContent = 'Stop';
             currentAbort = new AbortController();
 
-            // Add user message
-            addMessage('user', input);
+            // Add user message (system turns show a short label instead of
+            // the raw bracketed payload)
+            addMessage('user', opts.display || input);
 
             // Create streaming message
             const messageEl = createStreamingMessage();
@@ -2659,8 +2690,8 @@
                     body: JSON.stringify({
                         player_id: currentPlayerId,
                         player_input: input,
-                        npc_id: currentNpcId,
-                        npc_name: currentNpcName
+                        npc_id: opts.noNpc ? null : currentNpcId,
+                        npc_name: opts.noNpc ? null : currentNpcName
                     })
                 });
 

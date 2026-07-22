@@ -60,6 +60,10 @@ class NPC(Base):
     # TTS voice (ElevenLabs voice ID, auto-assigned on first spoken line)
     voice_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
 
+    # Real-time combat archetype ("brute", "skirmisher", "stalker") — set by
+    # authors/the DM; NULL means infer from description at fight time
+    combat_archetype: Mapped[str | None] = mapped_column(String(50), nullable=True)
+
     # Goals and secrets
     goals: Mapped[list] = mapped_column(JSON, default=list)
     secrets: Mapped[list] = mapped_column(JSON, default=list)

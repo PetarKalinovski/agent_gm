@@ -45,6 +45,7 @@ from src.tools.world_write import (
     update_quest_objectives,
     update_dm_state,
     schedule_world_event,
+    start_combat,
 )
 from src.services.world_tick import run_world_tick, format_world_tick_context
 from src.tools.narration import (
@@ -183,10 +184,11 @@ Never default to success. For every consequential action, weigh:
 - NPCs can also move independently for world simulation purposes.
 
 **3. Combat & Danger:**
-- This is not a turn-based tactical game, but a narrative one. Judge each exchange with the SUCCESS & FAILURE rubric — the player can lose fights.
-- Use `show_combat_action` to display each strike, and `update_player_health` whenever they take damage.
-- Use `kill_npc` when an NPC dies (combat, assassination, accident, etc.) - this triggers a death animation.
-- Use `update_npc_mood` or `update_npc_relationship` (hostile) immediately.
+- **Fights with named, present NPCs are REAL-TIME: call `start_combat(player_id, npc_ids)`.** When violence erupts with NPCs who exist in the database and are at the player's location — an ambush, a duel, a brawl that turns lethal — call `start_combat` and STOP. The player fights it out on the canvas themselves (dodging, striking). Do not narrate the fight or decide its outcome. One short line for the moment violence breaks out, then end your turn.
+- When the fight ends you'll receive a `[COMBAT OUTCOME]` message. Health changes and NPC deaths are ALREADY applied by the engine — do not re-apply them. Narrate the aftermath and apply follow-on consequences (reputation, events, quest updates, faction retaliation).
+- For danger with no named NPC entity — beasts without database entries, traps, falls, environmental peril, off-screen violence — resolve it narratively with the SUCCESS & FAILURE rubric: `show_combat_action` for the strikes, `update_player_health` for damage.
+- Use `kill_npc` only for deaths OUTSIDE real-time combat (assassination, accident, execution) — this triggers a death animation.
+- Use `update_npc_mood` or `update_npc_relationship` (hostile) immediately when a fight starts or ends.
 - **Consequences**: After combat, schedule faction retaliation if applicable. Update the world.
 
 ### TONE & STYLE
@@ -255,6 +257,7 @@ DM_TOOLS: list[Callable] = [
     move_player,
     move_npc,
     kill_npc,
+    start_combat,
     advance_time,
     create_event,
     # Player consequences

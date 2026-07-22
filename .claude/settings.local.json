@@ -17,7 +17,9 @@
       "Bash(uv add:*)",
       "Bash(curl:*)",
       "WebFetch(domain:github.com)",
-      "Bash(git check-ignore *)"
+      "Bash(git check-ignore *)",
+      "Bash(git add *)",
+      "Bash(git commit -q -m 'feat: real-time combat integrated with the DM *)"
     ]
   }
 }

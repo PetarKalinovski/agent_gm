@@ -1565,70 +1565,130 @@ class GameRenderer {
         }
     }
 
-    // ================= Combat gray-box prototype =================
-    // Ctrl+K spawns a gray rectangle enemy in the room. Space = dodge-roll
-    // (i-frames), J = melee attack. Pure client-side: this is the feel
-    // prototype for in-world combat — no art, no DM integration yet.
+    // ================= Real-time combat =================
+    // The DM starts fights via the start_combat tool (SSE combat_start →
+    // startCombat below); enemies are real NPCs fighting with their own
+    // sprites and archetype-driven behavior. Ctrl+K still spawns a gray-box
+    // test enemy. Space = dodge-roll (i-frames), J = melee arc. Outcomes of
+    // real fights are reported through the 'combat-ended' event → server.
+
+    static ARCHETYPES = {
+        // Fixed hitboxes/timings — the LLM only ever picks a label, never
+        // invents numbers. Tuned from the gray-box prototype feel.
+        brute:      { hp: 7, speed: 4.8, windup: 650, lungeDist: 10, lungeMs: 215, recover: 800, engage: 7,  scaleMul: 1.12 },
+        skirmisher: { hp: 3, speed: 8.5, windup: 340, lungeDist: 8,  lungeMs: 150, recover: 430, engage: 6,  scaleMul: 0.95 },
+        stalker:    { hp: 4, speed: 6.8, windup: 280, lungeDist: 12, lungeMs: 140, recover: 520, engage: 9,  scaleMul: 1.0, circles: true },
+        test:       { hp: 5, speed: 6.5, windup: 480, lungeDist: 9,  lungeMs: 170, recover: 550, engage: 7,  scaleMul: 1.0 },
+    };
+
+    /** Player HP derives from health status — a wounded character enters
+     *  every fight weaker. Combat never heals. */
+    _playerHpFromHealth() {
+        const map = { healthy: 5, winded: 4, hurt: 3, badly_hurt: 2, critical: 1 };
+        const h = (window.lastPlayerState && window.lastPlayerState.health) || 'healthy';
+        return map[h] ?? 5;
+    }
+
+    _ensureCombat() {
+        if (this.combat) return;
+        this.combat = {
+            enemies: [], playerHp: this._playerHpFromHealth(), playerMaxHp: 5,
+            hitsTaken: 0, reported: false,
+            iframes: 0, dodge: 0, dodgeVec: [0, 1], dodgeCd: 0,
+            attackCd: 0, hitstop: 0, shake: 0,
+        };
+        this._drawHearts();
+    }
+
+    /** DM-initiated combat: spawn each named NPC as a combatant. */
+    startCombat(enemies) {
+        if (!this.player || this.playerDead || this.isLoading) return;
+        this._ensureCombat();
+        for (const en of (enemies || [])) {
+            this._spawnCombatant(en.npc_id || null, en.archetype || 'skirmisher', en.name);
+        }
+        console.log(`Combat started: ${(enemies || []).map(e => `${e.name} (${e.archetype})`).join(', ')}`);
+    }
 
     _spawnTestEnemy() {
         if (!this.player || this.playerDead || this.isLoading) return;
-        if (!this.combat) {
-            this.combat = {
-                enemies: [], playerHp: 5, playerMaxHp: 5,
-                iframes: 0, dodge: 0, dodgeVec: [0, 1], dodgeCd: 0,
-                attackCd: 0, hitstop: 0, shake: 0,
-            };
-            this._drawHearts();
-        }
+        this._ensureCombat();
+        this._spawnCombatant(null, 'test', null);
+        console.log('Gray-box enemy spawned (Space = dodge, J = attack)');
+    }
 
-        // Spawn on walkable ground away from the player
-        let ex = Math.min(95, this.player.normalizedX + 18);
-        let ey = this.player.normalizedY;
-        for (let t = 0; t < 12; t++) {
-            const a = Math.random() * Math.PI * 2;
-            const cx = this.player.normalizedX + Math.cos(a) * 18;
-            const cy = this.player.normalizedY + Math.sin(a) * 12;
-            if (cx >= 3 && cx <= 97 && cy >= 3 && cy <= 97 && this.isWalkable(cx, cy)) {
-                ex = cx; ey = cy;
-                break;
+    _spawnCombatant(npcId, archetype, name) {
+        const params = GameRenderer.ARCHETYPES[archetype] || GameRenderer.ARCHETYPES.skirmisher;
+        const npc = npcId ? this.npcs[npcId] : null;
+
+        // Spawn where the NPC is standing; test enemies appear near the player
+        let ex, ey;
+        if (npc) {
+            ex = npc.wander ? npc.wander.nx : npc.data.x;
+            ey = npc.wander ? npc.wander.ny : npc.data.y;
+        } else {
+            ex = Math.min(95, this.player.normalizedX + 18);
+            ey = this.player.normalizedY;
+            for (let t = 0; t < 12; t++) {
+                const a = Math.random() * Math.PI * 2;
+                const cx = this.player.normalizedX + Math.cos(a) * 18;
+                const cy = this.player.normalizedY + Math.sin(a) * 12;
+                if (cx >= 3 && cx <= 97 && cy >= 3 && cy <= 97 && this.isWalkable(cx, cy)) {
+                    ex = cx; ey = cy;
+                    break;
+                }
             }
         }
 
-        const h = this.worldHeight * 0.11;
-        const g = new PIXI.Graphics();
-        g.rect(-h * 0.28, -h, h * 0.56, h);
-        g.fill({ color: 0x8a8f9c });
-        g.rect(-h * 0.28, -h, h * 0.56, h);
-        g.stroke({ color: 0x2c313a, width: 2 });
-        const hpBar = new PIXI.Graphics();
-        g.addChild(hpBar);
+        let g, h, isSprite = false;
+        if (npc && npc.sprite && npc.sprite.texture && npc.sprite.texture.width > 1) {
+            // Fight with the NPC's real art; hide their ambient body meanwhile
+            g = new PIXI.Sprite(npc.sprite.texture);
+            g.anchor.set(0.5, 1);
+            g.scale.set(Math.abs(npc.sprite.scale.y) * (params.scaleMul || 1));
+            h = g.height;
+            isSprite = true;
+            npc.sprite.visible = false;
+            if (npc.shadow) npc.shadow.visible = false;
+            this.hideSpeechBubble(npcId);
+        } else {
+            h = this.worldHeight * 0.11 * (params.scaleMul || 1);
+            g = new PIXI.Graphics();
+            g.rect(-h * 0.28, -h, h * 0.56, h);
+            g.fill({ color: 0x8a8f9c });
+            g.rect(-h * 0.28, -h, h * 0.56, h);
+            g.stroke({ color: 0x2c313a, width: 2 });
+        }
         this.entityLayer.addChild(g);
 
+        const hpBar = new PIXI.Graphics();
+        this.particleLayer.addChild(hpBar);
         const shadow = this._makeShadow();
         this.shadowLayer.addChild(shadow);
         const telegraph = new PIXI.Graphics();
         this.particleLayer.addChild(telegraph);
 
         const enemy = {
-            g, hpBar, shadow, telegraph, h,
-            nx: ex, ny: ey, hp: 5, maxHp: 5,
+            g, hpBar, shadow, telegraph, h, params, isSprite,
+            npcId: npcId || null, name: name || null,
+            nx: ex, ny: ey, hp: params.hp, maxHp: params.hp,
             state: 'chase', t: 0, aim: [0, 0], lungeFrom: null,
             dead: false, deathT: 0, flash: 0,
+            strafeDir: Math.random() < 0.5 ? -1 : 1, circleT: 0,
         };
         this._drawEnemyHp(enemy);
         this.combat.enemies.push(enemy);
-        console.log('Gray-box enemy spawned (Space = dodge, J = attack)');
     }
 
     _drawEnemyHp(enemy) {
         const bar = enemy.hpBar;
         bar.clear();
-        const w = enemy.h * 0.7;
-        bar.rect(-w / 2, -enemy.h - 12, w, 5);
+        const w = Math.max(30, enemy.h * 0.7);
+        bar.rect(-w / 2, 0, w, 5);
         bar.fill({ color: 0x1f232b });
         const frac = Math.max(0, enemy.hp / enemy.maxHp);
         if (frac > 0) {
-            bar.rect(-w / 2, -enemy.h - 12, w * frac, 5);
+            bar.rect(-w / 2, 0, w * frac, 5);
             bar.fill({ color: 0xef4444 });
         }
     }
@@ -1653,17 +1713,56 @@ class GameRenderer {
     _endCombat(silent) {
         if (!this.combat) return;
         for (const e of this.combat.enemies) {
+            // Reconcile the ambient NPC body with how the fight ended
+            const npc = e.npcId ? this.npcs[e.npcId] : null;
+            if (npc && npc.sprite) {
+                if (e.dead) {
+                    // They fell where the fight ended — settle the ambient
+                    // sprite there in its final dead pose
+                    npc.status = 'dead';
+                    npc.data.x = e.nx; npc.data.y = e.ny;
+                    npc.wander = null;
+                    npc.sprite.x = this.normalizedToWorldX(e.nx);
+                    npc.sprite.y = this.normalizedToWorldY(e.ny);
+                    npc.sprite.zIndex = npc.sprite.y;
+                    npc.sprite.rotation = Math.PI / 2;
+                    npc.sprite.alpha = 0.5;
+                    npc.sprite.tint = 0x808080;
+                    npc.sprite.eventMode = 'none';
+                    npc.sprite.cursor = 'default';
+                    if (npc.shadow) { npc.shadow.alpha = 0.3; this._fitShadow(npc.shadow, npc.sprite); }
+                }
+                npc.sprite.visible = true;
+                if (npc.shadow) npc.shadow.visible = true;
+            }
             this.entityLayer.removeChild(e.g);
             this.shadowLayer.removeChild(e.shadow);
             this.particleLayer.removeChild(e.telegraph);
+            this.particleLayer.removeChild(e.hpBar);
             e.g.destroy({ children: true });
             e.shadow.destroy();
             e.telegraph.destroy();
+            e.hpBar.destroy();
         }
         const hearts = this.uiLayer.getChildByName('combat-hearts');
         if (hearts) this.uiLayer.removeChild(hearts);
         this.combat = null;
         if (!silent) console.log('Combat over');
+    }
+
+    /** A real (DM-integrated) fight resolved — report the outcome. */
+    _finishCombat(outcome) {
+        const c = this.combat;
+        if (!c || c.reported) return;
+        c.reported = true;
+        const detail = {
+            outcome,
+            hitsTaken: c.hitsTaken || 0,
+            defeated: c.enemies.filter(e => e.dead && e.npcId).map(e => e.npcId),
+            playerHp: Math.max(0, c.playerHp),
+        };
+        this._endCombat(false);
+        window.dispatchEvent(new CustomEvent('combat-ended', { detail }));
     }
 
     _facingVector() {
@@ -1747,7 +1846,7 @@ class GameRenderer {
                 const ky = e.ny + (dy / (dist || 1)) * kn;
                 if (this.isWalkable(kx, ky)) { e.nx = kx; e.ny = ky; }
                 this._drawEnemyHp(e);
-                if (e.hp <= 0) { e.dead = true; e.deathT = 0; e.telegraph.clear(); }
+                if (e.hp <= 0) { e.dead = true; e.deathT = 0; e.telegraph.clear(); e.hpBar.clear(); }
             }
         }
 
@@ -1769,17 +1868,29 @@ class GameRenderer {
 
             const dx = p.normalizedX - e.nx, dy = p.normalizedY - e.ny;
             const dist = Math.hypot(dx, dy);
+            const P = e.params || GameRenderer.ARCHETYPES.test;
 
             if (e.state === 'chase') {
-                if (dist > 7) {
-                    const step = 6.5 * dt / 1000;
+                const circling = P.circles && dist < P.engage * 1.8 && dist > P.engage * 0.9 && e.circleT < 1600;
+                if (circling) {
+                    // Stalkers orbit before committing — pressure without contact
+                    e.circleT += dt;
+                    const ux = dx / (dist || 1), uy = dy / (dist || 1);
+                    const step = P.speed * 0.85 * dt / 1000 * e.strafeDir;
+                    const nx2 = e.nx + (-uy) * step;
+                    const ny2 = e.ny + ux * step;
+                    if (this.isWalkable(nx2, ny2)) { e.nx = nx2; e.ny = ny2; }
+                    else e.strafeDir *= -1;
+                } else if (dist > P.engage) {
+                    const step = P.speed * dt / 1000;
                     const nx2 = e.nx + (dx / dist) * step;
                     const ny2 = e.ny + (dy / dist) * step;
                     if (this.isWalkable(nx2, e.ny)) e.nx = nx2;
                     if (this.isWalkable(e.nx, ny2)) e.ny = ny2;
                 } else {
                     e.state = 'windup';
-                    e.t = 480;
+                    e.t = P.windup;
+                    e.circleT = 0;
                     e.aim = [dx / (dist || 1), dy / (dist || 1)];
                 }
             } else if (e.state === 'windup') {
@@ -1788,7 +1899,7 @@ class GameRenderer {
                 const tg = e.telegraph;
                 tg.clear();
                 const ang = Math.atan2(e.aim[1], e.aim[0]);
-                const r = (11 / 100) * this.worldWidth * 0.9;
+                const r = ((P.lungeDist + 2) / 100) * this.worldWidth * 0.9;
                 tg.moveTo(0, 0);
                 tg.arc(0, 0, r, ang - 0.45, ang + 0.45);
                 tg.closePath();
@@ -1797,17 +1908,16 @@ class GameRenderer {
                 tg.y = e.g.y;
                 if (e.t <= 0) {
                     e.state = 'strike';
-                    e.t = 170;
+                    e.t = P.lungeMs;
                     e.lungeFrom = [e.nx, e.ny];
                     e.hitDone = false;
                     tg.clear();
                 }
             } else if (e.state === 'strike') {
                 e.t -= dt;
-                const prog = 1 - Math.max(0, e.t) / 170;
-                const lunge = 9;
-                const lx = e.lungeFrom[0] + e.aim[0] * lunge * prog;
-                const ly = e.lungeFrom[1] + e.aim[1] * lunge * prog;
+                const prog = 1 - Math.max(0, e.t) / P.lungeMs;
+                const lx = e.lungeFrom[0] + e.aim[0] * P.lungeDist * prog;
+                const ly = e.lungeFrom[1] + e.aim[1] * P.lungeDist * prog;
                 e.nx = Math.max(0, Math.min(100, lx));
                 e.ny = Math.max(0, Math.min(100, ly));
                 // One hit chance per lunge
@@ -1816,6 +1926,7 @@ class GameRenderer {
                     if (pd < 4.5 && c.iframes <= 0 && c.dodge <= 0) {
                         e.hitDone = true;
                         c.playerHp -= 1;
+                        c.hitsTaken = (c.hitsTaken || 0) + 1;
                         c.iframes = 900;
                         c.hitstop = 60;
                         c.shake = Math.max(c.shake, 8);
@@ -1831,23 +1942,35 @@ class GameRenderer {
                         }
                         this._drawHearts();
                         if (c.playerHp <= 0) {
-                            // Prototype: reset instead of killing the character
+                            const isReal = c.enemies.some(en => en.npcId);
+                            if (isReal) {
+                                // Downed. Code marks them critical; the DM
+                                // narrates what the victors do next.
+                                this._finishCombat('defeat');
+                                return;
+                            }
+                            // Gray-box prototype: reset instead of killing
                             console.log('Gray-box: you died — resetting prototype HP');
                             c.playerHp = c.playerMaxHp;
                             this._drawHearts();
                         }
                     }
                 }
-                if (e.t <= 0) { e.state = 'recover'; e.t = 550; }
+                if (e.t <= 0) { e.state = 'recover'; e.t = P.recover; }
             } else if (e.state === 'recover') {
                 e.t -= dt;
                 if (e.t <= 0) e.state = 'chase';
             }
 
-            // Apply enemy position
+            // Apply enemy position; sprites face the player
             e.g.x = this.normalizedToWorldX(e.nx);
             e.g.y = this.normalizedToWorldY(e.ny);
             e.g.zIndex = e.g.y;
+            if (e.isSprite && Math.abs(dx) > 0.5) {
+                e.g.scale.x = Math.abs(e.g.scale.x) * (dx < 0 ? -1 : 1);
+            }
+            e.hpBar.x = e.g.x;
+            e.hpBar.y = e.g.y - e.h - 14;
             this._fitShadow(e.shadow, e.g, e.g.y);
         }
 
@@ -1858,7 +1981,11 @@ class GameRenderer {
 
         // Victory: every enemy dead and finished falling
         if (allDead && c.enemies.length > 0 && c.enemies.every(e => e.deathT > 700)) {
-            this._endCombat(false);
+            if (c.enemies.some(e => e.npcId)) {
+                this._finishCombat('victory');
+            } else {
+                this._endCombat(false);
+            }
         }
     }
 
