@@ -654,18 +654,22 @@ CRITICAL: Output ONE character only. NOT a sprite sheet, NOT multiple views side
     # frames generated one-by-one visibly morph between poses.
     WALK_FRAME_COUNT = 6
 
+    # Side view is generated RIGHT-facing: image models have a strong
+    # left-to-right walking bias and flip a requested left-facing strip
+    # anyway (observed on gemini-3.1-flash-image). Left is mirrored.
     _WALK_CHOREOGRAPHY = {
-        "left": """Frame 1 — CONTACT: legs wide apart in a full stride, front (left) leg extended
+        "right": """Frame 1 — CONTACT: legs wide apart in a full stride, front (right) leg extended
   forward with heel touching down, back leg stretched behind with heel lifted.
-  Left arm swung back, right arm swung forward.
+  Right arm swung back, left arm swung forward.
 Frame 2 — DOWN: weight settles onto the front leg, knees slightly bent, body lowest.
 Frame 3 — PASSING: back leg swings past the planted leg, body at its highest,
   arms passing by the sides.
-Frame 4 — CONTACT (mirror of frame 1): right leg extended forward, left leg
+Frame 4 — CONTACT (mirror of frame 1): left leg extended forward, right leg
   stretched behind, arms swapped.
 Frame 5 — DOWN (mirror of frame 2).
 Frame 6 — PASSING (mirror of frame 3).
-Every frame is a strict FULL SIDE PROFILE view facing left (never three-quarter view).""",
+Every frame is a strict FULL SIDE PROFILE view facing right, walking toward the
+right edge of the image (never three-quarter view).""",
         "front": """Frame 1 — CONTACT: left leg stepping forward toward the viewer (left knee bent
   forward, foot slightly larger due to perspective), right leg back; right arm
   swings forward, left arm back.
@@ -705,7 +709,7 @@ character from directly behind, walking away from the viewer.""",
         """
         visual_style = world_bible.visual_style if world_bible else "fantasy RPG game art"
         n = self.WALK_FRAME_COUNT
-        choreography = self._WALK_CHOREOGRAPHY.get(direction, self._WALK_CHOREOGRAPHY["left"])
+        choreography = self._WALK_CHOREOGRAPHY.get(direction, self._WALK_CHOREOGRAPHY["right"])
 
         prompt = f"""The attached image shows the character "{character.name}" standing idle, from a 2D RPG.
 Draw a sprite sheet: this EXACT character performing a {n}-frame walking animation.
@@ -956,7 +960,10 @@ no text, no shadows."""
             return paths
 
         # 2. Generate other directions using front as reference — in parallel
-        #    (each direction only depends on the front sprite)
+        #    (each direction only depends on the front sprite). Only back and
+        #    right are generated; left is a mirror of right, which keeps it
+        #    consistent with the mirrored left walk cycle (same side details)
+        #    and saves a call.
         import asyncio
 
         async def _gen_direction(direction: str) -> tuple[str, str]:
@@ -971,10 +978,16 @@ no text, no shadows."""
             return direction, path
 
         direction_results = await asyncio.gather(
-            *(_gen_direction(d) for d in ["back", "left", "right"])
+            *(_gen_direction(d) for d in ["back", "right"])
         )
         for direction, path in direction_results:
             paths[direction] = path
+
+        left_path = sprites_dir / f"{character.id}_left.png"
+        if not left_path.exists():
+            from PIL import ImageOps
+            ImageOps.mirror(Image.open(paths["right"]).convert("RGBA")).save(left_path)
+        paths["left"] = str(left_path)
 
         # 3. Generate walk cycles — one filmstrip call per direction (frames
         #    drawn together stay consistent; right is mirrored from left)
@@ -995,7 +1008,7 @@ no text, no shadows."""
                 return await self.generate_walk_cycle(character, world_bible, direction, idle_image)
 
             walk_jobs = []
-            for direction in ["front", "back", "left"]:
+            for direction in ["front", "back", "right"]:
                 idle_image = Path(paths[direction]).read_bytes()
                 walk_jobs.append(_gen_cycle(direction, idle_image))
 
@@ -1003,14 +1016,15 @@ no text, no shadows."""
             for cycle_paths in cycle_results:
                 paths.update(cycle_paths)
 
-            # Right cycle: mirror of left — free, and guaranteed symmetric
-            if _cycle_complete("right"):
+            # Left cycle: mirror of right — free, guaranteed symmetric, and
+            # matches the mirrored left idle
+            if _cycle_complete("left"):
                 paths.update({
-                    f"right_walk{f}": str(sprites_dir / f"{character.id}_right_walk{f}.png")
+                    f"left_walk{f}": str(sprites_dir / f"{character.id}_left_walk{f}.png")
                     for f in range(1, self.WALK_FRAME_COUNT + 1)
                 })
             else:
-                paths.update(self.mirror_walk_cycle(character.id, "left", "right"))
+                paths.update(self.mirror_walk_cycle(character.id, "right", "left"))
 
         logger.info(f"Prepared {len(paths)} sprites for {character.name}")
         return paths
