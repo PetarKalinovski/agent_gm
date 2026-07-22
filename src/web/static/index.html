@@ -1229,6 +1229,7 @@
             <span class="hud-chip clickable" id="hud-quests-chip" title="Active quests">&#9873; <span id="hud-quests">0</span></span>
             <span class="hud-chip clickable" id="hud-bag-chip" title="Inventory">&#128188; <span id="hud-bag">0</span></span>
             <span class="hud-chip clickable" id="hud-audio-chip" title="Audio"><span id="hud-audio-icon">&#128266;</span></span>
+            <span class="hud-chip clickable" id="hud-help-chip" title="Controls">?</span>
         </div>
         <div class="hud-panel hidden" id="hud-panel"></div>
         <div class="controls-hint">WASD to move | Walk to an edge to travel | Click NPCs to talk</div>
@@ -2155,6 +2156,39 @@
             renderHudPanel();
         }
 
+        // --- First-run controls overlay ---
+        function showControlsHint() {
+            if (document.getElementById('controls-overlay')) return;
+            const overlay = document.createElement('div');
+            overlay.id = 'controls-overlay';
+            overlay.style.cssText =
+                'position:absolute;inset:0;z-index:950;display:flex;align-items:center;justify-content:center;' +
+                'background:rgba(8,8,12,0.72);backdrop-filter:blur(2px);cursor:pointer;';
+            overlay.innerHTML = `
+                <div style="background:#14141d;border:1px solid #6366f1;border-radius:14px;padding:1.6rem 2rem;max-width:420px;font-family:Georgia,serif;color:#e5e1d8;">
+                    <div style="font-size:1.15rem;font-weight:700;margin-bottom:0.9rem;color:#a5b4fc;">How to play</div>
+                    <div style="display:grid;grid-template-columns:auto 1fr;gap:0.45rem 1rem;font-size:0.92rem;">
+                        <b>WASD</b><span>walk around the scene</span>
+                        <b>Click an NPC</b><span>address them, then type to talk</span>
+                        <b>Push an edge</b><span>travel to a connected place</span>
+                        <b>Type anything</b><span>the DM makes it real</span>
+                        <b>Space</b><span>dodge-roll (in combat)</span>
+                        <b>J</b><span>strike (in combat)</span>
+                    </div>
+                    <div style="margin-top:1rem;font-size:0.8rem;color:#9ca3af;">Click anywhere to begin &middot; press <b>?</b> up top to see this again</div>
+                </div>`;
+            (document.getElementById('game-container') || document.body).appendChild(overlay);
+            overlay.addEventListener('click', () => overlay.remove());
+        }
+
+        function maybeShowControlsHint() {
+            if (localStorage.getItem('forge-controls-seen')) return;
+            localStorage.setItem('forge-controls-seen', '1');
+            showControlsHint();
+        }
+
+        document.getElementById('hud-help-chip').addEventListener('click', showControlsHint);
+
         /** Slide-in toast over the game canvas (quest banners, big events). */
         function showToast(html, kind = '', holdMs = 4200) {
             let stack = document.getElementById('toast-stack');
@@ -2315,6 +2349,22 @@
                     for (const msg of historyData.messages) {
                         addMessage(msg.role === 'user' ? 'user' : 'assistant', msg.content);
                     }
+                    // Returning to an ongoing story — fetch a "Previously..."
+                    // recap in the background and pin it at the bottom
+                    if (historyData.messages.length >= 6) {
+                        fetch(`/api/recap/${playerId}`)
+                            .then(r => r.json())
+                            .then(d => {
+                                if (d.recap) {
+                                    const el = document.createElement('div');
+                                    el.className = 'message assistant';
+                                    el.innerHTML = `<div class="message-content" style="font-style:italic;color:var(--text-secondary,#9ca3af);border-left:3px solid #6366f1;padding-left:10px;"><strong>Previously&hellip;</strong><br>${formatText(d.recap)}</div>`;
+                                    chatMessages.appendChild(el);
+                                    chatMessages.scrollTop = chatMessages.scrollHeight;
+                                }
+                            })
+                            .catch(() => {});
+                    }
                 } else {
                     // No history, show welcome message
                     addMessage('assistant', `Your story begins at the ${session.location}. What do you do?`);
@@ -2323,6 +2373,9 @@
                 console.error('Failed to load chat history:', e);
                 addMessage('assistant', `You are at the ${session.location}.`);
             }
+
+            // First visit on this browser: show the controls overlay once
+            maybeShowControlsHint();
         });
 
         // --- UI and Chat Logic ---

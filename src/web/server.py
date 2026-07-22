@@ -346,6 +346,40 @@ async def get_chat_history(player_id: str, limit: int = 50):
         return {"messages": [], "error": str(e)}
 
 
+RECAP_PROMPT = """You write "Previously..." recaps for a text RPG the player is
+resuming after time away. From the transcript, write 2-4 sentences in second
+person ("you") capturing: where the player is, what they were pursuing, and
+any unresolved thread or looming danger. Write ONLY the recap text — no
+preamble, no headers, no meta commentary. Match the world's tone."""
+
+
+@app.get("/api/recap/{player_id}")
+async def get_session_recap(player_id: str):
+    """A short 'Previously...' recap of recent play, for resuming a session."""
+    history = await get_chat_history(player_id, limit=40)
+    messages = history.get("messages", [])
+    if len(messages) < 6:
+        return {"recap": None}
+
+    lines = []
+    for m in messages[-30:]:
+        who = "Player" if m.get("role") == "user" else "DM"
+        lines.append(f"{who}: {m.get('content', '')}")
+    transcript = "\n".join(lines)[-6000:]
+
+    def _run() -> str:
+        from src.agents.base import create_agent
+        agent = create_agent("recap", RECAP_PROMPT, tools=[], callback_handler=None)
+        return str(agent(f"Transcript of recent play:\n\n{transcript}"))
+
+    try:
+        recap = (await asyncio.to_thread(_run)).strip()
+        return {"recap": recap or None}
+    except Exception as e:
+        logger.warning(f"Recap generation failed: {e}")
+        return {"recap": None}
+
+
 @app.get("/api/debug/messages/{player_id}")
 async def debug_messages(player_id: str, limit: int = 10):
     """Debug endpoint to see raw message structure."""
