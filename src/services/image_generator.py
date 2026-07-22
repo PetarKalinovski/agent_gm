@@ -649,10 +649,14 @@ CRITICAL: Output ONE character only. NOT a sprite sheet, NOT multiple views side
         path = self._save_image(cutout, f"sprites/{character.id}_{direction}.png")
         return path
 
-    # One Gemini call per direction produces the whole cycle as a filmstrip.
+    # One Gemini call per direction produces the KEY poses as a filmstrip.
     # Frames generated together stay consistent (style, scale, proportions);
-    # frames generated one-by-one visibly morph between poses.
-    WALK_FRAME_COUNT = 6
+    # frames generated one-by-one visibly morph between poses. RIFE then
+    # in-betweens the keys locally (frame_interpolator), doubling the count —
+    # WALK_FRAME_COUNT is the on-disk contract the frontend and asset checks
+    # rely on; it must always be fully present.
+    WALK_KEYFRAME_COUNT = 6
+    WALK_FRAME_COUNT = 12
 
     # Side view is generated RIGHT-facing: image models have a strong
     # left-to-right walking bias and flip a requested left-facing strip
@@ -736,7 +740,7 @@ Every frame shows the character from directly behind, walking away from the view
             Dict mapping "{direction}_walk{n}" to saved file path.
         """
         visual_style = world_bible.visual_style if world_bible else "fantasy RPG game art"
-        n = self.WALK_FRAME_COUNT
+        n = self.WALK_KEYFRAME_COUNT
         choreography = self._WALK_CHOREOGRAPHY.get(direction, self._WALK_CHOREOGRAPHY["right"])
 
         prompt = f"""The attached image shows the character "{character.name}" standing idle, from a 2D RPG.
@@ -779,12 +783,40 @@ no text, no shadows."""
             cells = self._slice_walk_strip(strip_data, n)
             frames = self._normalize_walk_frames(cells, reference_image)
 
+        # In-between the keys locally: n keys -> 2n frames (free, seconds)
+        from src.services.frame_interpolator import interpolate_cycle
+        frames = interpolate_cycle(frames)
+
         paths: dict[str, str] = {}
         for i, frame_img in enumerate(frames, start=1):
             buf = io.BytesIO()
             frame_img.save(buf, format="PNG")
             key = f"{direction}_walk{i}"
             paths[key] = self._save_image(buf.getvalue(), f"sprites/{character.id}_{key}.png")
+        return paths
+
+    def upgrade_walk_cycle(self, character_id: str, direction: str) -> dict[str, str] | None:
+        """Upgrade a legacy key-only cycle (6 frames) to the full count by
+        interpolation — no API call. Returns paths, or None if the legacy
+        set isn't complete."""
+        sprites_dir = self.assets_dir / "sprites"
+        key_paths = [
+            sprites_dir / f"{character_id}_{direction}_walk{i}.png"
+            for i in range(1, self.WALK_KEYFRAME_COUNT + 1)
+        ]
+        if not all(p.exists() for p in key_paths):
+            return None
+
+        from src.services.frame_interpolator import interpolate_cycle
+        logger.info(f"Upgrading legacy {direction} walk cycle for {character_id} by interpolation")
+        frames = interpolate_cycle([Image.open(p).convert("RGBA") for p in key_paths])
+
+        paths: dict[str, str] = {}
+        for i, frame_img in enumerate(frames, start=1):
+            key = f"{direction}_walk{i}"
+            dest = sprites_dir / f"{character_id}_{key}.png"
+            frame_img.save(dest)
+            paths[key] = str(dest)
         return paths
 
     def _slice_walk_strip(self, strip_data: bytes, n: int) -> list["Image.Image"]:
@@ -1035,6 +1067,10 @@ no text, no shadows."""
                         f"{direction}_walk{f}": str(sprites_dir / f"{character.id}_{direction}_walk{f}.png")
                         for f in range(1, self.WALK_FRAME_COUNT + 1)
                     }
+                # Legacy 6-key set: interpolate up to the full count for free
+                upgraded = self.upgrade_walk_cycle(character.id, direction)
+                if upgraded:
+                    return upgraded
                 return await self.generate_walk_cycle(character, world_bible, direction, idle_image)
 
             walk_jobs = []

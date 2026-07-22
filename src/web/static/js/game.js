@@ -49,7 +49,7 @@ class GameRenderer {
         this.exitPromptCooldown = 0;   // don't re-prompt immediately after dismissal
 
         // Animation settings
-        this.walkFrameCount = 6;   // full generated cycle; legacy sets have 2
+        this.walkFrameCount = 12;  // 6 generated keys + 6 RIFE in-betweens; legacy sets have 6 or 2
         this.animationFrame = 0;   // free-running counter, wrapped per-cycle at lookup
         this.animationTimer = 0;
         this.isMoving = false;
@@ -631,11 +631,15 @@ class GameRenderer {
                 this.updatePlayerPosition();
                 this.positionDirty = true;
 
-                // Advance the walk cycle (length varies: 6 generated frames,
-                // or the legacy idle-interleaved 4-step shuffle)
+                // Advance the walk cycle (length varies: 12 in-betweened
+                // frames, 6 legacy keys, or the idle-interleaved 4-step
+                // shuffle). Per-frame durations carry the animation spacing.
                 const anim = this._getWalkCycle();
+                const frameDur = anim.durations
+                    ? anim.durations[this.animationFrame % anim.cycle.length]
+                    : anim.speed;
                 this.animationTimer += deltaTime;
-                if (this.animationTimer >= anim.speed) {
+                if (this.animationTimer >= frameDur) {
                     this.animationTimer = 0;
                     this.animationFrame++;
                     // Footstep on contact frames: dust + shadow pulse
@@ -684,8 +688,20 @@ class GameRenderer {
             if (walk[f] && walk[f] !== idle) frames.push(walk[f]);
         }
         if (frames.length >= 4) {
-            // Full generated cycle: contact frames sit at 0 and mid-cycle
-            return { cycle: frames, speed: 95, stepEvery: Math.round(frames.length / 2) };
+            // Full generated cycle: contact frames sit at 0 and mid-cycle.
+            // Cycle duration stays ~constant regardless of frame count, so
+            // 6-frame legacy sets and 12-frame sets walk at the same cadence.
+            // Hand-animation spacing: contacts hold longest, the frames
+            // leading into a contact snap through fastest.
+            const half = Math.round(frames.length / 2);
+            const base = 560 / frames.length;
+            const durations = frames.map((_, i) => {
+                const phase = i % half;
+                if (phase === 0) return Math.round(base * 1.35);          // contact: hold
+                if (phase === half - 1) return Math.round(base * 0.8);    // into contact: snap
+                return Math.round(base * 0.95);
+            });
+            return { cycle: frames, durations, speed: Math.round(base), stepEvery: half };
         }
         return { cycle: [idle, walk[1] || idle, idle, walk[2] || idle], speed: 150, stepEvery: 2 };
     }
