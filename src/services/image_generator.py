@@ -657,38 +657,66 @@ CRITICAL: Output ONE character only. NOT a sprite sheet, NOT multiple views side
     # Side view is generated RIGHT-facing: image models have a strong
     # left-to-right walking bias and flip a requested left-facing strip
     # anyway (observed on gemini-3.1-flash-image). Left is mirrored.
+    #
+    # Every frame is spelled out with the acting leg NAMED. Never describe a
+    # frame as "mirror of frame N" — models skim that and draw the same leg
+    # in both half-cycles, which animates as hopping on one foot.
     _WALK_CHOREOGRAPHY = {
-        "right": """Frame 1 — CONTACT: legs wide apart in a full stride, front (right) leg extended
-  forward with heel touching down, back leg stretched behind with heel lifted.
-  Right arm swung back, left arm swung forward.
-Frame 2 — DOWN: weight settles onto the front leg, knees slightly bent, body lowest.
-Frame 3 — PASSING: back leg swings past the planted leg, body at its highest,
-  arms passing by the sides.
-Frame 4 — CONTACT (mirror of frame 1): left leg extended forward, right leg
-  stretched behind, arms swapped.
-Frame 5 — DOWN (mirror of frame 2).
-Frame 6 — PASSING (mirror of frame 3).
+        "right": """A walk is TWO steps: frames 1-3 land on the RIGHT foot, frames 4-6 land on the
+LEFT foot. The legs MUST alternate — frames 1 and 4 are opposite-leg poses, and
+if they look alike the animation is wrong.
+Frame 1 — RIGHT-FOOT CONTACT: legs wide apart in full stride; RIGHT leg extended
+  forward, heel striking the ground; LEFT leg stretched behind, toe down, heel
+  lifted. Left arm swung forward, right arm swung back.
+Frame 2 — DOWN: full weight settles onto the front RIGHT leg, knees bent, body at
+  its lowest; the LEFT foot peels off the ground behind.
+Frame 3 — PASSING: the LEFT leg swings forward past the planted RIGHT leg, left
+  knee raised, body at its tallest; arms passing by the sides.
+Frame 4 — LEFT-FOOT CONTACT: legs wide apart again but SWAPPED; LEFT leg extended
+  forward, heel striking; RIGHT leg stretched behind, heel lifted. Right arm
+  swung forward, left arm swung back.
+Frame 5 — DOWN: full weight settles onto the front LEFT leg, body at its lowest;
+  the RIGHT foot peels off the ground behind.
+Frame 6 — PASSING: the RIGHT leg swings forward past the planted LEFT leg, right
+  knee raised, body at its tallest.
 Every frame is a strict FULL SIDE PROFILE view facing right, walking toward the
 right edge of the image (never three-quarter view).""",
-        "front": """Frame 1 — CONTACT: left leg stepping forward toward the viewer (left knee bent
-  forward, foot slightly larger due to perspective), right leg back; right arm
-  swings forward, left arm back.
-Frame 2 — DOWN: weight onto the left leg, body drops slightly lower.
-Frame 3 — PASSING: legs close together, body at its highest point.
-Frame 4 — CONTACT (mirror): right leg stepping forward, left leg back, arms swapped.
-Frame 5 — DOWN (mirror of frame 2).
-Frame 6 — PASSING (mirror of frame 3).
-Add a subtle left-right body sway between contact frames, as in a natural front-view
-walk. Every frame the character faces the viewer directly.""",
-        "back": """Frame 1 — CONTACT: left leg stepping away from the viewer, right leg trailing;
-  right arm swings forward (away), left arm back.
-Frame 2 — DOWN: weight onto the left leg, body drops slightly lower.
-Frame 3 — PASSING: legs close together, body at its highest point.
-Frame 4 — CONTACT (mirror): right leg stepping away, left leg trailing, arms swapped.
-Frame 5 — DOWN (mirror of frame 2).
-Frame 6 — PASSING (mirror of frame 3).
-Add a subtle left-right body sway between contact frames. Every frame shows the
-character from directly behind, walking away from the viewer.""",
+        "front": """A walk is TWO steps: frames 1-3 step onto the LEFT foot, frames 4-6 step onto
+the RIGHT foot. The legs MUST alternate — frames 1 and 4 show OPPOSITE legs
+forward, and if they look alike the animation is wrong.
+Frame 1 — LEFT-FOOT CONTACT: LEFT leg stepping toward the viewer, left knee bent,
+  left foot forward and slightly larger (closer to camera); RIGHT leg straight
+  behind. Right arm swings forward, left arm back; hips tilt slightly left.
+Frame 2 — DOWN: weight drops onto the LEFT leg, body slightly lower, right foot
+  starting to lift behind.
+Frame 3 — PASSING: RIGHT knee lifts and crosses in front, feet close together,
+  body at its tallest.
+Frame 4 — RIGHT-FOOT CONTACT: RIGHT leg stepping toward the viewer, right knee
+  bent, right foot forward and slightly larger; LEFT leg straight behind. Left
+  arm swings forward, right arm back; hips tilt slightly right.
+Frame 5 — DOWN: weight drops onto the RIGHT leg, body slightly lower, left foot
+  starting to lift behind.
+Frame 6 — PASSING: LEFT knee lifts and crosses in front, feet close together,
+  body at its tallest.
+Every frame the character faces the viewer directly.""",
+        "back": """A walk is TWO steps: frames 1-3 step onto the LEFT foot, frames 4-6 step onto
+the RIGHT foot. The legs MUST alternate — frames 1 and 4 show OPPOSITE legs
+forward, and if they look alike the animation is wrong.
+Frame 1 — LEFT-FOOT CONTACT: LEFT leg stepping away from the viewer, left foot
+  planted ahead (higher in the image); RIGHT leg trailing, right heel lifted
+  toward the camera. Right arm swings forward (away), left arm back.
+Frame 2 — DOWN: weight onto the LEFT leg, body slightly lower, right sole visible
+  as it lifts.
+Frame 3 — PASSING: RIGHT leg swings past the planted LEFT leg, feet close
+  together, body at its tallest.
+Frame 4 — RIGHT-FOOT CONTACT: RIGHT leg stepping away, right foot planted ahead;
+  LEFT leg trailing, left heel lifted toward the camera. Left arm swings
+  forward (away), right arm back.
+Frame 5 — DOWN: weight onto the RIGHT leg, body slightly lower, left sole visible
+  as it lifts.
+Frame 6 — PASSING: LEFT leg swings past the planted RIGHT leg, feet close
+  together, body at its tallest.
+Every frame shows the character from directly behind, walking away from the viewer.""",
     }
 
     async def generate_walk_cycle(
@@ -722,10 +750,12 @@ The walk must look energetic and clearly readable, like classic game animation:
 {choreography}
 The cycle loops seamlessly back to frame 1.
 
-Every frame: identical character with clothing, colors, face and proportions matching
-the reference image EXACTLY (do not redesign or simplify the outfit), identical art
-style ({visual_style}), identical scale, feet on one shared ground line, pronounced
-opposite arm swing with relaxed open hands (never clenched fists).
+Every frame: the SAME character design — clothing, colors, face and proportions
+matching the reference image EXACTLY (do not redesign or simplify the outfit),
+identical art style ({visual_style}), identical scale, feet on one shared ground
+line, pronounced opposite arm swing with relaxed open hands (never clenched fists).
+But every frame is a DIFFERENT pose from the choreography above — no two frames in
+the strip may repeat the same pose.
 The ENTIRE canvas must be one continuous solid white background from edge to edge —
 no black areas, no cards, no panels, no grid lines, no frame borders, no numbers,
 no text, no shadows."""
