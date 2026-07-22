@@ -15,6 +15,7 @@ import threading
 from src.game.context import assemble_context
 from src.services.world_tick import snapshot_clock, enforce_minimum_time_cost
 from src.services.world_simulation import maybe_advance_world
+from src.services.tension import snapshot_turn_tension, enforce_tension
 from src.models import (
     Location,
     NPC,
@@ -260,12 +261,16 @@ class GameSession:
 
                 # Process input through DM
                 turn_start_clock = snapshot_clock()
+                turn_start_tension = snapshot_turn_tension(self.player_id)
                 response = self.dm.process_input(player_input)
                 # Response is already printed by tools (narrate, describe_location, etc.)
 
                 # If the DM forgot to advance time, apply a minimum cost so
                 # the world clock (and scheduled events) can't freeze
                 enforce_minimum_time_cost(turn_start_clock)
+
+                # Mechanical tension floor/decay from what happened this turn
+                enforce_tension(turn_start_tension, self.player_id)
 
                 # New in-game day → advance the world offscreen (background
                 # thread so the player isn't kept waiting)

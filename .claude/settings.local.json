@@ -16,7 +16,8 @@
       "Bash(uv run:*)",
       "Bash(uv add:*)",
       "Bash(curl:*)",
-      "WebFetch(domain:github.com)"
+      "WebFetch(domain:github.com)",
+      "Bash(git check-ignore *)"
     ]
   }
 }

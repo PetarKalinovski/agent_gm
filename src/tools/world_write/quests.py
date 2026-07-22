@@ -124,12 +124,15 @@ def create_quest(
 
         session.commit()
 
-        return {
+        result = {
             "id": quest.id,
             "title": quest.title,
             "status": quest.status,
             "message": f"Quest '{title}' created successfully",
         }
+        if start_active:
+            result["event"] = "quest_activated"
+        return result
 
 
 @tool
@@ -172,6 +175,12 @@ def update_quest_status(quest_id: str, status: str) -> dict:
             "status": quest.status,
             "message": f"Quest '{quest.title}' marked as {status}",
         }
+        # Structured frontend events: quest completion plays a triumph
+        # stinger + banner; failure shows a banner
+        if status == QuestStatus.COMPLETED:
+            result["event"] = "quest_completed"
+        elif status == QuestStatus.FAILED:
+            result["event"] = "quest_failed"
         if rewards_applied:
             result["rewards_applied"] = rewards_applied
             result["message"] += f". Rewards applied: {', '.join(rewards_applied)} — narrate this to the player."
@@ -215,6 +224,7 @@ def activate_quest(quest_id: str) -> dict:
             "objectives": quest.objectives,
             "rewards": quest.rewards,
             "status": quest.status,
+            "event": "quest_activated",
             "message": f"Quest '{quest.title}' is now active!",
         }
 

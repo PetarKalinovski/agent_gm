@@ -36,6 +36,9 @@ from src.services.music_generator import MOODS, MusicGenerator
 from src.services.voice_generator import VoiceGenerator, compute_audio_id
 from src.services.world_tick import snapshot_clock, enforce_minimum_time_cost
 from src.services.world_simulation import maybe_advance_world
+from src.services.tension import snapshot_turn_tension, enforce_tension
+from src.web.turn_filters import DialogueDeduper
+from src.web.turn_audit import audit_turn
 
 load_dotenv()
 
@@ -382,6 +385,24 @@ async def debug_messages(player_id: str, limit: int = 10):
         return {"error": str(e)}
 
 
+# Tools whose success means the HUD is stale — a mid-turn state snapshot
+# follows each one so damage/gold/items show when they land, not at turn end
+STATE_MUTATING_TOOLS = frozenset({
+    "update_player_health",
+    "add_to_inventory",
+    "remove_from_inventory",
+    "transfer_item",
+    "adjust_currency",
+    "activate_quest",
+    "update_quest_status",
+    "update_quest_objectives",
+    "create_quest",
+    "move_player",
+    "advance_time",
+    "update_player_reputation",
+})
+
+
 @app.post("/api/play")
 async def play_sse(request: GameRequest):
     """Stream game response via SSE using stream_async pattern.
@@ -410,6 +431,19 @@ async def play_sse(request: GameRequest):
 
             # Snapshot the clock so we can enforce a minimum time cost after the turn
             turn_start_clock = snapshot_clock()
+            # Snapshot health+tension so danger can mechanically raise tension
+            turn_start_tension = snapshot_turn_tension(request.player_id)
+
+            # Pre-turn state snapshot: the audit diffs it against post-turn
+            try:
+                state_before = build_player_state(request.player_id)
+            except Exception:
+                state_before = None
+
+            # Strips DM re-quotes of lines already delivered as speech events
+            deduper = DialogueDeduper()
+            turn_text_parts: list[str] = []
+            last_state_json: str | None = None
 
             # Build the full DM context — runs the world tick (fires scheduled
             # events) and includes player health/inventory/quests, same as the
@@ -453,24 +487,55 @@ async def play_sse(request: GameRequest):
                             _enrich_speech_event(notification)
                         except Exception as e:
                             logger.warning(f"Speech TTS enrichment failed: {e}")
+                        deduper.register_speech(notification.get("text"))
                     encoded = json.dumps(notification, ensure_ascii=False, default=str)
                     yield f"data: {encoded}\n\n"
 
-                # Yield token data if present
+                    # A world-write tool just succeeded → push a fresh state
+                    # snapshot so the HUD updates mid-turn (damage shows when
+                    # it lands, not when the turn ends)
+                    if (
+                        notification.get("type") == "tool_update"
+                        and notification.get("tool", {}).get("status") == "success"
+                        and notification.get("tool", {}).get("name") in STATE_MUTATING_TOOLS
+                    ):
+                        try:
+                            mid_state = build_player_state(request.player_id)
+                            mid_json = json.dumps(mid_state, ensure_ascii=False, default=str)
+                            if mid_json != last_state_json:
+                                last_state_json = mid_json
+                                yield f'data: {{"type": "state", "state": {mid_json}}}\n\n'
+                        except Exception as e:
+                            logger.debug(f"Mid-turn state snapshot failed: {e}")
+
+                # Yield token data if present (deduper holds text back only
+                # until a safe sentence boundary, and only after speech)
                 if isinstance(response, dict) and "data" in response:
                     token_data = response["data"]
                     if token_data:
-                        token_event = {"type": "token", "data": token_data}
-                        yield f"data: {json.dumps(token_event)}\n\n"
+                        released = deduper.feed(token_data)
+                        if released:
+                            turn_text_parts.append(released)
+                            token_event = {"type": "token", "data": released}
+                            yield f"data: {json.dumps(token_event)}\n\n"
 
                 # Yield any narration output
                 while narration_buffer:
-                    text = narration_buffer.pop(0)
+                    text = deduper.filter_block(narration_buffer.pop(0))
+                    if not text.strip():
+                        continue
                     logger.debug(f"Narration: {text[:50]}...")
+                    turn_text_parts.append(text)
                     narration_event = {"type": "narration", "content": text}
                     yield f"data: {json.dumps(narration_event)}\n\n"
 
             logger.info(f"Stream finished with {event_count} events")
+
+            # Release any text still held by the dedup buffer
+            tail = deduper.flush()
+            if tail.strip():
+                turn_text_parts.append(tail)
+                yield f"data: {json.dumps({'type': 'token', 'data': tail})}\n\n"
 
             # If the DM forgot to advance time this turn, apply a minimum cost
             # so the world clock (and scheduled events) can't freeze.
@@ -478,21 +543,43 @@ async def play_sse(request: GameRequest):
             if time_result.get("enforced"):
                 logger.info("Minimum time cost enforced for this turn")
 
+            # Tension floor/decay from what measurably happened this turn —
+            # the state event below carries the enforced value to the music layer
+            try:
+                enforce_tension(turn_start_tension, request.player_id)
+            except Exception as e:
+                logger.warning(f"Tension enforcement failed: {e}")
+
             # A new in-game day? Advance the world in the background —
             # factions move, consequences ripple, all offscreen
             asyncio.create_task(asyncio.to_thread(maybe_advance_world))
 
             # Post-turn state snapshot so the HUD updates without polling
+            state_after = None
             try:
-                state_event = {"type": "state", "state": build_player_state(request.player_id)}
+                state_after = build_player_state(request.player_id)
+                state_event = {"type": "state", "state": state_after}
                 yield f"data: {json.dumps(state_event, ensure_ascii=False, default=str)}\n\n"
             except Exception as e:
                 logger.warning(f"Could not build state event: {e}")
+
+            # Fiction/database consistency audit — logged and attached to
+            # the complete event (self-playtests read it as a scoreboard)
+            audit_warnings = []
+            try:
+                audit_warnings = audit_turn(
+                    "".join(turn_text_parts), tool_tracker.snapshot(), state_before, state_after
+                )
+                for w in audit_warnings:
+                    logger.warning(f"Turn audit [{w['check']}]: {w['detail']}")
+            except Exception as e:
+                logger.warning(f"Turn audit failed: {e}")
 
             # Final payload with tool summary
             final_payload = {
                 "type": "complete",
                 "tools": tool_tracker.snapshot(),
+                "audit": audit_warnings,
             }
             yield f"data: {json.dumps(final_payload)}\n\n"
             logger.info("Stream completed successfully")

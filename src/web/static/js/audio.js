@@ -27,6 +27,8 @@ class ForgeAudio {
         this.currentMood = null;
         this.pendingMood = null;        // mood requested before unlock/manifest
         this.fadeTimer = null;
+        this.lastStateMood = null;      // last mood derived from a state event
+        this.stingerTimer = null;       // active one-shot stinger (e.g. triumph)
 
         this.voiceEl = new Audio();
         this.voiceQueue = [];
@@ -83,16 +85,52 @@ class ForgeAudio {
         try {
             if (payload.type === 'state' && payload.state) {
                 const mood = this.moodFromState(payload.state);
-                if (mood) this.setMood(mood);
+                if (mood) {
+                    this.lastStateMood = mood;
+                    if (this.stingerTimer && mood !== 'danger') {
+                        // A stinger is holding the stage — it will revert
+                        // to this mood when it finishes
+                        return;
+                    }
+                    if (this.stingerTimer) this._clearStinger();
+                    this.setMood(mood);
+                }
             } else if (payload.type === 'speech' && payload.audio_id) {
-                this.enqueueVoice(payload.audio_id);
+                this.enqueueVoice(payload.audio_id, payload.npc_id);
             } else if (payload.type === 'scene' && payload.time_of_day === 'night') {
                 // Night falls mid-turn: soften to the night theme unless
                 // something more urgent is already playing
                 if (this.currentMood === 'explore' || !this.currentMood) this.setMood('night');
+            } else if (payload.type === 'quest_completed') {
+                this.playStinger('triumph');
+            } else if (payload.type === 'combat_start') {
+                if (this.stingerTimer) this._clearStinger();
+                this.lastStateMood = 'danger';
+                this.setMood('danger');
             }
         } catch (e) {
             console.warn('ForgeAudio event error:', e);
+        }
+    }
+
+    /** One-shot mood (quest turn-in, big beat): crossfade in, hold, revert
+     *  to whatever the world state says. Danger always interrupts it. */
+    playStinger(mood, holdMs = 14000) {
+        if (!this.unlocked || !this.manifest) return;
+        if (!this._trackUrl(mood)) return;   // track not generated — skip silently
+        this._clearStinger();
+        this.setMood(mood);
+        this.stingerTimer = setTimeout(() => {
+            this.stingerTimer = null;
+            const back = this.lastStateMood || 'explore';
+            if (this.currentMood === mood) this.setMood(back);
+        }, holdMs);
+    }
+
+    _clearStinger() {
+        if (this.stingerTimer) {
+            clearTimeout(this.stingerTimer);
+            this.stingerTimer = null;
         }
     }
 
@@ -185,8 +223,8 @@ class ForgeAudio {
     // Voice
     // ------------------------------------------------------------------
 
-    enqueueVoice(audioId) {
-        this.voiceQueue.push(audioId);
+    enqueueVoice(audioId, npcId = null) {
+        this.voiceQueue.push({ audioId, npcId });
         this._processVoiceQueue();
     }
 
@@ -194,11 +232,18 @@ class ForgeAudio {
         if (this.voicePlaying || this.voiceQueue.length === 0) return;
         this.voicePlaying = true;
         this._applyVolumes(); // duck music
-        const audioId = this.voiceQueue.shift();
+        const { audioId, npcId } = this.voiceQueue.shift();
         try {
             const blobUrl = await this._fetchVoice(audioId);
             if (blobUrl && this.unlocked && !this.muted) {
+                // Speech bubbles sync to these (game.js listens)
+                window.dispatchEvent(new CustomEvent('forge-voice-start', {
+                    detail: { audioId, npcId }
+                }));
                 await this._playVoice(blobUrl);
+                window.dispatchEvent(new CustomEvent('forge-voice-end', {
+                    detail: { audioId, npcId }
+                }));
                 URL.revokeObjectURL(blobUrl);
             }
         } catch (e) {

@@ -222,6 +222,24 @@ class ToolUsageTracker:
                     "time_of_day": output_data.get("time_of_day", "day"),
                     "atmosphere": output_data.get("atmosphere") or [],
                 })
+
+            # Quest lifecycle (activate_quest / update_quest_status) —
+            # frontend banners + triumph stinger on completion
+            elif event in ("quest_activated", "quest_completed", "quest_failed"):
+                self._notifications.append({
+                    "type": event,
+                    "quest_id": output_data.get("id"),
+                    "title": output_data.get("title"),
+                    "rewards_applied": output_data.get("rewards_applied") or [],
+                })
+
+            # Real-time combat kickoff (start_combat) — frontend spawns
+            # the enemies and locks the room
+            elif event == "combat_start":
+                self._notifications.append({
+                    "type": "combat_start",
+                    "enemies": output_data.get("enemies") or [],
+                })
         except (json.JSONDecodeError, TypeError, ValueError, SyntaxError):
             pass  # Not parseable as dict, ignore
 
