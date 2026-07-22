@@ -64,9 +64,11 @@ real-time loop.
 
 - **Gemini model names rot.** `gemini-2.5-flash` still appears in ListModels
   but 404s ("no longer available to new users"). Current: `vision_model:
-  gemini-3.5-flash`, image gen `gemini-2.5-flash-image` (verify it stays
-  alive). `API_KEY_INVALID` can mean *key restrictions*, not a wrong key —
-  restrict the key to the Generative Language API in Google Cloud console.
+  gemini-3.5-flash`, image gen `gemini-3.1-flash-image` ("Nano Banana 2";
+  its predecessor `gemini-2.5-flash-image` dies Oct 2, 2026 — see
+  `docs/research/sprite_generation_models.md`). `API_KEY_INVALID` can mean
+  *key restrictions*, not a wrong key — restrict the key to the Generative
+  Language API in Google Cloud console.
 - **Gemini decorates sprite sheets unpredictably** (grid lines, ground lines,
   letterbox cards) no matter what the prompt says. The slicer in
   `_slice_walk_strip` is immune (clears full-span rows/cols); keep it that way.

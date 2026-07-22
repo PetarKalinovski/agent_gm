@@ -21,7 +21,8 @@ logger = logging.getLogger(__name__)
 
 
 # Footprint = bottom slice of a detected box that actually blocks walking
-FOOTPRINT_TOP_FRACTION = 0.55   # skip the upper 55% of each box
+FOOTPRINT_TOP_FRACTION = 0.75   # skip the upper 75% of each box (playtest
+                                # feedback: 0.55 blocked too much walk-behind)
 MIN_OBSTACLE_AREA = 0.0015      # ignore boxes under 0.15% of the scene
 MAX_OBSTACLES = 12
 
@@ -93,7 +94,7 @@ class ImageGenerator:
         Routes to the appropriate provider based on self.provider.
         """
         if self.provider == "gemini":
-            return await self._call_gemini(prompt, reference_image, aspect_ratio)
+            return await self._call_gemini(prompt, reference_image, aspect_ratio, image_size)
         return await self._call_openrouter(prompt, aspect_ratio, image_size, reference_image)
 
     async def _call_openrouter(
@@ -163,6 +164,7 @@ class ImageGenerator:
         prompt: str,
         reference_image: bytes | None = None,
         aspect_ratio: str = "1:1",
+        image_size: str = "1K",
     ) -> bytes:
         """Call Gemini direct API and return raw image bytes."""
         parts = []
@@ -183,7 +185,8 @@ class ImageGenerator:
             "generationConfig": {
                 "responseModalities": ["TEXT", "IMAGE"],
                 "imageConfig": {
-                    "aspectRatio": aspect_ratio
+                    "aspectRatio": aspect_ratio,
+                    "imageSize": image_size
                 }
             }
         }
@@ -380,6 +383,22 @@ Requirements:
             logger.info("Using color key background removal (rembg not installed)")
             return self._remove_colored_background(image_data)
 
+    @staticmethod
+    def _cutout_failed(image_data: bytes) -> bool:
+        """True when background removal left an opaque card instead of a cutout.
+
+        A proper sprite cutout has transparent borders; when the model paints
+        a full scene behind the character, rembg can fail to segment it and
+        return the image nearly untouched (observed in playtesting: a player
+        idle shipped with its full painted background).
+        """
+        import numpy as np
+
+        img = Image.open(io.BytesIO(image_data)).convert("RGBA")
+        alpha = np.asarray(img.getchannel("A")) > 128
+        border = np.concatenate([alpha[0, :], alpha[-1, :], alpha[:, 0], alpha[:, -1]])
+        return border.mean() > 0.35 or alpha.mean() > 0.90
+
     def _remove_colored_background(self, image_data: bytes) -> bytes:
         """Remove solid colored background using color key with tolerance.
 
@@ -510,10 +529,17 @@ CRITICAL: Output must contain ONLY ONE character, ONE pose. NOT a sprite sheet, 
 
         image_data = await self._call_api(prompt, aspect_ratio="1:1", image_size="1K", reference_image=reference_image)
 
-        # Remove background for transparency
-        image_data = self._remove_background(image_data)
+        # Remove background for transparency; if the model painted a full
+        # scene rembg couldn't segment, one fresh generation usually fixes it
+        cutout = self._remove_background(image_data)
+        if self._cutout_failed(cutout):
+            logger.warning(f"Cutout failed for {character.name} ({direction}); regenerating once")
+            image_data = await self._call_api(prompt, aspect_ratio="1:1", image_size="1K", reference_image=reference_image)
+            retry = self._remove_background(image_data)
+            if not self._cutout_failed(retry):
+                cutout = retry
 
-        path = self._save_image(image_data, f"sprites/{character.id}_{direction}.png")
+        path = self._save_image(cutout, f"sprites/{character.id}_{direction}.png")
         return path
 
     async def generate_portrait(
@@ -611,8 +637,16 @@ CRITICAL: Output ONE character only. NOT a sprite sheet, NOT multiple views side
             reference_image=reference_image
         )
 
-        image_data = self._remove_background(image_data)
-        path = self._save_image(image_data, f"sprites/{character.id}_{direction}.png")
+        cutout = self._remove_background(image_data)
+        if self._cutout_failed(cutout):
+            logger.warning(f"Cutout failed for {name} ({direction}); regenerating once")
+            image_data = await self._call_api(
+                prompt, aspect_ratio="1:1", image_size="1K", reference_image=reference_image
+            )
+            retry = self._remove_background(image_data)
+            if not self._cutout_failed(retry):
+                cutout = retry
+        path = self._save_image(cutout, f"sprites/{character.id}_{direction}.png")
         return path
 
     # One Gemini call per direction produces the whole cycle as a filmstrip.
@@ -694,9 +728,22 @@ no text, no shadows."""
 
         logger.info(f"Generating {n}-frame walk cycle ({direction}) for {character.name}")
 
-        strip_data = await self._call_api(prompt, aspect_ratio="21:9", reference_image=reference_image)
+        # 2K: more pixels per frame directly reduces partial/cropped characters
+        strip_data = await self._call_api(
+            prompt, aspect_ratio="21:9", image_size="2K", reference_image=reference_image
+        )
         cells = self._slice_walk_strip(strip_data, n)
-        frames = self._normalize_walk_frames(cells, reference_image)
+        try:
+            frames = self._normalize_walk_frames(cells, reference_image)
+        except ValueError as e:
+            # Too many broken cells to repair — one fresh strip is cheaper
+            # than shipping a glitchy cycle. Second failure propagates.
+            logger.warning(f"Walk strip unusable ({e}); regenerating once")
+            strip_data = await self._call_api(
+                prompt, aspect_ratio="21:9", image_size="2K", reference_image=reference_image
+            )
+            cells = self._slice_walk_strip(strip_data, n)
+            frames = self._normalize_walk_frames(cells, reference_image)
 
         paths: dict[str, str] = {}
         for i, frame_img in enumerate(frames, start=1):
@@ -739,17 +786,57 @@ no text, no shadows."""
             cells.append(cell.crop(box))
         return cells
 
+    # A frame is broken when its solid-pixel mass or dimensions collapse
+    # relative to the strip median: rembg ate the character (ghost), the
+    # slice caught a boundary (sliver), or the model merged two poses.
+    _FRAME_MIN_HEIGHT = 0.75   # × median char height
+    _FRAME_MIN_WIDTH = 0.45    # × median char width
+    _FRAME_MAX_WIDTH = 2.2     # × median char width
+    _FRAME_MIN_MASS = 0.40     # × median opaque-pixel count
+
+    @staticmethod
+    def _frame_stats(frame: "Image.Image") -> tuple[int, int, int, float]:
+        """(char_w, char_h, opaque_px, feet_center_x) of a cropped RGBA frame.
+
+        feet_center_x is the alpha centroid of the bottom 15% band — the point
+        the eye tracks as "where the character stands"; centering on it kills
+        the side-to-side jitter that bbox-centering causes when a stride pose
+        extends one leg.
+        """
+        import numpy as np
+
+        alpha = np.asarray(frame.getchannel("A"))
+        solid = alpha > 128
+        opaque = int(solid.sum())
+        if not opaque:
+            return frame.width, frame.height, 0, frame.width / 2
+        band_top = max(0, int(frame.height * 0.85))
+        band = solid[band_top:, :]
+        xs = np.nonzero(band)[1]
+        feet_cx = float(xs.mean()) if len(xs) else frame.width / 2
+        return frame.width, frame.height, opaque, feet_cx
+
     def _normalize_walk_frames(
         self, cells: list["Image.Image"], idle_sprite: bytes
     ) -> list["Image.Image"]:
-        """Background-remove each cell and match the idle sprite's framing.
+        """Background-remove, validate, repair, and align a strip's frames.
 
-        One uniform scale per strip (preserves the cycle's natural bob) and a
-        shared canvas whose character-height ratio and baseline fraction match
-        the idle sprite — so the frontend's height-based scaling renders walk
-        frames at exactly the idle character's size, feet planted at the same
-        line, with no per-frame upscaling blur.
+        Broken frames (ghosts, slivers, merges) are replaced by their phase
+        partner — frame i and i + n/2 are the same pose with legs swapped, so
+        the substitution preserves the cycle's rhythm. More than half broken
+        raises ValueError so the caller regenerates the strip.
+
+        Good frames get one uniform scale per strip (preserves the natural
+        bob) on a shared canvas matching the idle sprite's character-height
+        ratio and baseline fraction, and are anchored horizontally by feet
+        centroid so the character doesn't shuffle sideways between frames.
+
+        Raises:
+            ValueError: if the strip has more broken frames than repair
+                can plausibly hide.
         """
+        import statistics
+
         idle = Image.open(io.BytesIO(idle_sprite)).convert("RGBA")
         idle_bbox = idle.getchannel("A").getbbox() or (0, 0, idle.width, idle.height)
         idle_ratio = (idle_bbox[3] - idle_bbox[1]) / idle.height
@@ -763,15 +850,48 @@ no text, no shadows."""
             bbox = cut.getchannel("A").getbbox()
             transparent.append(cut.crop(bbox) if bbox else cut)
 
+        stats = [self._frame_stats(f) for f in transparent]
+        med_w = statistics.median(s[0] for s in stats)
+        med_h = statistics.median(s[1] for s in stats)
+        med_mass = statistics.median(s[2] for s in stats)
+
+        def is_broken(s: tuple) -> bool:
+            w, h, mass, _ = s
+            return (
+                h < med_h * self._FRAME_MIN_HEIGHT
+                or w < med_w * self._FRAME_MIN_WIDTH
+                or w > med_w * self._FRAME_MAX_WIDTH
+                or mass < med_mass * self._FRAME_MIN_MASS
+            )
+
+        broken = [i for i, s in enumerate(stats) if is_broken(s)]
+        if len(broken) > len(transparent) // 2:
+            raise ValueError(
+                f"{len(broken)}/{len(transparent)} frames broken (ghost/sliver/merge)"
+            )
+        n = len(transparent)
+        for i in broken:
+            partner = (i + n // 2) % n
+            donor = partner if partner not in broken else next(
+                j for j in range(n) if j not in broken
+            )
+            logger.info(f"Walk frame {i + 1} broken; substituting frame {donor + 1}")
+            transparent[i] = transparent[donor].copy()
+            stats[i] = stats[donor]
+
         max_char_h = max(f.height for f in transparent)
         canvas_h = max(1, round(max_char_h / idle_ratio))
         canvas_w = canvas_h  # square, like idle sprites
         baseline_y = round(canvas_h * idle_baseline_frac)
 
         frames: list[Image.Image] = []
-        for f in transparent:
+        for f, s in zip(transparent, stats):
             canvas = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
-            canvas.paste(f, ((canvas_w - f.width) // 2, baseline_y - f.height), f)
+            # Anchor the feet centroid to the canvas center, clamped so the
+            # frame never clips out of the canvas.
+            x = round(canvas_w / 2 - s[3])
+            x = max(0, min(canvas_w - f.width, x))
+            canvas.paste(f, (x, baseline_y - f.height), f)
             frames.append(canvas)
         return frames
 

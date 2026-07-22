@@ -61,7 +61,8 @@ class ImageGenerationConfig(BaseModel):
     """
     provider: str = "gemini"
     openrouter_model: str = "google/gemini-2.5-pro-image"
-    gemini_model: str = "gemini-2.5-flash-image"
+    # "Nano Banana 2". Predecessor gemini-2.5-flash-image dies Oct 2, 2026.
+    gemini_model: str = "gemini-3.1-flash-image"
     # Text+vision model used for scene understanding (obstacle detection).
     # "gemini-2.5-flash" is sunset (404 for new users); 3.5 works.
     vision_model: str = "gemini-3.5-flash"

@@ -38,9 +38,11 @@ image_generation:
   provider: "gemini"
   # Model names per provider
   openrouter_model: "google/gemini-2.5-pro-image"
-  # Must be an image-capable model. "gemini-3.1-flash-image-preview" does not
-  # exist (the API returns 400 for it).
-  gemini_model: "gemini-2.5-flash-image"
+  # Must be an image-capable model. gemini-3.1-flash-image = "Nano Banana 2"
+  # (better character consistency than Pro per community tests). The previous
+  # "gemini-2.5-flash-image" SHUTS DOWN Oct 2, 2026. The "-preview" suffixed
+  # IDs are all dead — use bare IDs. See docs/research/sprite_generation_models.md
+  gemini_model: "gemini-3.1-flash-image"
   # Vision model for scene understanding (collision obstacle detection).
   # NOTE: "gemini-2.5-flash" is sunset — returns 404 for new users.
   vision_model: "gemini-3.5-flash"

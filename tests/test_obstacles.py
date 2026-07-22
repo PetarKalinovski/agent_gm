@@ -14,8 +14,8 @@ def test_box_converts_to_bottom_slice_footprint():
     xs = [p[0] for p in poly]
     ys = [p[1] for p in poly]
     assert min(xs) == 10.0 and max(xs) == 50.0  # x passes through, scaled to 0-100
-    # Footprint keeps only the bottom 45%: top = 20 + (60-20)*0.55 = 42
-    assert min(ys) == 42.0 and max(ys) == 60.0
+    # Footprint keeps only the bottom 25%: top = 20 + (60-20)*0.75 = 50
+    assert min(ys) == 50.0 and max(ys) == 60.0
 
 
 def test_tiny_and_malformed_boxes_are_dropped():
