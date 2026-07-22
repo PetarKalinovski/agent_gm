@@ -23,8 +23,35 @@ logger = logging.getLogger(__name__)
 # Footprint = bottom slice of a detected box that actually blocks walking
 FOOTPRINT_TOP_FRACTION = 0.75   # skip the upper 75% of each box (playtest
                                 # feedback: 0.55 blocked too much walk-behind)
-MIN_OBSTACLE_AREA = 0.0015      # ignore boxes under 0.15% of the scene
-MAX_OBSTACLES = 12
+MIN_OBSTACLE_AREA = 0.0008      # ignore boxes under 0.08% of the scene
+MAX_OBSTACLES = 24              # playtest: 12 left too many props walk-through
+
+
+def _parse_boxes_json(text: str) -> list | None:
+    """Parse a JSON array of boxes, salvaging complete entries if the model's
+    output was truncated mid-array (still happens on rare long responses).
+
+    Returns None on unrecoverable parse failure — callers use that to retry,
+    since a failed parse is not the same as a scene with no obstacles."""
+    import json
+
+    try:
+        parsed = json.loads(text)
+        return parsed if isinstance(parsed, list) else None
+    except json.JSONDecodeError:
+        pass
+    # Truncated: cut back to the last complete object and close the array
+    end = text.rfind("}")
+    if end != -1:
+        try:
+            parsed = json.loads(text[: end + 1] + "]")
+            if isinstance(parsed, list):
+                logger.info(f"Obstacle JSON was truncated; salvaged {len(parsed)} boxes")
+                return parsed
+        except json.JSONDecodeError:
+            pass
+    logger.warning("Obstacle JSON unsalvageable")
+    return None
 
 
 def boxes_to_footprint_polygons(boxes: list) -> list[list[list[float]]]:
@@ -229,34 +256,44 @@ class ImageGenerator:
 
         prompt = """This is a scene background from a 2D RPG, viewed from a three-quarter top-down angle. Characters walk on the floor/ground.
 
-Identify SOLID OBSTACLES a walking character could not pass through: furniture, tables, counters, market stalls, wells, fountains, statues, trees, boulders, crates, carts, water pools, fire pits.
+Identify EVERY solid obstacle a walking character could not pass through. Be exhaustive — walk the scene systematically (left to right, near to far) and box each object SEPARATELY, even when similar objects sit side by side:
+- furniture: tables, benches, chairs, counters, beds, shelves
+- market fixtures: each stall, each cart, each awning post cluster
+- containers: each crate stack, each barrel or barrel cluster, sacks, chests
+- structures: wells, fountains, statues, pillars, fences, low walls inside the scene
+- nature: trees, stumps, boulders, bushes too dense to step through
+- hazards: water pools, fire pits, braziers
 
-Do NOT include: the open floor or ground itself, paths, rugs, doorways, shadows, wall surfaces at the edges of the scene, or anything a person could simply step over.
+Do NOT include: the open floor or ground itself, paths, rugs, doorways, shadows, wall surfaces at the outer edges of the scene, or anything a person could simply step over (a rope, a small basket, scattered straw).
 
-Return a JSON array (no other text): [{"label": "<short name>", "box_2d": [ymin, xmin, ymax, xmax]}] with coordinates in the 0-1000 range. Return at most 12 boxes, largest and most important obstacles first. Return [] if there are none."""
+Return a JSON array (no other text): [{"label": "<short name>", "box_2d": [ymin, xmin, ymax, xmax]}] with coordinates in the 0-1000 range. Return at most 24 boxes, largest first. Missing a real obstacle is worse than a slightly loose box. Return [] if there are none."""
 
         payload = {
             "contents": [{"parts": [
                 {"inline_data": {"mime_type": "image/png", "data": base64.b64encode(background_image).decode()}},
                 {"text": prompt},
             ]}],
-            "generationConfig": {"responseMimeType": "application/json"},
+            # 24 boxes of JSON overflow the default output budget — a
+            # truncated array used to lose the whole detection
+            "generationConfig": {"responseMimeType": "application/json", "maxOutputTokens": 8192},
         }
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
 
-        try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                response = await client.post(url, headers={"Content-Type": "application/json"}, json=payload)
-                response.raise_for_status()
-                result = response.json()
-            text = result["candidates"][0]["content"]["parts"][0]["text"]
-            import json as _json
-            boxes = _json.loads(text)
-        except Exception as e:
-            logger.warning(f"Obstacle detection failed: {e}")
-            return []
-
-        return boxes_to_footprint_polygons(boxes)
+        # A parse failure is not "no obstacles" — retry once before giving up
+        for attempt in (1, 2):
+            try:
+                async with httpx.AsyncClient(timeout=60.0) as client:
+                    response = await client.post(url, headers={"Content-Type": "application/json"}, json=payload)
+                    response.raise_for_status()
+                    result = response.json()
+                text = result["candidates"][0]["content"]["parts"][0]["text"]
+                boxes = _parse_boxes_json(text)
+            except Exception as e:
+                logger.warning(f"Obstacle detection failed (attempt {attempt}): {e}")
+                boxes = None
+            if boxes is not None:
+                return boxes_to_footprint_polygons(boxes)
+        return []
 
     def _save_image(self, image_data: bytes, relative_path: str) -> str:
         """Save image to assets directory. Returns absolute path."""

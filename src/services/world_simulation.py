@@ -28,6 +28,10 @@ Rules:
   record progress in its description/goals, or create_event for something that
   happened).
 - Optionally move ONE major NPC to a location that fits their goals (move_npc).
+  NEVER move an NPC into the player's current location — walking the story's
+  antagonist up to the player is the DM's call, not yours. NEVER move an NPC
+  who is named in the DM's planned beats or active threats (check the world
+  state summary): they are staged for a scene that hasn't happened yet.
 - Schedule at most ONE future event with schedule_world_event (e.g. "caravan
   arrives in 2 days") so the world has momentum.
 - Record what happened with create_event (event_type "macro" for faction-level,

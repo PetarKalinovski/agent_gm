@@ -84,9 +84,37 @@ def move_player(player_id: str, destination_id: str, requirements_met: bool = Fa
                             "again with requirements_met=True. Otherwise narrate why they can't pass."
                         ),
                     }
-            elif destination.parent_id == old_location_id or old_location_id == destination.parent_id:
-                # Entering/exiting a building
-                travel_time = 0.1
+            else:
+                if destination.parent_id == old_location_id or old_location_id == destination.parent_id:
+                    # Entering/exiting a building
+                    travel_time = 0.1
+
+                # Gate-bypass guard: when EVERY modeled route INTO the
+                # destination (edges authored toward it) is requirement-
+                # locked, approaching it via the location hierarchy or an
+                # unmodeled path is locked too (playtest: square -> town
+                # container -> gated hollow walked around the north gate).
+                # One open route in = public place. Only to-side edges count:
+                # a hub whose one locked road leads OUT must not inherit the
+                # lock through a bidirectional edge.
+                if not requirements_met:
+                    entries = session.query(Connection).filter(
+                        Connection.to_location_id == destination_id
+                    ).all()
+                    gate_requirements = [r for c in entries for r in (c.requirements or [])]
+                    if entries and gate_requirements and all(c.requirements for c in entries):
+                        return {
+                            "blocked": True,
+                            "destination": destination.name,
+                            "requirements": gate_requirements,
+                            "message": (
+                                f"{destination.name} is behind a controlled route: "
+                                f"{', '.join(str(r) for r in gate_requirements)}. There is no way "
+                                "around it. Check the player's inventory/state; if satisfied, call "
+                                "move_player again with requirements_met=True. Otherwise narrate "
+                                "why they can't get through."
+                            ),
+                        }
 
         # Update player location and mark destination visited — one transaction
         player.current_location_id = destination_id

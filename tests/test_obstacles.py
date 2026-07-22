@@ -52,3 +52,17 @@ def test_location_obstacles_column_roundtrip(db):
     with get_session() as session:
         loaded = session.get(Location, loc_id)
         assert loaded.obstacles == polys
+
+
+def test_truncated_boxes_json_is_salvaged():
+    from src.services.image_generator import _parse_boxes_json
+
+    good = '[{"label": "well", "box_2d": [1, 2, 3, 4]}, {"label": "stall", "box_2d": [5, 6, 7, 8]}]'
+    assert len(_parse_boxes_json(good)) == 2
+    truncated = '[{"label": "well", "box_2d": [1, 2, 3, 4]}, {"label": "sta'
+    assert len(_parse_boxes_json(truncated)) == 1
+    # Unrecoverable parses return None (caller retries) — distinct from a
+    # legitimate empty scene, which returns []
+    assert _parse_boxes_json("garbage") is None
+    assert _parse_boxes_json('{"not": "a list"}') is None
+    assert _parse_boxes_json("[]") == []
