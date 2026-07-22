@@ -471,6 +471,35 @@
         .hud-chip.clickable { cursor: pointer; }
         .hud-chip.clickable:hover { background: rgba(255, 255, 255, 0.16); }
 
+        /* NPC-specific thinking state during sub-agent delegation */
+        .thinking-npc {
+            display: inline-flex; align-items: center; gap: 7px;
+            margin-right: 8px; color: var(--text-secondary, #9ca3af);
+            font-style: italic; font-size: 0.9rem;
+        }
+        .thinking-npc img {
+            width: 24px; height: 24px; border-radius: 50%;
+            object-fit: cover; border: 1px solid #6366f1;
+        }
+
+        /* Event toasts (quest banners etc.) — slide in over the canvas */
+        #toast-stack {
+            position: absolute; top: 64px; left: 50%; transform: translateX(-50%);
+            z-index: 900; display: flex; flex-direction: column; gap: 8px;
+            pointer-events: none; align-items: center;
+        }
+        .toast {
+            padding: 10px 22px; border-radius: 10px; font-family: Georgia, serif;
+            font-size: 1.02rem; letter-spacing: 0.04em; color: #f4f0e6;
+            background: rgba(20, 20, 29, 0.92); border: 1px solid #6366f1;
+            box-shadow: 0 6px 24px rgba(0,0,0,0.45);
+            opacity: 0; transform: translateY(-10px);
+            transition: opacity 0.35s ease, transform 0.35s ease;
+        }
+        .toast.show { opacity: 1; transform: translateY(0); }
+        .toast.quest-done { border-color: #fbbf24; color: #fde68a; }
+        .toast.quest-failed { border-color: #ef4444; color: #fca5a5; }
+
         #hud-health.healthy    { color: #4ade80; }
         #hud-health.winded     { color: #fbbf24; }
         #hud-health.hurt       { color: #fb923c; }
@@ -2025,8 +2054,44 @@
         let lastPlayerState = null;
         let hudPanelMode = null; // 'quests' | 'inventory' | null
 
+        // Health severity order for coloring transitions (worse = red)
+        const HEALTH_ORDER = ['healthy', 'winded', 'hurt', 'badly_hurt', 'critical', 'dead'];
+
+        /** Diff two states and spawn canvas floaters for what changed. */
+        function spawnStateFloaters(prev, state) {
+            if (!prev || !game || !game.spawnFloater) return;
+            if (prev.location_id !== state.location_id) return; // scene changed — skip
+
+            const dGold = (state.currency ?? 0) - (prev.currency ?? 0);
+            if (dGold > 0) game.spawnFloater(`+${dGold} gold`, 0xfbbf24);
+            else if (dGold < 0) game.spawnFloater(`${dGold} gold`, 0xf87171);
+
+            if (prev.health !== state.health && state.health !== 'dead') {
+                const worse = HEALTH_ORDER.indexOf(state.health) > HEALTH_ORDER.indexOf(prev.health);
+                game.spawnFloater(
+                    (state.health || '').replace(/_/g, ' '),
+                    worse ? 0xef4444 : 0x4ade80
+                );
+            }
+
+            const count = (inv) => {
+                const m = {};
+                for (const i of (inv || [])) m[i.name] = (m[i.name] || 0) + (i.quantity || 1);
+                return m;
+            };
+            const before = count(prev.inventory), after = count(state.inventory);
+            for (const name in after) {
+                const gained = after[name] - (before[name] || 0);
+                if (gained > 0) game.spawnFloater(`+ ${name}`, 0xa5b4fc);
+            }
+            for (const name in before) {
+                if ((after[name] || 0) < before[name]) game.spawnFloater(`− ${name}`, 0x9ca3af);
+            }
+        }
+
         function applyPlayerState(state) {
             if (!state) return;
+            try { spawnStateFloaters(lastPlayerState, state); } catch (e) { /* cosmetic only */ }
             lastPlayerState = state;
 
             // Day/night scene tint follows the game clock
@@ -2087,6 +2152,26 @@
         function toggleHudPanel(mode) {
             hudPanelMode = (hudPanelMode === mode) ? null : mode;
             renderHudPanel();
+        }
+
+        /** Slide-in toast over the game canvas (quest banners, big events). */
+        function showToast(html, kind = '', holdMs = 4200) {
+            let stack = document.getElementById('toast-stack');
+            if (!stack) {
+                stack = document.createElement('div');
+                stack.id = 'toast-stack';
+                // Attach to the game view so it overlays the canvas
+                (document.getElementById('game-container') || document.body).appendChild(stack);
+            }
+            const el = document.createElement('div');
+            el.className = `toast ${kind}`;
+            el.innerHTML = html;
+            stack.appendChild(el);
+            requestAnimationFrame(() => el.classList.add('show'));
+            setTimeout(() => {
+                el.classList.remove('show');
+                setTimeout(() => el.remove(), 400);
+            }, holdMs);
         }
 
         document.getElementById('hud-quests-chip').addEventListener('click', () => toggleHudPanel('quests'));
@@ -2448,6 +2533,32 @@
             if (dots) dots.remove();
         }
 
+        /** Upgrade the generic thinking dots into "<NPC> is thinking…" with
+         *  their portrait — shown during the (slow) NPC-agent delegation. */
+        function npcThinking(messageEl, npcId) {
+            let dots = messageEl.querySelector('.thinking');
+            if (dots && dots.dataset.npc === npcId) return;
+            if (!dots) {
+                // Dots were cleared by earlier narration — bring them back
+                // for the wait
+                dots = document.createElement('div');
+                dots.className = 'thinking';
+                dots.innerHTML = '<span></span><span></span><span></span>';
+                messageEl.appendChild(dots);
+            }
+            dots.dataset.npc = npcId;
+            let name = null;
+            try { name = game && game.npcs[npcId] ? game.npcs[npcId].data.name : null; } catch (e) {}
+            if (!name && currentNpcId === npcId) name = currentNpcName;
+            const label = document.createElement('span');
+            label.className = 'thinking-npc';
+            label.innerHTML =
+                `<img src="/api/assets/portrait/${npcId}" onerror="this.style.display='none'" alt=""> ` +
+                `${escapeHtml(name || 'Someone')} considers&hellip;`;
+            dots.prepend(label);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+
         function escapeHtml(text) {
             return text.replace(/&/g, '&amp;')
                        .replace(/</g, '&lt;')
@@ -2587,11 +2698,27 @@
                                         contentEl.innerHTML = formatText(textBuffer);
                                     } else if (payload.type === 'tool_update' && payload.tool) {
                                         renderToolPill(toolsContainer, payload.tool);
+                                        if (payload.tool.name === 'prompt_npc_agent' &&
+                                            payload.tool.status === 'running' && payload.tool.npc_id) {
+                                            npcThinking(messageEl, payload.tool.npc_id);
+                                        }
                                     } else if (payload.type === 'tool_summary' && payload.payload && payload.payload.tools) {
                                         payload.payload.tools.forEach(t => renderToolPill(toolsContainer, t));
                                     } else if (payload.type === 'state' && payload.state) {
                                         turnState = payload.state;
                                         applyPlayerState(payload.state);
+                                    } else if (payload.type === 'speech' && payload.npc_id) {
+                                        if (game && game.showSpeechBubble) {
+                                            game.showSpeechBubble(payload.npc_id, payload.text, null, payload.audio_id || null);
+                                        }
+                                    } else if (payload.type === 'quest_activated') {
+                                        showToast(`&#10022; New Quest: ${escapeHtml(payload.title || '')}`, 'quest');
+                                    } else if (payload.type === 'quest_completed') {
+                                        showToast(`&#10022; Quest Complete: ${escapeHtml(payload.title || '')}`, 'quest-done');
+                                    } else if (payload.type === 'quest_failed') {
+                                        showToast(`Quest Failed: ${escapeHtml(payload.title || '')}`, 'quest-failed');
+                                    } else if (payload.type === 'combat_start' && payload.enemies) {
+                                        if (game && game.startCombat) game.startCombat(payload.enemies);
                                     } else if (payload.type === 'npc_death' && payload.npc_id) {
                                         console.log(`NPC Death Event: ${payload.npc_name} (${payload.npc_id})`);
                                         if (game && game.playDeathAnimation) {

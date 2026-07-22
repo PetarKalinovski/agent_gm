@@ -70,6 +70,10 @@ class GameRenderer {
         this.sceneTint = { r: 1, g: 1, b: 1 };
         this.targetTint = { r: 1, g: 1, b: 1 };
 
+        // Canvas feedback: floating text (damage/gold/items) + NPC speech bubbles
+        this.floaters = [];
+        this.bubbles = {};   // npcId -> {c, text, until, audioId}
+
         // Combat gray-box prototype (Ctrl+K spawns a test enemy)
         this.combat = null;
 
@@ -136,9 +140,25 @@ class GameRenderer {
         this.worldContainer.addChild(this.particleLayer);
         this.worldContainer.addChild(this.entityLayer);
 
+        // Speech bubbles float above all entities but below editor overlays
+        this.bubbleLayer = new PIXI.Container();
+        this.worldContainer.addChild(this.bubbleLayer);
+
         // Collision-editor overlay renders above everything in the world
         this.collisionOverlay = new PIXI.Container();
         this.worldContainer.addChild(this.collisionOverlay);
+
+        // Speech bubbles hold while their voice line is playing
+        this._onVoiceStart = (e) => {
+            const b = this._bubbleByAudio(e.detail?.audioId);
+            if (b) b.until = Infinity;
+        };
+        this._onVoiceEnd = (e) => {
+            const b = this._bubbleByAudio(e.detail?.audioId);
+            if (b) b.until = performance.now() + 500;
+        };
+        window.addEventListener('forge-voice-start', this._onVoiceStart);
+        window.addEventListener('forge-voice-end', this._onVoiceEnd);
 
         // UI layer (doesn't move with camera)
         this.uiLayer = new PIXI.Container();
@@ -222,6 +242,8 @@ class GameRenderer {
         window.removeEventListener('keydown', this._onKeyDown);
         window.removeEventListener('keyup', this._onKeyUp);
         window.removeEventListener('resize', this._onResize);
+        window.removeEventListener('forge-voice-start', this._onVoiceStart);
+        window.removeEventListener('forge-voice-end', this._onVoiceEnd);
         try {
             this.app.destroy(true, { children: true, texture: false });
         } catch (e) {
@@ -245,7 +267,10 @@ class GameRenderer {
         this.shadowLayer.removeChildren();
         this.particleLayer.removeChildren();
         this.collisionOverlay.removeChildren();
+        this.bubbleLayer.removeChildren();
         this.particles = [];
+        this.floaters = [];
+        this.bubbles = {};
         // Keep the player, but maybe hide them or move them to center
         if (this.player) {
             this.player.normalizedX = 50;
@@ -574,6 +599,8 @@ class GameRenderer {
         if (!this.player || this.isLoading) return;
 
         this._updateSceneTint(this.app.ticker.deltaMS);
+        this._updateFloaters(this.app.ticker.deltaMS);
+        this._updateBubbles();
 
         // Skip movement if player is dead
         if (this.playerDead) {
@@ -1416,6 +1443,125 @@ class GameRenderer {
             npc.sprite.y = gy + bob;
             npc.sprite.zIndex = gy;
             this._fitShadow(npc.shadow, npc.sprite, gy);
+        }
+    }
+
+    // ================= Canvas feedback: floaters & speech bubbles =================
+
+    /** Floating text over the player (damage, gold, items). */
+    spawnFloater(text, color = 0xffffff) {
+        if (!this.player || !this.player.sprite) return;
+        const t = new PIXI.Text({
+            text,
+            style: {
+                fontFamily: 'Georgia, serif',
+                fontSize: 17,
+                fontWeight: '700',
+                fill: color,
+                stroke: { color: 0x000000, width: 4 },
+            },
+        });
+        t.anchor.set(0.5, 1);
+        const s = this.player.sprite;
+        t.x = s.x + (Math.random() - 0.5) * 24;
+        t.y = s.y - s.height - 6 - this.floaters.length * 20; // stack multiples
+        this.bubbleLayer.addChild(t);
+        this.floaters.push({ t, life: 0, maxLife: 1500, startY: t.y });
+    }
+
+    _updateFloaters(dt) {
+        for (let i = this.floaters.length - 1; i >= 0; i--) {
+            const f = this.floaters[i];
+            f.life += dt;
+            const k = f.life / f.maxLife;
+            if (k >= 1) {
+                this.bubbleLayer.removeChild(f.t);
+                f.t.destroy();
+                this.floaters.splice(i, 1);
+                continue;
+            }
+            f.t.y = f.startY - 44 * (1 - Math.pow(1 - k, 2)); // ease-out rise
+            f.t.alpha = k < 0.55 ? 1 : 1 - (k - 0.55) / 0.45;
+        }
+    }
+
+    /** Speech bubble above an NPC, synced to the voice line when one plays. */
+    showSpeechBubble(npcId, text, durationMs = null, audioId = null) {
+        const npc = this.npcs[npcId];
+        if (!npc || !npc.sprite || !text) return;
+
+        this.hideSpeechBubble(npcId);
+
+        const display = text.length > 220 ? text.slice(0, 217) + '…' : text;
+        const label = new PIXI.Text({
+            text: display,
+            style: {
+                fontFamily: 'Georgia, serif',
+                fontSize: 13,
+                fill: 0xf4f0e6,
+                wordWrap: true,
+                wordWrapWidth: 230,
+                lineHeight: 17,
+            },
+        });
+        const padX = 10, padY = 7;
+        const bg = new PIXI.Graphics();
+        bg.roundRect(-label.width / 2 - padX, -label.height - padY * 2, label.width + padX * 2, label.height + padY * 2, 8);
+        bg.fill({ color: 0x14141d, alpha: 0.88 });
+        bg.roundRect(-label.width / 2 - padX, -label.height - padY * 2, label.width + padX * 2, label.height + padY * 2, 8);
+        bg.stroke({ color: 0x6366f1, width: 1, alpha: 0.5 });
+        // Tail
+        bg.moveTo(-5, 0); bg.lineTo(5, 0); bg.lineTo(0, 7); bg.closePath();
+        bg.fill({ color: 0x14141d, alpha: 0.88 });
+
+        label.anchor.set(0.5, 1);
+        label.y = -padY;
+
+        const c = new PIXI.Container();
+        c.addChild(bg);
+        c.addChild(label);
+        this.bubbleLayer.addChild(c);
+
+        const hold = durationMs || Math.min(2600 + display.length * 42, 11000);
+        this.bubbles[npcId] = { c, until: performance.now() + hold, audioId };
+        this._positionBubble(npcId);
+    }
+
+    hideSpeechBubble(npcId) {
+        const b = this.bubbles[npcId];
+        if (!b) return;
+        this.bubbleLayer.removeChild(b.c);
+        b.c.destroy({ children: true });
+        delete this.bubbles[npcId];
+    }
+
+    _bubbleByAudio(audioId) {
+        if (!audioId) return null;
+        for (const id in this.bubbles) {
+            if (this.bubbles[id].audioId === audioId) return this.bubbles[id];
+        }
+        return null;
+    }
+
+    _positionBubble(npcId) {
+        const b = this.bubbles[npcId];
+        const npc = this.npcs[npcId];
+        if (!b || !npc || !npc.sprite) return;
+        b.c.x = npc.sprite.x;
+        b.c.y = npc.sprite.y - npc.sprite.height - 10;
+        // Keep the bubble inside the world horizontally
+        const half = b.c.width / 2;
+        b.c.x = Math.max(half + 4, Math.min(this.worldWidth - half - 4, b.c.x));
+    }
+
+    _updateBubbles() {
+        const now = performance.now();
+        for (const id in this.bubbles) {
+            if (now > this.bubbles[id].until) {
+                this.hideSpeechBubble(id);
+            } else {
+                this._positionBubble(id);
+            }
         }
     }
 

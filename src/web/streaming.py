@@ -113,6 +113,24 @@ class ToolUsageTracker:
         entry["status"] = entry.get("status") or "running"
         if is_subagent:
             entry["is_subagent"] = True
+
+        # Surface WHO the DM is consulting as soon as the streaming tool
+        # input contains the npc_id — the frontend shows "<name> is
+        # thinking…" with their portrait instead of a generic spinner
+        # during the (slow) NPC-agent hop.
+        if tool_name == "prompt_npc_agent" and "npc_id" not in entry:
+            tool_input = tool_use.get("input")
+            parsed = None
+            if isinstance(tool_input, dict):
+                parsed = tool_input
+            elif isinstance(tool_input, str) and tool_input:
+                try:
+                    parsed = json.loads(tool_input)
+                except json.JSONDecodeError:
+                    parsed = None
+            if isinstance(parsed, dict) and parsed.get("npc_id"):
+                entry["npc_id"] = str(parsed["npc_id"])
+
         self._enqueue_notification(entry)
 
     def _handle_tool_result_message(self, message: Any) -> None:
