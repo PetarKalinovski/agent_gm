@@ -32,8 +32,9 @@ ENV/
 *.swo
 *~
 
-# Data
-data/
+# Data (root-anchored: a bare "data/" would also swallow src/data/, the
+# seed-code package — which is how seed.py went uncommitted for months)
+/data/
 *.db
 
 # Logs

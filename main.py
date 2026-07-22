@@ -16,8 +16,8 @@ def main():
         "command",
         nargs="?",
         default="play",
-        choices=["play", "seed", "clear", "web"],
-        help="Command to run: play (default), seed (create test world), clear (reset world), web (start web frontend)"
+        choices=["play", "seed", "playtest", "clear", "web"],
+        help="Command to run: play (default), seed (create test world), playtest (create Emberfall playtest world), clear (reset world), web (start web frontend)"
     )
     parser.add_argument(
         "--db",
@@ -34,6 +34,12 @@ def main():
     if args.command == "seed":
         from src.data.seed import create_test_world
         create_test_world(args.db)
+    elif args.command == "playtest":
+        from src.data.playtest_seed import PLAYTEST_DB_PATH, create_playtest_world
+        # Unless the user pointed --db somewhere explicitly, the playtest world
+        # gets its own file so it never clobbers a real world.
+        db = args.db if args.db != load_settings().database.path else PLAYTEST_DB_PATH
+        create_playtest_world(db)
     elif args.command == "clear":
         from src.data.seed import clear_world
         clear_world(args.db)
