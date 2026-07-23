@@ -65,11 +65,29 @@ World generation uses separate agents:
   the clock tracks minutes so fractional costs accumulate.
 - **Events**: scheduled events fire deterministically on the world tick;
   fired-but-unnarrated events are re-surfaced to the DM for up to 3 turns.
-- **Tension**: auto-escalates low→rising after 8 quiet turns.
+- **Tension** (`src/services/tension.py`): health loss floors it
+  (winded/hurt→rising, badly_hurt→high, critical→climax), combat floors it
+  to high, sustained calm decays it one level at a time (climax 2 / high 3 /
+  rising 4 calm turns), and low→rising auto-escalates after 8 quiet turns.
+  DM-authored `update_dm_state` changes are respected and reset decay.
 - **Quests**: `activate_quest`/`update_quest_status` sync `Player.active_quests`
-  and apply `Quest.rewards` (currency/items/reputation) transactionally.
+  and apply `Quest.rewards` (currency/items/reputation) transactionally; both
+  emit structured quest events (frontend banners + triumph music stinger).
 - **Travel**: `move_player` blocks on `Connection.requirements` until the DM
-  confirms them with `requirements_met=True`.
+  confirms them with `requirements_met=True`; hierarchy hops cannot bypass a
+  destination whose every authored entry route is requirement-locked.
+- **Real-time combat** (`src/services/combat.py` + `start_combat` tool): the
+  DM names present NPCs; the frontend fights them Hades-style with a fixed
+  archetype library (brute/skirmisher/stalker — LLM picks a label, never
+  numbers). `POST /api/combat/result` applies outcomes in code (monotonic
+  health worsening, defeat→critical, NPC deaths + world event) BEFORE the DM
+  narrates the aftermath via an auto-sent `[COMBAT OUTCOME]` turn.
+- **Turn integrity** (`src/web/turn_filters.py` + `turn_audit.py`): the
+  DialogueDeduper strips DM re-quotes of lines already delivered as `speech`
+  events; the post-turn audit diffs narration claims (quests, damage, items,
+  arrivals, consequence ledgers) against actual tool calls, attaches warnings
+  to the `complete` SSE event, and injects them into the DM's next-turn
+  context as a `[REALITY AUDIT]` block so it self-corrects.
 
 ### Tool-Based World Mutation
 
@@ -119,11 +137,17 @@ Asset pipeline: `reference_search` finds web images → `image_generator` create
   player; drag-editing an NPC rebases its wander home.
 - **Day/night tint**: the frontend tints the world container from the state
   event's `time_of_day` (evening amber, night blue, etc.).
-- **Combat gray-box prototype**: Ctrl+K spawns a test enemy (no art, no DM
-  integration). Space = dodge-roll with i-frames, J = melee arc. Enemy runs a
-  chase → telegraph → lunge → recover state machine; hitstop, knockback,
-  screenshake, room exits lock during combat. This is the feel prototype for
-  in-world combat — archetype/skin system and DM result reporting come later.
+- **Real-time combat**: DM-initiated via `start_combat` → `combat_start` SSE
+  → `GameRenderer.startCombat` spawns present NPCs as combatants using their
+  real sprites (ambient bodies hidden meanwhile), driven by the fixed
+  archetype table `GameRenderer.ARCHETYPES` (brute/skirmisher/stalker;
+  stalkers circle before committing). Player combat HP derives from health
+  status — wounded characters fight weaker. Space = dodge-roll with i-frames,
+  J = melee arc; chase → telegraph → lunge → recover AI; hitstop, knockback,
+  screenshake, exits lock during combat. Outcome → `combat-ended` event →
+  `POST /api/combat/result` (code applies health/deaths) → auto-sent
+  `[COMBAT OUTCOME]` turn for the aftermath. Ctrl+K still spawns a gray-box
+  test enemy (client-only, resets on defeat).
 
 ### Audio / cinematic event flow
 
@@ -131,11 +155,21 @@ Asset pipeline: `reference_search` finds web images → `image_generator` create
 dicts; `ToolUsageTracker._parse_tool_output_for_events` (same mechanism as
 `npc_death`) converts these into structured SSE events: `speech`
 (npc_name/text/tone/action, enriched server-side with npc_id + a TTS
-`audio_id`) and `scene` (location/time_of_day/atmosphere). The post-turn
-`state` event carries `tension`. The frontend `ForgeAudio` class
-(`static/js/audio.js`) maps tension/time/death to a music mood, crossfades
-palette tracks, and plays voice clips sequentially (polling
-`/api/assets/voice/{audio_id}`), ducking music during speech.
+`audio_id`), `scene` (location/time_of_day/atmosphere), quest lifecycle
+events (`quest_activated`/`quest_completed`/`quest_failed`), and
+`combat_start`. `state` events stream mid-turn after every successful
+world-write tool AND post-turn, carrying `tension`. The frontend `ForgeAudio`
+class (`static/js/audio.js`) maps tension/time/death to a music mood,
+crossfades palette tracks, plays a one-shot triumph stinger on quest
+completion (reverts to the world mood; danger interrupts), and plays voice
+clips sequentially (polling `/api/assets/voice/{audio_id}`), ducking music
+during speech and dispatching `forge-voice-start/end` for speech-bubble sync.
+Canvas feedback: state diffs spawn floating text over the player
+(gold/health/items), speech events show bubbles above NPC sprites, and
+`prompt_npc_agent` tool pills carry `npc_id` so the chat shows "<NPC>
+considers…" with their portrait during the slow sub-agent hop. Resuming a
+world with history shows a "Previously…" recap (`GET /api/recap/{player_id}`,
+fast model).
 
 ### Data Storage
 
