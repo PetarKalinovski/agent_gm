@@ -48,6 +48,13 @@ def test_start_combat_builds_roster_and_floors_tension(arena):
     assert _tension() == "high"
 
 
+def test_start_combat_resolves_names(arena):
+    # LLMs pass names instead of UUIDs — the tool copes (live playtest bug)
+    result = build_combat_start(["Vex"], arena["player"])
+    assert result.get("event") == "combat_start"
+    assert result["enemies"][0]["npc_id"] == arena["bandit"]
+
+
 def test_start_combat_rejects_absent_npc(arena):
     result = build_combat_start([arena["faraway"]], arena["player"])
     assert "error" in result and "not at the player's location" in result["error"]

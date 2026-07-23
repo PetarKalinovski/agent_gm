@@ -104,3 +104,28 @@ def test_audit_clean_narration():
         "The market hums around you. Piper watches from her stall.", [], STATE_A, STATE_A
     )
     assert warnings == []
+
+
+def test_audit_first_person_injury():
+    # Live playtest: DM narrated "I've pulled something in my shoulder" toolless
+    warnings = audit_turn("I've pulled something in my shoulder.", [], STATE_A, STATE_A)
+    assert any(w["check"] == "damage_without_tool" for w in warnings)
+
+
+def test_audit_fake_consequence_ledger():
+    # Live playtest: DM printed "Consequences applied: ... disposition is now
+    # hostile ... an event 'Brawl' is created" with zero tool calls
+    text = ("Consequences applied: Captain Coldiron's disposition is now hostile. "
+            "An event 'Brawl in Market Square' is created.")
+    warnings = audit_turn(text, [], STATE_A, STATE_A)
+    assert any(w["check"] == "consequences_without_tools" for w in warnings)
+    # Same text WITH the tools succeeding is clean
+    warnings = audit_turn(text, _tools("update_npc_relationship", "create_event"), STATE_A, STATE_A)
+    assert not any(w["check"] == "consequences_without_tools" for w in warnings)
+
+
+def test_audit_feedback_formatting():
+    from src.web.turn_audit import format_audit_feedback
+    assert format_audit_feedback([]) == ""
+    out = format_audit_feedback([{"check": "x", "detail": "Fake quest banner."}])
+    assert "Fake quest banner." in out and "REALITY AUDIT" in out

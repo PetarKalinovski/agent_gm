@@ -38,7 +38,11 @@ from src.services.world_tick import snapshot_clock, enforce_minimum_time_cost
 from src.services.world_simulation import maybe_advance_world
 from src.services.tension import snapshot_turn_tension, enforce_tension
 from src.web.turn_filters import DialogueDeduper
-from src.web.turn_audit import audit_turn
+from src.web.turn_audit import audit_turn, format_audit_feedback
+
+# Last turn's audit warnings per player — injected into the next turn's
+# context so the DM repairs (or stops making) unbacked claims
+_pending_audit_feedback: dict[str, list] = {}
 
 load_dotenv()
 
@@ -489,6 +493,11 @@ async def play_sse(request: GameRequest):
                 npc_label = f"{request.npc_name} (npc_id={request.npc_id})" if request.npc_name else f"npc_id={request.npc_id}"
                 context += f"\n\n[The player is currently addressing {npc_label} — route dialogue to this NPC via prompt_npc_agent.]"
 
+            # Last turn's audit violations feed back so the DM self-corrects
+            prior_warnings = _pending_audit_feedback.pop(request.player_id, None)
+            if prior_warnings:
+                context += format_audit_feedback(prior_warnings)
+
             # Set up narration callback
             narration_buffer: list[str] = []
 
@@ -606,6 +615,8 @@ async def play_sse(request: GameRequest):
                 )
                 for w in audit_warnings:
                     logger.warning(f"Turn audit [{w['check']}]: {w['detail']}")
+                if audit_warnings:
+                    _pending_audit_feedback[request.player_id] = audit_warnings
             except Exception as e:
                 logger.warning(f"Turn audit failed: {e}")
 

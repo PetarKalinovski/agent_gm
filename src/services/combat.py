@@ -45,6 +45,19 @@ def infer_archetype(npc: NPC) -> str:
     return "skirmisher"
 
 
+def _resolve_npc(session, ident: str, location_id: str | None):
+    """Resolve an NPC by id, falling back to (unique) name — LLMs pass
+    names instead of UUIDs constantly; the tool should just cope."""
+    npc = session.get(NPC, ident)
+    if npc:
+        return npc
+    matches = session.query(NPC).filter(NPC.name.ilike(f"%{ident.strip()}%")).all()
+    if len(matches) == 1:
+        return matches[0]
+    here = [n for n in matches if n.current_location_id == location_id]
+    return here[0] if len(here) == 1 else None
+
+
 def build_combat_start(npc_ids: list[str], player_id: str) -> dict[str, Any]:
     """Validate combatants and build the combat_start event payload."""
     with get_session() as session:
@@ -54,9 +67,9 @@ def build_combat_start(npc_ids: list[str], player_id: str) -> dict[str, Any]:
 
         enemies = []
         for npc_id in npc_ids:
-            npc = session.get(NPC, npc_id)
+            npc = _resolve_npc(session, npc_id, player.current_location_id)
             if not npc:
-                return {"error": f"NPC {npc_id} not found"}
+                return {"error": f"NPC {npc_id!r} not found (pass the npc_id from get_npcs_at_location)"}
             if npc.status != "alive":
                 return {"error": f"{npc.name} is not alive — they can't fight."}
             if npc.current_location_id != player.current_location_id:
@@ -157,10 +170,12 @@ def apply_combat_result(
 
         session.commit()
 
-    # Fight's over — tension can start cooling from climax next calm turn,
-    # but the immediate aftermath stays hot
+    # Fight's over — the aftermath stays hot (and the danger counter resets:
+    # the fight happened between turns, so no play turn registered it)
     if outcome == "defeat":
         apply_tension_floor("climax", "player downed in combat")
+    else:
+        apply_tension_floor("high", f"combat {outcome}")
 
     logger.info(f"Combat result applied: {changes}")
     return changes

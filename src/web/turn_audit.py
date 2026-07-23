@@ -23,8 +23,11 @@ _QUEST_CLAIM = re.compile(
 _QUEST_TOOLS = {"activate_quest", "update_quest_status", "create_quest", "update_quest_objectives"}
 
 _DAMAGE_CLAIM = re.compile(
-    r"\byou(?:'re| are| take| took| suffer(?:ed)?)\b[^.!?\n]{0,40}"
-    r"\b(?:damage|wounded?|bleeding|injur(?:ed|y)|hurt badly|badly hurt)\b",
+    # Second OR first person — playtest caught the DM narrating injuries as
+    # "I've pulled something in my shoulder" with zero tool calls
+    r"\b(?:you|i)(?:'re|'ve| are| am| have| take| took| suffer(?:ed)?)\b[^.!?\n]{0,50}"
+    r"\b(?:damage|wounded?|bleeding|injur(?:ed|y)|hurt(?:\s+now)?"
+    r"|pulled something|sprained|twisted my|twisted your|broken (?:rib|arm|leg|ankle|wrist))\b",
     re.IGNORECASE,
 )
 
@@ -39,6 +42,20 @@ _ARRIVAL_CLAIM = re.compile(
     r"\byou (?:arrive (?:at|in)|reach the|step into|pass through the gates? of)\b",
     re.IGNORECASE,
 )
+
+# Meta-mechanics claims ("Consequences applied: ... disposition is now
+# hostile ... an event is created") — live playtest caught the DM printing
+# a fabricated consequence ledger with zero tool calls
+_CONSEQUENCE_CLAIM = re.compile(
+    r"(?:consequences applied|disposition is now|relationship is (?:now )?(?:severely )?damaged"
+    r"|reputation (?:with [^.!?\n]{0,30})?(?:drops|falls|is damaged|takes a hit)"
+    r"|an event [^.!?\n]{0,50}is (?:created|recorded))",
+    re.IGNORECASE,
+)
+_CONSEQUENCE_TOOLS = {
+    "update_npc_relationship", "update_npc_mood", "update_player_reputation",
+    "create_event", "update_faction",
+}
 
 
 def audit_turn(
@@ -94,4 +111,28 @@ def audit_turn(
             "detail": "Narration describes arriving somewhere but the player's location never changed.",
         })
 
+    if _CONSEQUENCE_CLAIM.search(turn_text) and not (succeeded & _CONSEQUENCE_TOOLS):
+        warnings.append({
+            "check": "consequences_without_tools",
+            "detail": (
+                "Narration claims relationship/reputation/event consequences but no "
+                "relationship, reputation, or event tool succeeded this turn."
+            ),
+        })
+
     return warnings
+
+
+def format_audit_feedback(warnings: list[dict[str, str]]) -> str:
+    """Context block injected into the DM's NEXT turn so it self-corrects."""
+    if not warnings:
+        return ""
+    lines = "\n".join(f"- {w['detail']}" for w in warnings)
+    return (
+        "\n\n[REALITY AUDIT of your previous turn — the engine found narration "
+        "claiming mechanics that never happened:\n"
+        f"{lines}\n"
+        "The database did NOT change for these claims. THIS turn, either make "
+        "them real with the proper tool calls or stop asserting them. Never "
+        "print mechanics or consequence lists in narration.]"
+    )
