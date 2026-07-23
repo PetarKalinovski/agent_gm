@@ -265,6 +265,60 @@ class AssetManager:
 
         return paths
 
+    def _check_action_sprites_exist(self, character_id: str, actions: tuple[str, ...]) -> bool:
+        for action in actions:
+            for i in range(1, ImageGenerator.ACTION_KEYFRAME_COUNT + 1):
+                if not (self.assets_dir / "sprites" / f"{character_id}_{action}{i}.png").exists():
+                    return False
+        return True
+
+    async def ensure_action_sprites(
+        self, character_id: str, character_type: str = "npc"
+    ) -> dict[str, str]:
+        """Ensure combat action frames exist (attack for everyone, dodge for
+        players). Generated lazily — first requested when a fight starts —
+        using the character's own sprite as the style reference.
+        """
+        actions = ("attack", "dodge") if character_type == "player" else ("attack",)
+        if self._check_action_sprites_exist(character_id, actions):
+            return {
+                f"{a}{i}": str(self.assets_dir / "sprites" / f"{character_id}_{a}{i}.png")
+                for a in actions
+                for i in range(1, ImageGenerator.ACTION_KEYFRAME_COUNT + 1)
+            }
+
+        with get_session() as db:
+            if character_type == "player":
+                character = db.query(Player).filter(Player.id == character_id).first()
+            else:
+                character = db.query(NPC).filter(NPC.id == character_id).first()
+            if not character:
+                raise ValueError(f"{character_type} {character_id} not found")
+            world_bible = self._get_world_bible(db)
+            db.expunge(character)
+            if world_bible is not None:
+                db.expunge(world_bible)
+
+        # Side-view actions match best against the right-facing idle; fall
+        # back to the front sprite (NPCs only have front)
+        ref_path = self.assets_dir / "sprites" / f"{character_id}_right.png"
+        if not ref_path.exists():
+            ref_path = self.assets_dir / "sprites" / f"{character_id}_front.png"
+        if not ref_path.exists():
+            raise ValueError(f"No idle sprite yet for {character_id} — actions need a reference")
+        reference = ref_path.read_bytes()
+
+        paths: dict[str, str] = {}
+        for action in actions:
+            if self._check_action_sprites_exist(character_id, (action,)):
+                continue
+            paths.update(
+                await self.image_gen.generate_action_cycle(
+                    character, world_bible, action, reference
+                )
+            )
+        return paths
+
     async def get_npc_sprite(self, npc_id: str, direction: str = "front") -> str:
         """Get or generate NPC sprite for given direction.
 

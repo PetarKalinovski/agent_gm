@@ -120,6 +120,20 @@ def audit_turn(
             ),
         })
 
+    # First-person narration ("I lunge...") — the DM is the world, not the
+    # character. Quoted spans are removed first: NPC dialogue legitimately
+    # says "I". History momentum makes this sticky; the feedback loop nudges.
+    unquoted = re.sub(r'["“][^"“”]*["”]', " ", turn_text)
+    if len(re.findall(r"\b(?:I|I'm|I've|my)\b", unquoted)) >= 3:
+        warnings.append({
+            "check": "first_person_narration",
+            "detail": (
+                "Narration is written in FIRST person ('I lunge...'). Narrate the "
+                "player in SECOND person ('you lunge...') — you are the world, "
+                "not the character."
+            ),
+        })
+
     return warnings
 
 

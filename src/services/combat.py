@@ -96,12 +96,15 @@ def build_combat_start(npc_ids: list[str], player_id: str) -> dict[str, Any]:
         "event": "combat_start",
         "enemies": enemies,
         "instruction": (
-            "Real-time combat has begun on the canvas — the player now fights "
-            "with dodges and strikes. Do NOT narrate the fight blow-by-blow and "
-            "do NOT resolve it yourself. Give one short line of scene-setting "
-            "(the moment violence erupts), then END your turn. You will receive "
-            "a [COMBAT OUTCOME] message when it's over; mechanics (health, "
-            "deaths) will already be applied — narrate only the aftermath."
+            "Real-time combat has begun ON THE CANVAS — the player is fighting "
+            "it with their own reflexes right now. Write ONE sentence that "
+            "FREEZE-FRAMES the instant violence erupts (weapons coming out, the "
+            "first step forward) and then END your turn immediately. Absolutely "
+            "no exchanges of blows, no parries, no hits, no wounds, no outcome "
+            "of any kind — anything you write about the fight will contradict "
+            "what the player actually does. You will receive a [COMBAT OUTCOME] "
+            "message when it's over; mechanics (health, deaths) will already be "
+            "applied — then you narrate the aftermath."
         ),
     }
 

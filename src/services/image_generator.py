@@ -760,6 +760,112 @@ Frame 6 — PASSING: LEFT leg swings past the planted RIGHT leg, feet close
 Every frame shows the character from directly behind, walking away from the viewer.""",
     }
 
+    # Combat actions: 6 keys, side view RIGHT-facing (same bias rule as
+    # walks; the frontend mirrors for left by flipping scale.x). NO RIFE
+    # in-betweening — attacks read through SNAP: few frames, strong
+    # anticipation holds, a single explosive strike frame.
+    ACTION_KEYFRAME_COUNT = 6
+    _ACTION_CHOREOGRAPHY = {
+        "attack": """A melee attack in 6 frames — anticipation, strike, recovery. The strike must
+be EXPLOSIVE: frames 1-2 coil, frame 3 releases, frames 4-6 settle.
+Frame 1 — READY: fighting stance, side profile facing right; knees bent, weight
+  on the back LEFT leg, weapon arm (right) drawn back at hip height, off arm
+  raised forward as a guard.
+Frame 2 — COIL: deeper crouch, torso twisted away from the target, weapon arm
+  cocked fully behind the body, shoulder loaded; the pose visibly stores energy.
+Frame 3 — STRIKE: explosive lunge toward the right edge; RIGHT leg thrusts
+  forward into a deep lunge, weapon arm fully extended in a horizontal slash,
+  torso driving forward; hair/clothing whip backward from the speed.
+Frame 4 — FOLLOW-THROUGH: the swing carries across the body to the far side,
+  weight fully on the front RIGHT leg, torso rotated toward the target, weapon
+  arm across the chest.
+Frame 5 — REBALANCE: pushing back off the front leg, weapon arm retracting,
+  torso straightening.
+Frame 6 — GUARD: back to the ready stance of frame 1, arms in guard.
+Every frame is a strict FULL SIDE PROFILE facing right, attacking toward the
+right edge of the image.""",
+        "dodge": """An evasive dodge-roll in 6 frames — drop, roll, recover, moving toward the
+right edge of the image.
+Frame 1 — DROP: side profile facing right; sudden crouch, knees deeply bent,
+  torso leaning forward-right, arms swinging back for the push-off.
+Frame 2 — PUSH-OFF: body launching low and forward to the right, back leg
+  extended from the push, torso diving.
+Frame 3 — TUCK: body curled into a tight ball mid-air, knees to chest, head
+  tucked, rotated partway through the roll.
+Frame 4 — GROUND ROLL: the curled body contacts the ground on the shoulder,
+  mid-roll, legs coming over.
+Frame 5 — RISE: uncurling out of the roll into a low crouch, one knee down,
+  one hand on the ground, head coming up.
+Frame 6 — RECOVERED: low ready stance facing right, knees bent, arms in guard.
+Every frame is a strict FULL SIDE PROFILE facing right.""",
+    }
+
+    async def generate_action_cycle(
+        self,
+        character: "NPC | Player",
+        world_bible: "WorldBible",
+        action: str,
+        reference_image: bytes,
+    ) -> dict[str, str]:
+        """Generate a 6-frame combat action (attack/dodge) filmstrip.
+
+        Same machinery as walks (one strip call, artifact-immune slicing,
+        validation, feet-centroid normalization) but NO interpolation and
+        neighbor-repair instead of phase-partner repair (an action is an arc,
+        not a loop — frame i+3 is a different pose, not a leg-swap).
+
+        Returns:
+            Dict mapping "{action}{n}" to saved file path.
+        """
+        if action not in self._ACTION_CHOREOGRAPHY:
+            raise ValueError(f"Unknown action {action!r}")
+        visual_style = world_bible.visual_style if world_bible else "fantasy RPG game art"
+        n = self.ACTION_KEYFRAME_COUNT
+
+        prompt = f"""The attached image shows the character "{character.name}" standing idle, from a 2D RPG.
+Draw a sprite sheet: this EXACT character performing a {n}-frame {action} animation.
+
+Format: a single horizontal filmstrip of {n} frames. Divide the image into {n} equal
+vertical columns; place exactly one full-body pose centered in each column, with
+clear empty space between poses (poses never touch the image edges).
+
+The motion must be dynamic and clearly readable, like classic action-game animation:
+{self._ACTION_CHOREOGRAPHY[action]}
+
+Every frame: the SAME character design — clothing, colors, face and proportions
+matching the reference image EXACTLY (do not redesign or simplify the outfit),
+identical art style ({visual_style}), identical scale, one shared ground line.
+If the character carries a weapon in the reference, they use that weapon;
+otherwise they fight bare-handed.
+But every frame is a DIFFERENT pose from the choreography above — no two frames in
+the strip may repeat the same pose.
+The ENTIRE canvas must be one continuous solid white background from edge to edge —
+no black areas, no cards, no panels, no grid lines, no frame borders, no numbers,
+no text, no shadows."""
+
+        logger.info(f"Generating {n}-frame {action} cycle for {character.name}")
+        strip_data = await self._call_api(
+            prompt, aspect_ratio="21:9", image_size="2K", reference_image=reference_image
+        )
+        cells = self._slice_walk_strip(strip_data, n)
+        try:
+            frames = self._normalize_walk_frames(cells, reference_image, partner_repair=False)
+        except ValueError as e:
+            logger.warning(f"{action} strip unusable ({e}); regenerating once")
+            strip_data = await self._call_api(
+                prompt, aspect_ratio="21:9", image_size="2K", reference_image=reference_image
+            )
+            cells = self._slice_walk_strip(strip_data, n)
+            frames = self._normalize_walk_frames(cells, reference_image, partner_repair=False)
+
+        paths: dict[str, str] = {}
+        for i, frame_img in enumerate(frames, start=1):
+            buf = io.BytesIO()
+            frame_img.save(buf, format="PNG")
+            key = f"{action}{i}"
+            paths[key] = self._save_image(buf.getvalue(), f"sprites/{character.id}_{key}.png")
+        return paths
+
     async def generate_walk_cycle(
         self,
         character: "NPC | Player",
@@ -920,14 +1026,16 @@ no text, no shadows."""
         return frame.width, frame.height, opaque, feet_cx
 
     def _normalize_walk_frames(
-        self, cells: list["Image.Image"], idle_sprite: bytes
+        self, cells: list["Image.Image"], idle_sprite: bytes, partner_repair: bool = True
     ) -> list["Image.Image"]:
         """Background-remove, validate, repair, and align a strip's frames.
 
         Broken frames (ghosts, slivers, merges) are replaced by their phase
         partner — frame i and i + n/2 are the same pose with legs swapped, so
-        the substitution preserves the cycle's rhythm. More than half broken
-        raises ValueError so the caller regenerates the strip.
+        the substitution preserves the cycle's rhythm. For non-looping ACTION
+        strips pass partner_repair=False: the donor is the nearest intact
+        neighbor instead (an attack's frame i+3 is a different pose entirely).
+        More than half broken raises ValueError so the caller regenerates.
 
         Good frames get one uniform scale per strip (preserves the natural
         bob) on a shared canvas matching the idle sprite's character-height
@@ -974,11 +1082,17 @@ no text, no shadows."""
             )
         n = len(transparent)
         for i in broken:
-            partner = (i + n // 2) % n
-            donor = partner if partner not in broken else next(
-                j for j in range(n) if j not in broken
-            )
-            logger.info(f"Walk frame {i + 1} broken; substituting frame {donor + 1}")
+            if partner_repair:
+                partner = (i + n // 2) % n
+                donor = partner if partner not in broken else next(
+                    j for j in range(n) if j not in broken
+                )
+            else:
+                donor = min(
+                    (j for j in range(n) if j not in broken),
+                    key=lambda j: abs(j - i),
+                )
+            logger.info(f"Frame {i + 1} broken; substituting frame {donor + 1}")
             transparent[i] = transparent[donor].copy()
             stats[i] = stats[donor]
 

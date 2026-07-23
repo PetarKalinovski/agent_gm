@@ -50,11 +50,13 @@ class DialogueDeduper:
         for line in self.spoken:
             if nq in line or line in nq:
                 return True
-            # Fuzzy: heavy word overlap catches light paraphrase
+            # Fuzzy: heavy word overlap catches paraphrase. The speech event
+            # is rendered in chat as the authoritative line, so stripping a
+            # reworded DM copy loses nothing.
             qw, lw = set(nq.split()), set(line.split())
             if qw and lw:
                 overlap = len(qw & lw) / min(len(qw), len(lw))
-                if overlap >= 0.8 and min(len(qw), len(lw)) >= 5:
+                if overlap >= 0.65 and min(len(qw), len(lw)) >= 5:
                     return True
         return False
 

@@ -934,6 +934,15 @@ async def get_sprite(character_type: str, character_id: str, direction: str):
         if sprite_path.exists() and sprite_path.stat().st_size > 0:
             return FileResponse(str(sprite_path), media_type="image/png")
 
+        # Combat action frames (attack1..6 / dodge1..6) generate as their own
+        # lazy set — requesting them must never trigger a full-set regen
+        if re.match(r"^(attack|dodge)\d+$", direction):
+            asset_manager.spawn_generation(
+                f"actions:{character_id}",
+                lambda: asset_manager.ensure_action_sprites(character_id, character_type),
+            )
+            return JSONResponse({"status": "generating"}, status_code=404)
+
         # Miss: kick off (deduplicated) generation of the full sprite set
         include_walk = character_type == "player"
         asset_manager.spawn_generation(

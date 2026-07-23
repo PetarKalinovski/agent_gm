@@ -1070,6 +1070,22 @@ class GameRenderer {
 
         const loadJobs = [];
 
+        // Combat action frames (attack/dodge, right-facing; left mirrors via
+        // scale flip). A 404 also TRIGGERS their lazy generation server-side,
+        // so characters made before this feature upgrade themselves.
+        this.player.actionSprites = { attack: {}, dodge: {} };
+        for (const action of ['attack', 'dodge']) {
+            for (let f = 1; f <= 6; f++) {
+                loadJobs.push(
+                    PIXI.Assets.load(`${playerUrlBase}/${action}${f}.png`).then(tex => {
+                        this.player.actionSprites[action][f] = tex;
+                    }).catch(() => {
+                        this.player.actionSprites[action][f] = null;
+                    })
+                );
+            }
+        }
+
         directions.forEach(dir => {
             // LOAD IDLE (Append .png) — sprite may still be generating (404):
             // fall back to placeholder, the pending-poll reload picks it up later
@@ -1205,9 +1221,21 @@ class GameRenderer {
 
         const dir = this.player.direction;
         let tex = null;
+        let mirror = false;
 
-        // Pull texture from our assigned dictionary
-        if (!this.isMoving) {
+        // Combat action animation overrides walk/idle for its duration
+        const act = this.playerAction;
+        if (act) {
+            let t = act.t, idx = 0;
+            for (let i = 0; i < act.durs.length; i++) {
+                if (t < act.durs[i]) { idx = i; break; }
+                t -= act.durs[i];
+                idx = i;
+            }
+            tex = act.frames[idx];
+            // Frames are drawn right-facing; mirror when facing left
+            mirror = dir === 'left';
+        } else if (!this.isMoving) {
             tex = this.player.sprites[dir];
         } else {
             const anim = this._getWalkCycle();
@@ -1232,6 +1260,7 @@ class GameRenderer {
             const baseScale = targetH / tex.height;
             const playerScale = this.player.scale || 1.0;
             s.scale.set(baseScale * playerScale);
+            if (mirror) s.scale.x = -s.scale.x;
 
             // Force Alpha/Visible
             s.alpha = 1;
@@ -1607,6 +1636,8 @@ class GameRenderer {
         for (const en of (enemies || [])) {
             this._spawnCombatant(en.npc_id || null, en.archetype || 'skirmisher', en.name);
         }
+        // Real fight: the chat locks — the canvas resolves this, not prose
+        window.dispatchEvent(new CustomEvent('combat-active', { detail: { active: true } }));
         console.log(`Combat started: ${(enemies || []).map(e => `${e.name} (${e.archetype})`).join(', ')}`);
     }
 
@@ -1675,7 +1706,20 @@ class GameRenderer {
             state: 'chase', t: 0, aim: [0, 0], lungeFrom: null,
             dead: false, deathT: 0, flash: 0,
             strafeDir: Math.random() < 0.5 ? -1 : 1, circleT: 0,
+            baseTexture: isSprite ? g.texture : null,
+            attackFrames: {}, attackReady: false,
         };
+        // NPC attack animation frames load in the background (a 404 also
+        // triggers their generation server-side — ready for the next fight)
+        if (npcId && isSprite) {
+            let loaded = 0;
+            for (let f = 1; f <= 6; f++) {
+                PIXI.Assets.load(`/api/assets/sprite/npc/${npcId}/attack${f}.png`).then(tex => {
+                    enemy.attackFrames[f] = tex;
+                    if (++loaded === 6) enemy.attackReady = true;
+                }).catch(() => {});
+            }
+        }
         this._drawEnemyHp(enemy);
         this.combat.enemies.push(enemy);
     }
@@ -1712,6 +1756,7 @@ class GameRenderer {
 
     _endCombat(silent) {
         if (!this.combat) return;
+        const wasReal = this.combat.enemies.some(e => e.npcId);
         for (const e of this.combat.enemies) {
             // Reconcile the ambient NPC body with how the fight ended
             const npc = e.npcId ? this.npcs[e.npcId] : null;
@@ -1747,6 +1792,10 @@ class GameRenderer {
         const hearts = this.uiLayer.getChildByName('combat-hearts');
         if (hearts) this.uiLayer.removeChild(hearts);
         this.combat = null;
+        this.playerAction = null;
+        if (wasReal) {
+            window.dispatchEvent(new CustomEvent('combat-active', { detail: { active: false } }));
+        }
         if (!silent) console.log('Combat over');
     }
 
@@ -1774,12 +1823,32 @@ class GameRenderer {
         }
     }
 
+    /** Play a generated combat action animation if its frames exist.
+     *  Timing: instant into the strike (the hit already landed in code —
+     *  responsiveness beats anticipation), longer follow-through. */
+    _startPlayerAction(kind, durs) {
+        const set = this.player.actionSprites && this.player.actionSprites[kind];
+        if (!set) return;
+        const frames = [];
+        for (let f = 1; f <= 6; f++) {
+            if (!set[f]) return; // incomplete set (still generating) — skip
+            frames.push(set[f]);
+        }
+        this.playerAction = { kind, frames, durs, t: 0, total: durs.reduce((a, b) => a + b, 0) };
+    }
+
     _updateCombat(dt) {
         const c = this.combat;
         c.iframes = Math.max(0, c.iframes - dt);
         c.dodgeCd = Math.max(0, c.dodgeCd - dt);
         c.attackCd = Math.max(0, c.attackCd - dt);
         c.shake = Math.max(0, c.shake - dt * 0.015);
+
+        // Tick the player's action animation
+        if (this.playerAction) {
+            this.playerAction.t += dt;
+            if (this.playerAction.t >= this.playerAction.total) this.playerAction = null;
+        }
 
         const p = this.player;
 
@@ -1808,12 +1877,14 @@ class GameRenderer {
             c.dodge = 230;
             c.iframes = 350;
             c.dodgeCd = 750;
+            this._startPlayerAction('dodge', [40, 45, 50, 55, 50, 60]);
             this._spawnDust();
         }
 
         // --- Melee attack: arc in facing direction ---
         if (this.keys['j'] && c.attackCd <= 0) {
             c.attackCd = 380;
+            this._startPlayerAction('attack', [35, 35, 70, 80, 75, 85]);
             const [fx, fy] = this._facingVector();
             // Visual: white arc wedge that fades
             const arc = new PIXI.Graphics();
@@ -1960,6 +2031,20 @@ class GameRenderer {
             } else if (e.state === 'recover') {
                 e.t -= dt;
                 if (e.t <= 0) e.state = 'chase';
+            }
+
+            // Enemy attack animation: texture follows the AI state
+            if (e.isSprite && e.attackReady) {
+                let frame = null;
+                if (e.state === 'windup') {
+                    frame = e.t > e.params.windup * 0.45 ? 1 : 2;   // coil as t runs DOWN
+                } else if (e.state === 'strike') {
+                    frame = e.t > e.params.lungeMs * 0.5 ? 3 : 4;
+                } else if (e.state === 'recover') {
+                    frame = e.t > e.params.recover * 0.5 ? 5 : 6;
+                }
+                const want = frame ? e.attackFrames[frame] : e.baseTexture;
+                if (want && e.g.texture !== want) e.g.texture = want;
             }
 
             // Apply enemy position; sprites face the player

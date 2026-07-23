@@ -471,6 +471,20 @@
         .hud-chip.clickable { cursor: pointer; }
         .hud-chip.clickable:hover { background: rgba(255, 255, 255, 0.16); }
 
+        /* Authoritative NPC dialogue line (matches the TTS exactly) */
+        .speech-line {
+            display: flex; gap: 10px; align-items: flex-start;
+            margin: 8px 0; padding: 8px 10px;
+            background: rgba(99, 102, 241, 0.07);
+            border-left: 3px solid #6366f1; border-radius: 6px;
+            font-family: Georgia, serif; line-height: 1.45;
+        }
+        .speech-line img {
+            width: 34px; height: 34px; border-radius: 50%;
+            object-fit: cover; border: 1px solid #6366f1; flex-shrink: 0;
+        }
+        .speech-line em { color: var(--text-secondary, #9ca3af); font-size: 0.85em; }
+
         /* NPC-specific thinking state during sub-agent delegation */
         .thinking-npc {
             display: inline-flex; align-items: center; gap: 7px;
@@ -2556,6 +2570,23 @@
             }
         });
 
+        // While a real fight is live, the canvas resolves it — lock the chat
+        // so typed turns can't produce a parallel prose fight that desyncs
+        let combatInputLock = false;
+        window.addEventListener('combat-active', (e) => {
+            combatInputLock = !!(e.detail && e.detail.active);
+            if (combatInputLock) {
+                userInput.disabled = true;
+                userInput.placeholder = '⚔ Fight! Space = dodge · J = strike';
+            } else {
+                userInput.placeholder = 'What do you do?';
+                if (!isProcessing) {
+                    userInput.disabled = false;
+                    userInput.focus();
+                }
+            }
+        });
+
         // A real-time fight ended: apply mechanics server-side (code
         // enforces), then hand the DM an aftermath that is already true
         window.addEventListener('combat-ended', async (e) => {
@@ -2735,6 +2766,22 @@
             let textBuffer = '';
             let turnState = null;
 
+            // Re-rendering the whole message on EVERY token starves the
+            // PixiJS canvas (combat hitches during streaming). Batch DOM
+            // updates to one per animation frame instead.
+            let renderQueued = false;
+            const flushChatRender = () => {
+                renderQueued = false;
+                contentEl.innerHTML = formatText(textBuffer);
+                chatMessages.scrollTop = chatMessages.scrollHeight;
+            };
+            const queueChatRender = () => {
+                if (!renderQueued) {
+                    renderQueued = true;
+                    requestAnimationFrame(flushChatRender);
+                }
+            };
+
             try {
                 const response = await fetch('/api/play', {
                     method: 'POST',
@@ -2775,11 +2822,11 @@
                                     if (payload.type === 'token' && payload.data) {
                                         clearThinking(messageEl);
                                         textBuffer += payload.data;
-                                        contentEl.innerHTML = formatText(textBuffer);
+                                        queueChatRender();
                                     } else if (payload.type === 'narration' && payload.content) {
                                         clearThinking(messageEl);
                                         textBuffer += payload.content;
-                                        contentEl.innerHTML = formatText(textBuffer);
+                                        queueChatRender();
                                     } else if (payload.type === 'tool_update' && payload.tool) {
                                         renderToolPill(toolsContainer, payload.tool);
                                         if (payload.tool.name === 'prompt_npc_agent' &&
@@ -2791,10 +2838,23 @@
                                     } else if (payload.type === 'state' && payload.state) {
                                         turnState = payload.state;
                                         applyPlayerState(payload.state);
-                                    } else if (payload.type === 'speech' && payload.npc_id) {
-                                        if (game && game.showSpeechBubble) {
+                                    } else if (payload.type === 'speech' && payload.text) {
+                                        if (game && game.showSpeechBubble && payload.npc_id) {
                                             game.showSpeechBubble(payload.npc_id, payload.text, null, payload.audio_id || null);
                                         }
+                                        // The speech event is the AUTHORITATIVE line (it is
+                                        // what the TTS speaks) — render it in the chat so the
+                                        // text the player reads always matches the voice
+                                        clearThinking(messageEl);
+                                        const line = document.createElement('div');
+                                        line.className = 'speech-line';
+                                        line.innerHTML =
+                                            (payload.npc_id ? `<img src="/api/assets/portrait/${payload.npc_id}" onerror="this.style.display='none'" alt="">` : '') +
+                                            `<span><b>${escapeHtml(payload.npc_name || '???')}</b>` +
+                                            (payload.action ? ` <em>${escapeHtml(payload.action)}</em>` : '') +
+                                            `<br>&ldquo;${escapeHtml(payload.text)}&rdquo;</span>`;
+                                        messageEl.insertBefore(line, contentEl);
+                                        queueChatRender();
                                     } else if (payload.type === 'quest_activated') {
                                         showToast(`&#10022; New Quest: ${escapeHtml(payload.title || '')}`, 'quest');
                                     } else if (payload.type === 'quest_completed') {
@@ -2809,7 +2869,7 @@
                                             game.playDeathAnimation(payload.npc_id);
                                         }
                                     }
-                                    chatMessages.scrollTop = chatMessages.scrollHeight;
+                                    queueChatRender();
                                 } catch (e) { /* ignore parse errors */ }
                             }
                         }
@@ -2836,12 +2896,13 @@
                 }
             } finally {
                 clearThinking(messageEl);
+                flushChatRender();
                 isProcessing = false;
                 currentAbort = null;
-                userInput.disabled = false;
+                userInput.disabled = combatInputLock;
                 sendBtn.textContent = 'Send';
                 sendBtn.disabled = false;
-                userInput.focus();
+                if (!combatInputLock) userInput.focus();
             }
         }
 
