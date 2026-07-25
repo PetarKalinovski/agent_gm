@@ -1627,6 +1627,7 @@ class GameRenderer {
             attackCd: 0, hitstop: 0, shake: 0,
         };
         this._drawHearts();
+        window.forgeAudio?.playSfx('clash', { volume: 0.9 });
     }
 
     /** DM-initiated combat: spawn each named NPC as a combatant. */
@@ -1879,12 +1880,14 @@ class GameRenderer {
             c.dodgeCd = 750;
             this._startPlayerAction('dodge', [40, 45, 50, 55, 50, 60]);
             this._spawnDust();
+            window.forgeAudio?.playSfx('roll', { volume: 0.7 });
         }
 
         // --- Melee attack: arc in facing direction ---
         if (this.keys['j'] && c.attackCd <= 0) {
             c.attackCd = 380;
             this._startPlayerAction('attack', [35, 35, 70, 80, 75, 85]);
+            window.forgeAudio?.playSfx('swing', { volume: 0.7 });
             const [fx, fy] = this._facingVector();
             // Visual: white arc wedge that fades
             const arc = new PIXI.Graphics();
@@ -1911,13 +1914,17 @@ class GameRenderer {
                 e.flash = 90;
                 c.hitstop = 70;
                 c.shake = Math.max(c.shake, 5);
+                window.forgeAudio?.playSfx('hit', { volume: 0.9 });
                 // Knockback away from the player
                 const kn = 6;
                 const kx = e.nx + (dx / (dist || 1)) * kn;
                 const ky = e.ny + (dy / (dist || 1)) * kn;
                 if (this.isWalkable(kx, ky)) { e.nx = kx; e.ny = ky; }
                 this._drawEnemyHp(e);
-                if (e.hp <= 0) { e.dead = true; e.deathT = 0; e.telegraph.clear(); e.hpBar.clear(); }
+                if (e.hp <= 0) {
+                    e.dead = true; e.deathT = 0; e.telegraph.clear(); e.hpBar.clear();
+                    window.forgeAudio?.playSfx('death', { volume: 0.9 });
+                }
             }
         }
 
@@ -1963,6 +1970,8 @@ class GameRenderer {
                     e.t = P.windup;
                     e.circleT = 0;
                     e.aim = [dx / (dist || 1), dy / (dist || 1)];
+                    // Audio telegraph alongside the red wedge
+                    window.forgeAudio?.playSfx('windup', { volume: 0.55, throttleMs: 200 });
                 }
             } else if (e.state === 'windup') {
                 e.t -= dt;
@@ -2001,6 +2010,7 @@ class GameRenderer {
                         c.iframes = 900;
                         c.hitstop = 60;
                         c.shake = Math.max(c.shake, 8);
+                        window.forgeAudio?.playSfx('hurt');
                         // Knock the player back
                         const kb = 7;
                         const px2 = p.normalizedX + e.aim[0] * kb;

@@ -85,9 +85,14 @@ World generation uses separate agents:
 - **Turn integrity** (`src/web/turn_filters.py` + `turn_audit.py`): the
   DialogueDeduper strips DM re-quotes of lines already delivered as `speech`
   events; the post-turn audit diffs narration claims (quests, damage, items,
-  arrivals, consequence ledgers) against actual tool calls, attaches warnings
-  to the `complete` SSE event, and injects them into the DM's next-turn
-  context as a `[REALITY AUDIT]` block so it self-corrects.
+  arrivals, consequence ledgers, inline-attributed dialogue quotes) against
+  actual tool calls, attaches warnings to the `complete` SSE event, and
+  injects them into the DM's next-turn context as a `[REALITY AUDIT]` block
+  so it self-corrects. ALL dialogue must flow through a speech tool: the DM
+  has `speak` for ambient NPCs and named-NPC one-liners (voiced + bubbled;
+  unknown names degrade to a chat dialogue line), `prompt_npc_agent` for
+  conversations; quoted lines inside `narrate` are silent and get flagged
+  (`dialogue_without_speak`).
 
 ### Tool-Based World Mutation
 
@@ -164,6 +169,10 @@ crossfades palette tracks, plays a one-shot triumph stinger on quest
 completion (reverts to the world mood; danger interrupts), and plays voice
 clips sequentially (polling `/api/assets/voice/{audio_id}`), ducking music
 during speech and dispatching `forge-voice-start/end` for speech-bubble sync.
+Combat SFX: seven pre-generated one-shots (ElevenLabs sound-generation,
+committed under `static/sfx/`) play via `ForgeAudio.playSfx` (WebAudio —
+overlapping plays, pitch jitter, per-name throttle, "Effects" volume slider);
+game.js triggers swing/hit/hurt/roll/death/windup/clash from the combat loop.
 Canvas feedback: state diffs spawn floating text over the player
 (gold/health/items), speech events show bubbles above NPC sprites, and
 `prompt_npc_agent` tool pills carry `npc_id` so the chat shows "<NPC>

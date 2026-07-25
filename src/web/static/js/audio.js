@@ -36,7 +36,13 @@ class ForgeAudio {
 
         this.musicVolume = parseFloat(localStorage.getItem('forge-music-vol') ?? '0.5');
         this.voiceVolume = parseFloat(localStorage.getItem('forge-voice-vol') ?? '0.9');
+        this.sfxVolume = parseFloat(localStorage.getItem('forge-sfx-vol') ?? '0.8');
         this.muted = localStorage.getItem('forge-audio-muted') === '1';
+
+        // Combat one-shots (WebAudio: overlapping plays + pitch variation)
+        this.sfxCtx = null;
+        this.sfxBuffers = {};
+        this.sfxLastAt = {};
 
         this.DUCK = 0.25;               // music multiplier while a voice line plays
 
@@ -52,6 +58,7 @@ class ForgeAudio {
 
     _unlock() {
         this.unlocked = true;
+        this._initSfx();
         if (this.pendingMood) {
             const mood = this.pendingMood;
             this.pendingMood = null;
@@ -281,6 +288,50 @@ class ForgeAudio {
     }
 
     // ------------------------------------------------------------------
+    // Combat SFX (static one-shots under /static/sfx/)
+    // ------------------------------------------------------------------
+
+    static SFX_NAMES = ['swing', 'hit', 'hurt', 'roll', 'death', 'windup', 'clash'];
+
+    _initSfx() {
+        if (this.sfxCtx) return;
+        try {
+            this.sfxCtx = new (window.AudioContext || window.webkitAudioContext)();
+        } catch (e) { return; }
+        for (const name of ForgeAudio.SFX_NAMES) {
+            fetch(`/static/sfx/${name}.mp3`)
+                .then(r => (r.ok ? r.arrayBuffer() : null))
+                .then(buf => (buf ? this.sfxCtx.decodeAudioData(buf) : null))
+                .then(decoded => { if (decoded) this.sfxBuffers[name] = decoded; })
+                .catch(() => {});
+        }
+    }
+
+    /** Fire-and-forget one-shot. Slight pitch jitter keeps rapid repeats
+     *  from machine-gunning; a per-name throttle stops multi-enemy frames
+     *  from stacking the same sound. */
+    playSfx(name, { volume = 1, throttleMs = 60 } = {}) {
+        if (this.muted || !this.sfxCtx || !this.sfxBuffers[name]) return;
+        const now = performance.now();
+        if (this.sfxLastAt[name] && now - this.sfxLastAt[name] < throttleMs) return;
+        this.sfxLastAt[name] = now;
+        if (this.sfxCtx.state === 'suspended') this.sfxCtx.resume().catch(() => {});
+        const src = this.sfxCtx.createBufferSource();
+        src.buffer = this.sfxBuffers[name];
+        src.playbackRate.value = 0.94 + Math.random() * 0.12;
+        const gain = this.sfxCtx.createGain();
+        gain.gain.value = this.sfxVolume * volume;
+        src.connect(gain);
+        gain.connect(this.sfxCtx.destination);
+        src.start();
+    }
+
+    setSfxVolume(v) {
+        this.sfxVolume = v;
+        localStorage.setItem('forge-sfx-vol', String(v));
+    }
+
+    // ------------------------------------------------------------------
     // Controls UI (chip lives in the game HUD; panel injected here)
     // ------------------------------------------------------------------
 
@@ -327,6 +378,8 @@ class ForgeAudio {
                 <input id="audio-music-vol" type="range" min="0" max="1" step="0.05" value="${this.musicVolume}"></div>
             <div class="hud-item"><span>Voice</span>
                 <input id="audio-voice-vol" type="range" min="0" max="1" step="0.05" value="${this.voiceVolume}"></div>
+            <div class="hud-item"><span>Effects</span>
+                <input id="audio-sfx-vol" type="range" min="0" max="1" step="0.05" value="${this.sfxVolume}"></div>
             <div class="hud-item"><span>Mute</span>
                 <button id="audio-mute-btn" style="cursor:pointer;">toggle</button></div>
         `;
@@ -337,6 +390,8 @@ class ForgeAudio {
             (e) => this.setMusicVolume(parseFloat(e.target.value)));
         panel.querySelector('#audio-voice-vol').addEventListener('input',
             (e) => this.setVoiceVolume(parseFloat(e.target.value)));
+        panel.querySelector('#audio-sfx-vol').addEventListener('input',
+            (e) => this.setSfxVolume(parseFloat(e.target.value)));
         panel.querySelector('#audio-mute-btn').addEventListener('click', () => this.toggleMute());
         this._updateChip();
     }
