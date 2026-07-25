@@ -76,12 +76,65 @@ World generation uses separate agents:
 - **Travel**: `move_player` blocks on `Connection.requirements` until the DM
   confirms them with `requirements_met=True`; hierarchy hops cannot bypass a
   destination whose every authored entry route is requirement-locked.
+- **Progression** (`src/services/progression.py`): every number lives here —
+  XP thresholds (levels 1-10), quest XP by `Quest.scale` label
+  (errand/job/mission/saga), gear tier tables (crude→legendary: weapon damage,
+  armor hearts, trinket i-frames, catalog prices), consumables, level scalars.
+  XP is granted ONLY by code (quest completion via `_complete_quest`, combat
+  kills via DB tier re-read); `rewards["xp"]` authored by the DM is stripped.
+  `combat_stats(player)` produces the `state.combat` dict game.js runs on;
+  level-1-unarmed is test-pinned byte-identical to the pre-overhaul game.
+  Equipment = pointers into inventory (`Player.equipment`); equip/unequip/
+  quick-slot/use-consumable are REST endpoints, no DM turn.
+- **Skill checks** (`roll_check` tool): risky non-combat actions are decided
+  by a code-rolled d20 vs difficulty label (easy/tricky/hard/desperate, ±
+  advantage/disadvantage) — the DM picks words, narrates the outcome label,
+  never sees or prints numbers. The audit flags risky-action resolutions
+  narrated without a check (`risky_action_without_check`).
+- **Enemy tiers** (`src/services/combat.py`): ABSOLUTE danger ladder
+  (harmless/weak/standard/dangerous/deadly/boss × brute/skirmisher/stalker/
+  ranged) — `combat_params(tier, archetype)` takes no player argument, so a
+  beggar stays trivial forever and growth is legible. `NPC.danger_tier` is
+  assigned by the creator agent (never `boss` — that's authored-only via the
+  world editor); NULL infers from keywords. `standard` row == legacy values
+  (test-pinned). Tier XP 0/5/15/40/100/300 awarded by `/api/combat/result`.
 - **Real-time combat** (`src/services/combat.py` + `start_combat` tool): the
-  DM names present NPCs; the frontend fights them Hades-style with a fixed
-  archetype library (brute/skirmisher/stalker — LLM picks a label, never
-  numbers). `POST /api/combat/result` applies outcomes in code (monotonic
-  health worsening, defeat→critical, NPC deaths + world event) BEFORE the DM
-  narrates the aftermath via an auto-sent `[COMBAT OUTCOME]` turn.
+  DM names present NPCs; the frontend fights them Hades-style with
+  server-resolved params riding the `combat_start` event (client table is
+  fallback only). Player: light (J), heavy (hold J), parry (K), dodge
+  (Space), potion (Q). Bosses: named HP bar, phase 2 at 50%, ring slam,
+  lunge combo, once-ever `boss_intro` cinematic, client-side kill cam.
+  `POST /api/combat/result` applies outcomes in code (hearts_lost/healed
+  severity, defeat→critical, NPC deaths + world event, tier XP + level-ups)
+  BEFORE the DM narrates the aftermath via an auto-sent `[COMBAT OUTCOME]`
+  turn.
+- **Campaign spine** (`src/services/campaign.py` + `campaign_forge` agent):
+  generated at player creation from the existing roster — fixed truths and
+  9-15 story beats across 3 acts live in DB tables the DM can read
+  (`get_campaign`) but never write. Beats fire deterministically in
+  `run_campaign_tick` (called inside `_build_context`, pure SQLite) on
+  time/location/quest/level triggers with hard fallback deadlines; ops
+  (move/kill NPC, quest flips, faction shifts) execute in code, then the DM
+  gets a MUST-DELIVER directive + already-applied ledger. Deadline beats
+  carry met AND missed consequences — blown clocks change the world. HUD
+  shows act progress + countdown chips from `state.campaign`.
+- **Canvas-first play** (`src/services/travel.py`, `scene_exits.py`,
+  `scene_objects.py`, `src/services/barks.py`): unlocked doors travel via
+  `POST /api/travel` (same code path as `move_player`, applies time) and
+  objects resolve via `POST /api/interact` (take/read/open/search, fixed
+  menu, numbers stripped at authoring) — no DM turn. Ambient bark pools per
+  location (`GET /api/barks/{id}`, fast model, cached on Location) drive
+  proximity speech bubbles between turns. Everything the engine did lands in
+  the DM's next-turn context as a `[SINCE YOUR LAST TURN]` block
+  (`src/web/pending_actions.py`) whose `tool_equivalents` feed the audit's
+  `code_actions` so engine mutations never false-positive.
+- **Cinematics** (`src/services/cinematics.py`): fixed vocabulary
+  (title_card/boss_intro/kill_cam/vision/weather) triggered by label from
+  campaign beats (`CAMPAIGN_CINEMATIC_MAP`), auto (boss combat), or the
+  cooldown-guarded `play_cinematic` DM tool; a DB-backed rarity ledger
+  (per-kind cooldowns, daily/session caps, once-ever boss intros) keeps them
+  special. Rejections carry no `event` key + a say-nothing instruction.
+  `DMState.weather` rides the state event as a persistent scene modifier.
 - **Turn integrity** (`src/web/turn_filters.py` + `turn_audit.py`): the
   DialogueDeduper strips DM re-quotes of lines already delivered as `speech`
   events; the post-turn audit diffs narration claims (quests, damage, items,
@@ -112,7 +165,13 @@ SQLAlchemy models in `src/models/`:
 - **Faction** - Factions with relationship tracking
 - **WorldClock** - Game time simulation
 - **NPCRelationship** - Player-NPC memory (trust, secrets, mood, messages)
-- **Quest** - Quest definitions and tracking
+- **Quest** - Quest definitions and tracking (+ `scale` XP label)
+- **Campaign/StoryBeat** - Per-PC authored story spine (fixed truths, acts,
+  deterministic beat triggers) — no write tool exists for these
+- **Cinematic** - Cinematic rarity ledger + deferred queue
+- Player carries `level`/`xp`/`equipment`/`quick_slot_item_id`; NPC carries
+  `danger_tier`/`boss_title`; Location carries `objects`/`ambient_barks`;
+  DMState carries `weather` — all nullable, NULL plays as the legacy game
 
 No migration tool — schema evolution uses nullable columns with `DEFAULT NULL` so SQLite auto-adds them to existing DBs.
 
@@ -161,9 +220,17 @@ dicts; `ToolUsageTracker._parse_tool_output_for_events` (same mechanism as
 `npc_death`) converts these into structured SSE events: `speech`
 (npc_name/text/tone/action, enriched server-side with npc_id + a TTS
 `audio_id`), `scene` (location/time_of_day/atmosphere), quest lifecycle
-events (`quest_activated`/`quest_completed`/`quest_failed`), and
-`combat_start`. `state` events stream mid-turn after every successful
-world-write tool AND post-turn, carrying `tension`. The frontend `ForgeAudio`
+events (`quest_activated`/`quest_completed`/`quest_failed`),
+`combat_start`, `check_result` (outcome label, never numbers), `xp_gain` +
+`level_up` (fan-out of any tool result carrying a `progression` block —
+order: quest_completed → xp_gain → level_up), `cinematic` (a nested
+`cinematic` key on ANY tool result emits BEFORE the tool's own event, so a
+boss intro precedes `combat_start`), and `campaign_beat`/`campaign_act`/
+`campaign_resolved` (drained server-side around the stream). `state` events
+stream mid-turn after every successful world-write tool AND post-turn,
+carrying `tension` plus level/xp/equipment/`combat` stats/`campaign`
+summary/`weather`. Combat XP rides the `/api/combat/result` REST response,
+never SSE. The frontend `ForgeAudio`
 class (`static/js/audio.js`) maps tension/time/death to a music mood,
 crossfades palette tracks, plays a one-shot triumph stinger on quest
 completion (reverts to the world mood; danger interrupts), and plays voice
@@ -193,6 +260,11 @@ fast model).
 
 `src/web/server.py` is a FastAPI server with:
 - **Game endpoints** - SSE-streamed play (`/api/play`), session info, chat history
+- **Canvas play** - `POST /api/travel` + `POST /api/interact` (code-resolved,
+  no DM turn; responses embed the full state), `GET /api/barks/{location_id}`
+- **Progression** - `POST /api/player/{id}/equip|unequip|quick-slot|use-consumable`
+- **Campaign/cinematics** - `GET /api/campaign/{player_id}` (spoiler-safe;
+  `?spoilers=1` debug), `POST .../generate`, `GET /api/cinematics/recent`
 - **Asset endpoints** - On-demand sprite/portrait/background generation, reference image upload/get/delete
 - **World CRUD** - Full REST API for all entity types (NPCs, locations, factions, quests, connections, players, world bible)
 - **World management** - List/select/create worlds, WorldForge streaming generation

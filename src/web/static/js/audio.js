@@ -454,7 +454,7 @@ class ForgeAudio {
     // Combat SFX (static one-shots under /static/sfx/)
     // ------------------------------------------------------------------
 
-    static SFX_NAMES = ['swing', 'hit', 'hurt', 'roll', 'death', 'windup', 'clash'];
+    static SFX_NAMES = ['swing', 'hit', 'hurt', 'roll', 'death', 'windup', 'clash', 'boom', 'whoosh'];
 
     /** Cinematic cue names map onto the shipped one-shots until (if ever)
      *  dedicated samples exist. A real `boom.mp3`/`whoosh.mp3` added to

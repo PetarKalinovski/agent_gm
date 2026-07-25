@@ -20,6 +20,12 @@ test surface:
                                currency/item/reputation rewards)
 - Combat gray-box           -> Ctrl+K anywhere; Vex Marrow at Wolf's Hollow is
                                the natural in-fiction fight
+- Enemy tier ladder         -> harmless townsfolk, weak wolves, dangerous
+                               named fighters (Vex/Brann), one authored boss
+                               (Aldric Vane, "The Whistler of Wolf's Hollow")
+- Canvas objects            -> 3 per location (read/take/open/search spread;
+                               the tavern satchel is lock-gated to chat)
+- Quest XP                  -> "Teeth on the North Road" is scale="mission"
 
 Run with: uv run main.py playtest   (creates data/emberfall.db)
 """
@@ -40,6 +46,7 @@ from src.models import (
     get_session,
     init_db,
 )
+from src.services.scene_objects import normalize_objects
 
 PLAYTEST_DB_PATH = "data/emberfall.db"
 
@@ -208,6 +215,42 @@ def create_playtest_world(db_path: str = PLAYTEST_DB_PATH) -> None:
             genre_type="fantasy",
             visited=True,
             discovered=True,
+            # Canvas interactables (E to touch — resolved in code, no DM turn)
+            objects=normalize_objects([
+                {
+                    "kind": "read",
+                    "label": "Notice board",
+                    "x": 62, "y": 32,
+                    "payload": {"text": (
+                        "TAKEN BY WOLVES — cart, driver unharmed, cargo gone, "
+                        "north road, third such this month. The Watch pays for "
+                        "true accounts of the howls. — Capt. B. Coldiron.\n\n"
+                        "Beneath it, smaller: 'Sweetroot for nerves. Ask Piper.'"
+                    )},
+                },
+                {
+                    "kind": "take",
+                    "label": "Dropped sweetroot bundle",
+                    "x": 34, "y": 66,
+                    "payload": {"item": {
+                        "name": "Sweetroot Bundle",
+                        "type": "consumable",
+                        "description": "Chewing it steadies the hands. Piper swears by it.",
+                        "value": 2,
+                    }},
+                },
+                {
+                    "kind": "search",
+                    "label": "Abandoned market crate",
+                    "x": 78, "y": 70,
+                    "payload": {"item": {
+                        "name": "Coil of Hemp Rope",
+                        "type": "misc",
+                        "description": "Twenty feet, cart-rated, smells of onions.",
+                        "value": 4,
+                    }},
+                },
+            ]),
         )
         session.add(square)
         session.flush()
@@ -231,6 +274,44 @@ def create_playtest_world(db_path: str = PLAYTEST_DB_PATH) -> None:
             current_state="peaceful",
             genre_type="fantasy",
             discovered=True,
+            objects=normalize_objects([
+                {
+                    "kind": "read",
+                    "label": "Guest ledger",
+                    "x": 74, "y": 40,
+                    "payload": {"text": (
+                        "The ledger's last full page is three weeks old. One name "
+                        "is entered twice that night — once in the keeper's neat "
+                        "hand, once again below in a shakier one, as if the man "
+                        "signed himself in a second time on his way out. The "
+                        "second entry is smudged with ash."
+                    )},
+                },
+                {
+                    "kind": "take",
+                    "label": "Iron hearth poker",
+                    "x": 22, "y": 36,
+                    "payload": {"item": {
+                        "name": "Iron Hearth Poker",
+                        "type": "weapon",
+                        "description": "Heavy, fire-blacked, better than bare hands.",
+                        "value": 6,
+                    }},
+                },
+                {
+                    "kind": "open",
+                    "label": "Lost traveler's satchel",
+                    "x": 52, "y": 68,
+                    "payload": {
+                        "lock": "Maera keeps whatever's lost under her roof; ask her before you go through it",
+                        "item": {
+                            "name": "Water-Stained Letter",
+                            "type": "quest_item",
+                            "description": "Addressed in the same hand as the letter you carry.",
+                        },
+                    },
+                },
+            ]),
         )
         session.add(tavern)
         session.flush()
@@ -254,6 +335,42 @@ def create_playtest_world(db_path: str = PLAYTEST_DB_PATH) -> None:
             current_state="peaceful",
             genre_type="fantasy",
             discovered=True,
+            objects=normalize_objects([
+                {
+                    "kind": "read",
+                    "label": "Scratches on the hut wall",
+                    "x": 28, "y": 38,
+                    "payload": {"text": (
+                        "Tally marks gouged into the doorframe, grouped in "
+                        "threes. Under them, one word, carved deep and old: "
+                        "SING."
+                    )},
+                },
+                {
+                    "kind": "take",
+                    "label": "Cracked bone whistle",
+                    "x": 60, "y": 74,
+                    "payload": {"item": {
+                        "name": "Cracked Bone Whistle",
+                        "type": "quest_item",
+                        "description": (
+                            "Split down the barrel — silent now. The same make "
+                            "as the one Captain Coldiron never mentions."
+                        ),
+                    }},
+                },
+                {
+                    "kind": "search",
+                    "label": "Split supply crate",
+                    "x": 80, "y": 56,
+                    "payload": {"item": {
+                        "name": "Greywater Silver Piece",
+                        "type": "misc",
+                        "description": "Freshly minted. The counting-house stamp is still sharp.",
+                        "value": 12,
+                    }},
+                },
+            ]),
         )
         session.add(hollow)
         session.flush()
@@ -327,6 +444,8 @@ def create_playtest_world(db_path: str = PLAYTEST_DB_PATH) -> None:
                 "He found a bone whistle near the last raided cart and told no one",
             ],
             current_mood="grim",
+            danger_tier="dangerous",
+            combat_archetype="brute",
         )
         session.add(brann)
 
@@ -359,6 +478,7 @@ def create_playtest_world(db_path: str = PLAYTEST_DB_PATH) -> None:
                 "The dead man the player's letter is addressed to drank here his last night",
             ],
             current_mood="composed",
+            danger_tier="harmless",
         )
         session.add(maera)
 
@@ -389,6 +509,7 @@ def create_playtest_world(db_path: str = PLAYTEST_DB_PATH) -> None:
             goals=["Get someone with authority to listen to her about the howls"],
             secrets=["She has been charting the howls by night and direction; the pattern repeats every third night"],
             current_mood="anxious",
+            danger_tier="harmless",
         )
         session.add(piper)
 
@@ -414,6 +535,7 @@ def create_playtest_world(db_path: str = PLAYTEST_DB_PATH) -> None:
             goals=["Join the Lantern Watch when he's of age"],
             secrets=["He saw a man in an ash-gray cloak crouched by the north wall two nights ago, and told no one because no one asks Sorrel"],
             current_mood="excited",
+            danger_tier="harmless",
         )
         session.add(sorrel)
 
@@ -444,8 +566,80 @@ def create_playtest_world(db_path: str = PLAYTEST_DB_PATH) -> None:
             goals=["Keep travelers off the north road", "Get paid"],
             secrets=["His pay is minted Greywater silver — he can name the counting-house on it"],
             current_mood="watchful",
+            danger_tier="dangerous",
+            combat_archetype="stalker",
         )
         session.add(vex)
+
+        # The campaign-scale threat: the man the wolves answer to. Boss tier
+        # is authored-only — he exists so the tier ladder tops out in-fiction
+        # and the campaign generator has a villain to cast.
+        whistler = NPC(
+            name="Aldric Vane",
+            tier=NPCTier.MAJOR,
+            species="human",
+            age=44,
+            profession="Ashen Fangs wolf-caller",
+            faction_id=fangs.id,
+            current_location_id=hollow.id,
+            home_location_id=hollow.id,
+            position_x=30,
+            position_y=30,
+            description_physical=(
+                "A broad, still man in a wolf-pelt mantle, ash rubbed into his "
+                "beard, a row of bone whistles strung across his chest like "
+                "medals. The wolves sit when he stands."
+            ),
+            description_personality=(
+                "Patient as winter. Believes the town's lanterns made people "
+                "soft, and the hills are only taking back their due. Speaks to "
+                "wolves more gently than to men."
+            ),
+            voice_pattern=(
+                "Slow, resonant, almost kind. 'The gate closes at the howl. "
+                "Ever ask who taught them when to sing?'"
+            ),
+            goals=[
+                "Strangle the north road until Emberfall pays the Fangs' toll",
+                "Keep his wolves alive — they are the only pack he trusts",
+            ],
+            secrets=[
+                "He was a Lantern Watch sergeant once, drummed out by Coldiron's predecessor",
+                "The third-night howl pattern is a muster call — he is counting his pack",
+            ],
+            current_mood="patient",
+            danger_tier="boss",
+            combat_archetype="brute",
+            boss_title="The Whistler of Wolf's Hollow",
+        )
+        session.add(whistler)
+
+        # Weak-tier pack: fights the player can win at level 1, and the tier
+        # ladder's bottom rungs made visible next to the boss at its top.
+        for wolf_name, wolf_arch, wx, wy in (
+            ("Hollow Wolf", "skirmisher", 44, 62),
+            ("Gray-Flank Wolf", "stalker", 70, 40),
+        ):
+            session.add(NPC(
+                name=wolf_name,
+                tier=NPCTier.AMBIENT,
+                species="wolf",
+                profession="wolf of the drilled pack",
+                faction_id=fangs.id,
+                current_location_id=hollow.id,
+                home_location_id=hollow.id,
+                position_x=wx,
+                position_y=wy,
+                description_physical=(
+                    "A rangy gray wolf, ribs showing, moving with an unnatural "
+                    "patience — it watches like something taught it to wait."
+                ),
+                description_personality="Drilled, not wild. Holds its distance until called.",
+                goals=["Answer the whistle"],
+                current_mood="watchful",
+                danger_tier="weak",
+                combat_archetype=wolf_arch,
+            ))
         session.flush()
 
         # ----- Quest (NOT_STARTED: tests activate_quest + reward application) --
@@ -468,6 +662,7 @@ def create_playtest_world(db_path: str = PLAYTEST_DB_PATH) -> None:
                 "reputation": {watch.id: 10},
             },
             assigned_by_npc_id=brann.id,
+            scale="mission",
         ))
 
         # ----- Scheduled events (fire deterministically on the world tick) ----

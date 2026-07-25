@@ -47,7 +47,7 @@ def test_world_shape(playtest_db):
         assert bible.pc_suggested_name and bible.pc_suggested_description
 
         assert session.query(Location).count() == 4
-        assert session.query(NPC).count() == 5
+        assert session.query(NPC).count() == 8
         # No pre-made player: character creation (and sprite/walk generation)
         # is part of the playtest
         assert session.query(Player).count() == 0
@@ -60,6 +60,19 @@ def test_world_shape(playtest_db):
 
         # Three wanderers share the start scene
         assert session.query(NPC).filter_by(current_location_id=square.id).count() == 3
+
+        # The tier ladder has a face at both ends: harmless townsfolk, weak
+        # wolves, dangerous named fighters, and exactly one authored boss
+        tiers = {n.name: n.danger_tier for n in session.query(NPC).all()}
+        assert tiers["Piper Quillow"] == "harmless"
+        assert tiers["Vex Marrow"] == "dangerous"
+        bosses = [n for n in session.query(NPC).all() if n.danger_tier == "boss"]
+        assert len(bosses) == 1 and bosses[0].boss_title
+
+        # Every seeded location carries canvas objects (E-to-interact surface)
+        for loc_name in ("Market Square", "The Drowned Lantern", "Wolf's Hollow"):
+            loc = session.query(Location).filter_by(name=loc_name).one()
+            assert loc.objects and 1 <= len(loc.objects) <= 3
 
 
 def test_locked_connection_and_quest(playtest_db):
