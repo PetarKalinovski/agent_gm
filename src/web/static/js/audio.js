@@ -9,6 +9,12 @@
  * the background server-side, so we poll /api/assets/voice/{id} briefly
  * and play lines sequentially, ducking the music while a voice plays.
  *
+ * Cinematics: `cinematic` SSE events (title cards, boss intros, visions,
+ * weather) get their own music duck — `cineDuck` multiplies with the voice
+ * duck rather than fighting it — plus an optional voice-queue hold so a
+ * title card is not talked over. game.js owns the picture; this file owns
+ * the sound of it and never assumes game.js ran.
+ *
  * Crossfade/ducking approach referenced from the telltale project's
  * player AudioManager, reimplemented for Forge's streaming model.
  */
@@ -33,6 +39,20 @@ class ForgeAudio {
         this.voiceEl = new Audio();
         this.voiceQueue = [];
         this.voicePlaying = false;
+        this.voiceHold = false;         // cinematics pause the queue without dropping it
+        this._voiceHoldTimer = null;
+
+        // Cinematic ducking — a second music multiplier, independent of the
+        // voice duck (they multiply in _effectiveMusicVolume)
+        this._cineDuckLevel = 1;
+        this._cineDuckTimer = null;
+        this._cineTimers = [];          // per-cinematic scheduled beats
+
+        // Looping weather ambience (silent until the bed files exist)
+        this.ambName = null;
+        this.ambSource = null;
+        this.ambGain = null;
+        this.ambBuffers = {};           // name -> AudioBuffer | null (null = known missing)
 
         this.musicVolume = parseFloat(localStorage.getItem('forge-music-vol') ?? '0.5');
         this.voiceVolume = parseFloat(localStorage.getItem('forge-voice-vol') ?? '0.9');
@@ -59,6 +79,7 @@ class ForgeAudio {
     _unlock() {
         this.unlocked = true;
         this._initSfx();
+        if (this.ambName) this._restartAmbience();   // weather set before the gesture
         if (this.pendingMood) {
             const mood = this.pendingMood;
             this.pendingMood = null;
@@ -110,6 +131,16 @@ class ForgeAudio {
                 if (this.currentMood === 'explore' || !this.currentMood) this.setMood('night');
             } else if (payload.type === 'quest_completed') {
                 this.playStinger('triumph');
+            } else if (payload.type === 'level_up') {
+                // A level is a beat, not a quest — same theme, shorter hold.
+                // SSE order is quest_completed -> xp_gain -> level_up, so a
+                // triumph may already be on stage: let its longer hold stand
+                // rather than cutting the quest fanfare short.
+                if (!(this.stingerTimer && this.currentMood === 'triumph')) {
+                    this.playStinger('triumph', 8000);
+                }
+            } else if (payload.type === 'cinematic') {
+                this._handleCinematic(payload);
             } else if (payload.type === 'combat_start') {
                 if (this.stingerTimer) this._clearStinger();
                 this.lastStateMood = 'danger';
@@ -142,6 +173,131 @@ class ForgeAudio {
     }
 
     // ------------------------------------------------------------------
+    // Cinematics
+    // ------------------------------------------------------------------
+
+    /** Durations used only when the server payload omits duration_ms. */
+    static CINE_MS = { title_card: 4200, boss_intro: 3600, kill_cam: 1500, vision: 45000 };
+
+    /** Music moods that actually exist in the palette. A cinematic `mood` is
+     *  a weather label for kind=weather, so it is whitelisted before use. */
+    static MUSIC_MOODS = ['explore', 'tension', 'danger', 'somber', 'night', 'triumph', 'epic'];
+
+    /**
+     * `cinematic` SSE -> sound. The picture is game.js's job; every branch
+     * here is safe on its own if game.js skipped or deferred the visual.
+     */
+    _handleCinematic(p) {
+        const kind = p && p.kind;
+        if (!kind) return;
+        this._clearCineTimers();
+        const dur = Number(p.duration_ms) > 0
+            ? Number(p.duration_ms)
+            : (ForgeAudio.CINE_MS[kind] || 0);
+
+        if (kind === 'title_card') {
+            // Hush: the card is a silence, not a fanfare. Duck hard for the
+            // length of the card, then let the world's mood swell back.
+            this.cineDuck(0.15, dur + 400);
+            this.holdVoiceQueue(dur + 300);
+            this.playSfx('windup', { volume: 0.3 });   // bar-in / reveal
+            const mood = this._musicMood(p.mood);
+            if (mood) {
+                // A card that names its own mood re-scores the scene after it
+                // clears (state events keep the last word from then on).
+                this._cineLater(() => { this.lastStateMood = mood; this.setMood(mood); }, dur);
+            }
+        } else if (kind === 'boss_intro') {
+            // The one moment that gets its own track. `epic` falls back to
+            // `danger` while the palette is still generating; combat_start
+            // lands right after and interrupts the stinger by the usual rule.
+            this.cineDuck(0.30, dur + 300);
+            this.holdVoiceQueue(dur + 300);
+            this.playStinger('epic', 10000);
+            // Land the hit on the name splash, not on event arrival. game.js
+            // may fire its own impact there — playSfx throttles by resolved
+            // sample, so the pair collapses into one strike.
+            this._cineLater(() => this.playSfx('clash', { volume: 0.9 }), 900);
+        } else if (kind === 'vision') {
+            // Visions have voices — hold only across the wash-in, then let
+            // the queue run. game.endVision() releases the duck via duckFor(1);
+            // the timer is the failsafe if it never does.
+            this.cineDuck(0.18, dur || 45000);
+            this.holdVoiceQueue(1200);
+            this.playSfx('windup', { volume: 0.25 });
+        } else if (kind === 'kill_cam') {
+            // Client-driven today (game.js calls duckFor/playSfx directly);
+            // handled here too so a server-sent kill_cam is never silent.
+            this.cineDuck(0.15, dur || 1500);
+            this.playSfx('clash', { volume: 1.0 });
+        } else if (kind === 'weather') {
+            // No music change — weather is a bed, not a mood.
+            const label = (p.mood || 'clear');
+            this.setAmbience(
+                label === 'rain' ? 'amb_rain'
+                : (label === 'snow' || label === 'fog') ? 'amb_wind'
+                : null
+            );
+        }
+    }
+
+    /** Cinematic music duck. Multiplies with the voice duck; `ms > 0` auto-restores. */
+    cineDuck(level, ms = 0) {
+        this._cineDuckLevel = Math.max(0, Math.min(1, Number(level)));
+        if (this._cineDuckTimer) { clearTimeout(this._cineDuckTimer); this._cineDuckTimer = null; }
+        this._applyVolumes();
+        if (ms > 0 && this._cineDuckLevel < 1) {
+            this._cineDuckTimer = setTimeout(() => {
+                this._cineDuckTimer = null;
+                this._cineDuckLevel = 1;
+                this._applyVolumes();
+            }, ms);
+        }
+    }
+
+    /** Alias — game.js calls this name from its cinematic hooks. */
+    duckFor(level, ms = 0) {
+        this.cineDuck(level, ms);
+    }
+
+    /** Pause the voice queue without dropping it. Accepts a boolean (hold /
+     *  release) or a duration in ms (hold, then resume automatically). */
+    holdVoiceQueue(on) {
+        if (this._voiceHoldTimer) { clearTimeout(this._voiceHoldTimer); this._voiceHoldTimer = null; }
+        const ms = typeof on === 'number' ? on : 0;
+        this.voiceHold = ms > 0 ? true : !!on;
+        if (this.voiceHold) {
+            // A hold that is never released would swallow the turn's dialogue,
+            // so every hold has an expiry — an explicit ms, or a failsafe.
+            this._voiceHoldTimer = setTimeout(() => {
+                this._voiceHoldTimer = null;
+                this.voiceHold = false;
+                this._processVoiceQueue();
+            }, ms > 0 ? ms : 15000);
+        } else {
+            this._processVoiceQueue();
+        }
+    }
+
+    _musicMood(mood) {
+        const m = (mood || '').toString().toLowerCase();
+        return ForgeAudio.MUSIC_MOODS.includes(m) ? m : null;
+    }
+
+    _cineLater(fn, ms) {
+        const id = setTimeout(() => {
+            this._cineTimers = this._cineTimers.filter(t => t !== id);
+            try { fn(); } catch (e) { /* a cue is never worth an exception */ }
+        }, ms);
+        this._cineTimers.push(id);
+    }
+
+    _clearCineTimers() {
+        for (const id of this._cineTimers) clearTimeout(id);
+        this._cineTimers = [];
+    }
+
+    // ------------------------------------------------------------------
     // Music
     // ------------------------------------------------------------------
 
@@ -159,6 +315,9 @@ class ForgeAudio {
         if (!this.manifest || !this.manifest.moods) return null;
         // Fall back along "intensity neighbors" while tracks are still generating
         const fallbacks = {
+            // `epic` is the newest track in the palette — existing worlds have
+            // not generated it yet, so a boss entrance borrows `danger`.
+            epic: ['epic', 'danger', 'tension', 'explore'],
             danger: ['danger', 'tension', 'explore'],
             tension: ['tension', 'explore'],
             somber: ['somber', 'night', 'explore'],
@@ -198,11 +357,13 @@ class ForgeAudio {
 
     _crossfade(from, to, ms) {
         if (this.fadeTimer) clearInterval(this.fadeTimer);
-        const target = this._effectiveMusicVolume();
         const steps = Math.max(1, Math.floor(ms / 50));
         let step = 0;
         this.fadeTimer = setInterval(() => {
             step++;
+            // Re-read every tick: a voice line or a cinematic can duck
+            // mid-crossfade, and the fade must land on the ducked target.
+            const target = this._effectiveMusicVolume();
             const k = step / steps;
             to.volume = Math.min(target, target * k);
             from.volume = Math.max(0, (from === this.active ? target : target) * (1 - k));
@@ -217,7 +378,8 @@ class ForgeAudio {
 
     _effectiveMusicVolume() {
         const duck = this.voicePlaying ? this.DUCK : 1;
-        return this.muted ? 0 : this.musicVolume * duck;
+        const cine = this._cineDuckLevel ?? 1;
+        return this.muted ? 0 : this.musicVolume * duck * cine;
     }
 
     _applyVolumes() {
@@ -237,6 +399,7 @@ class ForgeAudio {
 
     async _processVoiceQueue() {
         if (this.voicePlaying || this.voiceQueue.length === 0) return;
+        if (this.voiceHold) return;   // a cinematic owns the stage; lines wait
         this.voicePlaying = true;
         this._applyVolumes(); // duck music
         const { audioId, npcId } = this.voiceQueue.shift();
@@ -293,6 +456,11 @@ class ForgeAudio {
 
     static SFX_NAMES = ['swing', 'hit', 'hurt', 'roll', 'death', 'windup', 'clash'];
 
+    /** Cinematic cue names map onto the shipped one-shots until (if ever)
+     *  dedicated samples exist. A real `boom.mp3`/`whoosh.mp3` added to
+     *  SFX_NAMES silently wins — the alias is only consulted on a miss. */
+    static SFX_ALIASES = { boom: 'clash', whoosh: 'windup', slam: 'hit', impact: 'clash' };
+
     _initSfx() {
         if (this.sfxCtx) return;
         try {
@@ -311,13 +479,18 @@ class ForgeAudio {
      *  from machine-gunning; a per-name throttle stops multi-enemy frames
      *  from stacking the same sound. */
     playSfx(name, { volume = 1, throttleMs = 60 } = {}) {
-        if (this.muted || !this.sfxCtx || !this.sfxBuffers[name]) return;
+        if (this.muted || !this.sfxCtx) return;
+        // Resolve aliases BEFORE throttling so a cinematic cue and the sample
+        // it borrows cannot double-strike on the same frame.
+        let key = name;
+        if (!this.sfxBuffers[key]) key = ForgeAudio.SFX_ALIASES[name] || key;
+        if (!this.sfxBuffers[key]) return;
         const now = performance.now();
-        if (this.sfxLastAt[name] && now - this.sfxLastAt[name] < throttleMs) return;
-        this.sfxLastAt[name] = now;
+        if (this.sfxLastAt[key] && now - this.sfxLastAt[key] < throttleMs) return;
+        this.sfxLastAt[key] = now;
         if (this.sfxCtx.state === 'suspended') this.sfxCtx.resume().catch(() => {});
         const src = this.sfxCtx.createBufferSource();
-        src.buffer = this.sfxBuffers[name];
+        src.buffer = this.sfxBuffers[key];
         src.playbackRate.value = 0.94 + Math.random() * 0.12;
         const gain = this.sfxCtx.createGain();
         gain.gain.value = this.sfxVolume * volume;
@@ -329,6 +502,69 @@ class ForgeAudio {
     setSfxVolume(v) {
         this.sfxVolume = v;
         localStorage.setItem('forge-sfx-vol', String(v));
+        if (this.ambGain) this.ambGain.gain.value = this.sfxVolume * ForgeAudio.AMB_GAIN;
+    }
+
+    // ------------------------------------------------------------------
+    // Weather ambience (looping bed; silent while the files are absent)
+    // ------------------------------------------------------------------
+
+    static AMB_GAIN = 0.35;
+
+    /** Start/stop a looping ambience bed. Idempotent; a missing file is a
+     *  silent no-op, so shipping without beds costs nothing. */
+    setAmbience(name) {
+        const next = name || null;
+        if (next === this.ambName) return;
+        this.ambName = next;
+        this._stopAmbience();
+        if (!next || !this.sfxCtx || this.muted) return;
+        this._loadAmbience(next).then((buf) => {
+            // The weather may have turned again while the file was loading
+            if (!buf || this.ambName !== next || !this.sfxCtx || this.muted) return;
+            try {
+                if (this.sfxCtx.state === 'suspended') this.sfxCtx.resume().catch(() => {});
+                const src = this.sfxCtx.createBufferSource();
+                src.buffer = buf;
+                src.loop = true;
+                const gain = this.sfxCtx.createGain();
+                gain.gain.value = this.sfxVolume * ForgeAudio.AMB_GAIN;
+                src.connect(gain);
+                gain.connect(this.sfxCtx.destination);
+                src.start();
+                this.ambSource = src;
+                this.ambGain = gain;
+            } catch (e) { /* ambience is decoration — never throw */ }
+        });
+    }
+
+    _loadAmbience(name) {
+        if (Object.prototype.hasOwnProperty.call(this.ambBuffers, name)) {
+            return Promise.resolve(this.ambBuffers[name]);
+        }
+        return fetch(`/static/sfx/${name}.mp3`)
+            .then(r => (r.ok ? r.arrayBuffer() : null))
+            .then(buf => (buf ? this.sfxCtx.decodeAudioData(buf) : null))
+            .then((decoded) => { this.ambBuffers[name] = decoded || null; return this.ambBuffers[name]; })
+            .catch(() => { this.ambBuffers[name] = null; return null; });
+    }
+
+    _stopAmbience() {
+        if (this.ambSource) {
+            try { this.ambSource.stop(); } catch (e) { /* already stopped */ }
+            try { this.ambSource.disconnect(); } catch (e) { /* detached */ }
+        }
+        if (this.ambGain) {
+            try { this.ambGain.disconnect(); } catch (e) { /* detached */ }
+        }
+        this.ambSource = null;
+        this.ambGain = null;
+    }
+
+    _restartAmbience() {
+        const name = this.ambName;
+        this.ambName = null;
+        this.setAmbience(name);
     }
 
     // ------------------------------------------------------------------
@@ -355,8 +591,10 @@ class ForgeAudio {
         if (this.muted) {
             this.musicA.pause();
             this.musicB.pause();
-        } else if (this.currentMood) {
-            this.active.play().catch(() => {});
+            this._stopAmbience();
+        } else {
+            if (this.currentMood) this.active.play().catch(() => {});
+            if (this.ambName) this._restartAmbience();
         }
     }
 

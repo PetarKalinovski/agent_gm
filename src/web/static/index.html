@@ -514,12 +514,153 @@
         .toast.quest-done { border-color: #fbbf24; color: #fde68a; }
         .toast.quest-failed { border-color: #ef4444; color: #fca5a5; }
 
+        .toast.level        { border-color: #fbbf24; color: #fde68a; }
+        .toast.campaign     { border-color: #6366f1; color: #c7d2fe; }
+        .toast.campaign-act { border-color: #fbbf24; color: #fde68a; font-size: 1.05rem; letter-spacing: 0.04em; }
+
         #hud-health.healthy    { color: #4ade80; }
         #hud-health.winded     { color: #fbbf24; }
         #hud-health.hurt       { color: #fb923c; }
         #hud-health.badly_hurt { color: #f87171; }
         #hud-health.critical   { color: #ef4444; font-weight: 700; }
         #hud-health.dead       { color: #6b7280; font-weight: 700; }
+
+        /* --- Progression: level chip + XP bar --- */
+        .xp-bar { display:inline-block; width:34px; height:3px; margin-left:6px;
+                  background:rgba(255,255,255,0.18); border-radius:2px; vertical-align:middle; }
+        .xp-bar i { display:block; height:100%; width:0%; background:#fbbf24; border-radius:2px;
+                    transition:width .45s ease; }
+        #hud-level-chip { transition: background .25s ease, box-shadow .25s ease; }
+        #hud-level-chip.xp-pulse { background: rgba(251,191,36,0.30);
+                                   box-shadow: 0 0 12px rgba(251,191,36,0.40); }
+
+        /* Inventory / character panel action buttons */
+        .hud-item button { background:rgba(255,255,255,0.10); border:1px solid rgba(255,255,255,0.18);
+                  color:inherit; border-radius:6px; font:inherit; font-size:0.72rem;
+                  padding:2px 7px; margin-left:6px; cursor:pointer; }
+        .hud-item button:hover { background:rgba(255,255,255,0.20); }
+        .hud-item button[disabled] { opacity:0.35; cursor:default; }
+
+        /* --- Campaign clock urgency --- */
+        #hud-clock-chip.distant  { color: var(--text-secondary); }
+        #hud-clock-chip.soon     { color: #fbbf24; }
+        #hud-clock-chip.imminent { color: #f87171; animation: clockPulse 1.6s ease-in-out infinite; }
+        #hud-clock-chip.overdue  { color: #ef4444; font-weight: 700; animation: clockPulse 1.1s ease-in-out infinite; }
+        @keyframes clockPulse { 0%,100% { opacity: 1; } 50% { opacity: 0.45; } }
+
+        /* ===== Cinematics (bars/scrim/text are DOM; zoom/tint/shake are Pixi) ===== */
+        #cine-overlay {
+            position: absolute; inset: 0; z-index: 970;
+            pointer-events: none; opacity: 0; visibility: hidden;
+            transition: opacity 0.35s ease;
+            font-family: Georgia, serif;
+        }
+        #cine-overlay.active { opacity: 1; visibility: visible; }
+        #cine-overlay.skippable { pointer-events: auto; cursor: pointer; }
+
+        .cine-scrim {
+            position: absolute; inset: 0; background: #000;
+            opacity: 0; transition: opacity 0.5s ease;
+        }
+        #cine-overlay.dim .cine-scrim { opacity: 0.55; }
+
+        .cine-vignette {
+            position: absolute; inset: 0; opacity: 0;
+            transition: opacity 0.8s ease;
+            background: radial-gradient(ellipse at 50% 50%,
+                rgba(0,0,0,0) 38%, rgba(0,0,0,0.55) 82%, rgba(0,0,0,0.8) 100%);
+        }
+        #cine-overlay.vignette .cine-vignette { opacity: 1; }
+        #cine-overlay.boss .cine-vignette {
+            background: radial-gradient(ellipse at 50% 55%,
+                rgba(0,0,0,0) 30%, rgba(60,0,0,0.5) 78%, rgba(0,0,0,0.85) 100%);
+        }
+
+        .cine-flash {
+            position: absolute; inset: 0; background: #fff;
+            opacity: 0; transition: opacity 0.12s ease-out;
+        }
+        #cine-overlay.flash .cine-flash { opacity: 0.35; transition: none; }
+
+        .cine-bar {
+            position: absolute; left: 0; right: 0; height: 12%;
+            background: #000; transition: transform 0.55s cubic-bezier(.22,.9,.24,1);
+        }
+        .cine-bar.top    { top: 0;    transform: translateY(-100%); }
+        .cine-bar.bottom { bottom: 0; transform: translateY(100%); }
+        #cine-overlay.letterbox .cine-bar.top,
+        #cine-overlay.letterbox .cine-bar.bottom { transform: translateY(0); }
+        #cine-overlay.thin-bars .cine-bar { height: 7%; }
+
+        .cine-text {
+            position: absolute; left: 0; right: 0; top: 50%;
+            transform: translateY(-50%); text-align: center; padding: 0 8%;
+        }
+        .cine-title {
+            font-size: clamp(1.6rem, 4.2vw, 2.9rem); font-weight: 700;
+            letter-spacing: 0.22em; text-transform: uppercase; color: #f4f0e6;
+            text-shadow: 0 2px 24px rgba(0,0,0,0.9);
+            opacity: 0; transform: translateY(14px) scale(1.0);
+            transition: opacity 0.6s ease, transform 0.7s cubic-bezier(.22,.9,.24,1);
+        }
+        .cine-rule {
+            width: 0; height: 1px; margin: 0.7rem auto;
+            background: rgba(244,240,230,0.55);
+            transition: width 0.7s cubic-bezier(.22,.9,.24,1) 0.15s;
+        }
+        .cine-sub {
+            font-size: clamp(0.85rem, 1.5vw, 1.05rem); font-style: italic;
+            letter-spacing: 0.12em; color: #cbd5e1;
+            text-shadow: 0 2px 14px rgba(0,0,0,0.9);
+            opacity: 0; transition: opacity 0.6s ease 0.35s;
+        }
+        #cine-overlay.show-text .cine-title { opacity: 1; transform: translateY(0) scale(1); }
+        #cine-overlay.show-text .cine-rule  { width: min(320px, 42%); }
+        #cine-overlay.show-text .cine-sub   { opacity: 1; }
+
+        /* Boss splash: heavier, red-lit, snaps in instead of drifting */
+        #cine-overlay.boss .cine-title {
+            font-weight: 800; letter-spacing: 0.16em; color: #f8f4ec;
+            text-shadow: 0 0 28px rgba(220,38,38,0.55), 0 2px 18px rgba(0,0,0,0.95);
+            transform: translateY(0) scale(1.16);
+            transition: opacity 0.18s ease, transform 0.22s cubic-bezier(.2,1.3,.3,1);
+        }
+        #cine-overlay.boss.show-text .cine-title { transform: translateY(0) scale(1); }
+        #cine-overlay.boss .cine-sub { color: #fca5a5; font-style: normal; letter-spacing: 0.2em; }
+
+        .cine-skip {
+            position: absolute; right: 18px; bottom: 14%;
+            font-family: system-ui, sans-serif; font-size: 0.7rem;
+            letter-spacing: 0.08em; color: rgba(229,225,216,0.55);
+            opacity: 0; transition: opacity 0.4s ease;
+        }
+        #cine-overlay.skippable .cine-skip { opacity: 1; }
+
+        @media (prefers-reduced-motion: reduce) {
+            .cine-bar, .cine-title, .cine-rule, .cine-sub { transition-duration: 0.15s; }
+        }
+
+        /* ===== Lore panel (what a 'read' object says) ===== */
+        #lore-panel {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            z-index: 940; max-width: 460px; width: min(460px, 82%);
+            background: var(--bg-secondary, #16161f);
+            border: 1px solid var(--accent, #6366f1); border-radius: 12px;
+            padding: 1.1rem 1.35rem; box-shadow: 0 8px 32px rgba(0,0,0,.55);
+            font-family: Georgia, serif; color: #e5e1d8; cursor: pointer;
+        }
+        #lore-panel .lore-title {
+            font-size: 1.05rem; font-weight: 700; color: #a5b4fc;
+            letter-spacing: 0.04em; margin-bottom: 0.5rem;
+        }
+        #lore-panel .lore-body {
+            font-size: 0.94rem; line-height: 1.55; white-space: pre-wrap;
+            max-height: 40vh; overflow-y: auto;
+        }
+        #lore-panel .lore-dismiss {
+            margin-top: 0.8rem; font-family: system-ui, sans-serif;
+            font-size: 0.7rem; color: var(--text-secondary, #9ca3af);
+        }
 
         .hud-panel {
             position: absolute;
@@ -1238,9 +1379,12 @@
         <div class="game-overlay">
             <span class="location" id="game-location">No location</span>
             <span id="game-time"></span>
+            <span class="hud-chip clickable" id="hud-level-chip" title="Character">&#11041; Lv <span id="hud-level">1</span><span class="xp-bar"><i id="hud-xp-fill"></i></span></span>
             <span class="hud-chip" id="hud-health-chip">&#10084; <span id="hud-health" class="healthy">healthy</span></span>
             <span class="hud-chip" id="hud-gold-chip">&#9679; <span id="hud-gold">0</span></span>
             <span class="hud-chip clickable" id="hud-quests-chip" title="Active quests">&#9873; <span id="hud-quests">0</span></span>
+            <span class="hud-chip clickable" id="hud-campaign-chip" title="Story" style="display:none">&#9650; <span id="hud-campaign">Act I &middot; 0/0</span></span>
+            <span class="hud-chip" id="hud-clock-chip" style="display:none">&#8987; <span id="hud-clock"></span></span>
             <span class="hud-chip clickable" id="hud-bag-chip" title="Inventory">&#128188; <span id="hud-bag">0</span></span>
             <span class="hud-chip clickable" id="hud-audio-chip" title="Audio"><span id="hud-audio-icon">&#128266;</span></span>
             <span class="hud-chip clickable" id="hud-help-chip" title="Controls">?</span>
@@ -1250,6 +1394,22 @@
         <div id="travel-overlay">
             <div class="loader"></div>
             <div id="travel-text">Traveling...</div>
+        </div>
+        <!-- Cinematic overlay: bars/scrim/text are DOM (crisp type, CSS
+             transitions); zoom, tint, shake and particles are PixiJS.
+             game.js owns every class toggle on this element. -->
+        <div id="cine-overlay" aria-hidden="true">
+            <div class="cine-scrim"></div>
+            <div class="cine-vignette"></div>
+            <div class="cine-flash"></div>
+            <div class="cine-bar top"></div>
+            <div class="cine-bar bottom"></div>
+            <div class="cine-text">
+                <div class="cine-title" id="cine-title"></div>
+                <div class="cine-rule"></div>
+                <div class="cine-sub" id="cine-sub"></div>
+            </div>
+            <div class="cine-skip" id="cine-skip">any key &middot; Esc to skip</div>
         </div>
     </div>
 
@@ -1697,8 +1857,8 @@
     <!-- ?v= busts browser caches — bump when these files change, or stale
          clients keep running old code (live bug: combat frames never
          requested because a cached game.js predated them) -->
-    <script src="/static/js/game.js?v=20260724a"></script>
-    <script src="/static/js/audio.js?v=20260724a"></script>
+    <script src="/static/js/game.js?v=20260725a"></script>
+    <script src="/static/js/audio.js?v=20260725a"></script>
 
     <script>
         // State
@@ -1709,6 +1869,12 @@
         let currentNpcId = null;
         let currentNpcName = null;
         let selectedWorldPath = null;
+
+        // True from the moment a turn starts streaming until its stream ends.
+        // game.js reads this to keep doors, barks and canvas travel from
+        // firing underneath a DM turn (the canvas must never move the player
+        // while the DM is mid-thought about where they are).
+        window.forgeTurnBusy = false;
 
         // World Selection DOM elements
         const worldSelectionPage = document.getElementById('world-selection-page');
@@ -2105,16 +2271,64 @@
             for (const name in before) {
                 if ((after[name] || 0) < before[name]) game.spawnFloater(`− ${name}`, 0x9ca3af);
             }
+
+            // Safety net for growth that arrives with no event of its own
+            // (the combat REST path). `showLevelUp` debounces on the level
+            // number, so this and the SSE handler can never both announce.
+            if ((state.level ?? 1) > (prev.level ?? 1)) {
+                showLevelUp({ level: state.level, unlocked: [] });
+            }
+        }
+
+        // Roman numerals for the act chip — three acts is the whole menu
+        const ROMAN = { 1: 'Act I', 2: 'Act II', 3: 'Act III' };
+
+        function formatCountdown(c) {
+            if (c.urgency === 'overdue') return 'now';
+            if (c.days_left >= 1) return `${c.days_left}d`;
+            return `${Math.max(1, c.hours_left)}h`;
+        }
+
+        /** Act chip + the soonest live clock. Everything here is already
+         *  spoiler-free: `state.campaign` never carries a sealed truth. */
+        function applyCampaignChips(campaign) {
+            const campChip = document.getElementById('hud-campaign-chip');
+            const clockChip = document.getElementById('hud-clock-chip');
+            if (!campChip || !clockChip) return;
+            if (!campaign) {
+                campChip.style.display = 'none';
+                clockChip.style.display = 'none';
+                return;
+            }
+            campChip.style.display = '';
+            document.getElementById('hud-campaign').textContent =
+                `${ROMAN[campaign.act] || `Act ${campaign.act}`} · ` +
+                `${campaign.beats_delivered ?? 0}/${campaign.beats_total ?? 0}`;
+            campChip.title = `${campaign.title || 'Story'} — Act ${campaign.act}: ${campaign.act_title || ''}`;
+
+            const clock = (campaign.clocks || [])[0];
+            if (clock) {
+                clockChip.style.display = '';
+                clockChip.className = `hud-chip ${clock.urgency || 'distant'}`;
+                document.getElementById('hud-clock').textContent =
+                    `${clock.label} — ${formatCountdown(clock)}`;
+            } else {
+                clockChip.style.display = 'none';
+            }
         }
 
         function applyPlayerState(state) {
             if (!state) return;
             try { spawnStateFloaters(lastPlayerState, state); } catch (e) { /* cosmetic only */ }
             lastPlayerState = state;
-            window.lastPlayerState = state; // game.js reads health for combat HP
+            window.lastPlayerState = state; // game.js reads combat stats + health
 
             // Day/night scene tint follows the game clock
             if (game && game.setTimeOfDay) game.setTimeOfDay(state.time_of_day);
+            // Weather is durable world state — restore it on every state event
+            // so it survives reloads and scene changes (indoor is suppressed
+            // server-side, so 'clear' here is authoritative)
+            if (game && game.setWeather) game.setWeather(state.weather || 'clear');
 
             gameLocation.textContent = state.location;
             gameTime.textContent = ` - Day ${state.day}, ${String(state.hour).padStart(2, '0')}:${String(state.minute || 0).padStart(2, '0')}`;
@@ -2134,7 +2348,27 @@
             document.getElementById('hud-bag').textContent =
                 (state.inventory || []).reduce((sum, i) => sum + (i.quantity || 1), 0);
 
+            // Level + XP bar — the engine's numbers, rendered, never derived
+            document.getElementById('hud-level').textContent = state.level ?? 1;
+            const xpFill = document.getElementById('hud-xp-fill');
+            const xpSpan = state.xp_for_level || 0;
+            xpFill.style.width = xpSpan
+                ? `${Math.min(100, 100 * (state.xp_into_level || 0) / xpSpan)}%`
+                : '100%';
+
+            applyCampaignChips(state.campaign);
+
             renderHudPanel();
+        }
+
+        /** A quiet nudge on the XP bar — growth is felt, never counted in chat. */
+        let xpPulseTimer = null;
+        function pulseXpBar() {
+            const chip = document.getElementById('hud-level-chip');
+            if (!chip) return;
+            chip.classList.add('xp-pulse');
+            clearTimeout(xpPulseTimer);
+            xpPulseTimer = setTimeout(() => chip.classList.remove('xp-pulse'), 700);
         }
 
         function renderHudPanel() {
@@ -2147,12 +2381,57 @@
 
             if (hudPanelMode === 'inventory') {
                 const items = lastPlayerState.inventory || [];
+                const quickId = ((lastPlayerState.combat || {}).quick_slot || {}).item_id;
                 panel.innerHTML = '<h4>Inventory</h4>' + (items.length
-                    ? items.map(i =>
-                        `<div class="hud-item"><span>${escapeHtml(i.name)}${i.quantity > 1 ? ` &times;${i.quantity}` : ''}</span>` +
-                        `<span class="muted">${escapeHtml(i.type || '')}</span></div>`
-                      ).join('')
+                    ? items.map(i => {
+                        const id = esc(i.item_id);
+                        const btns = [];
+                        if (i.equipped) btns.push(`<button data-act="unequip" data-slot="${esc(i.slot)}">Unequip</button>`);
+                        else if (i.equippable) btns.push(`<button data-act="equip" data-item="${id}">Equip</button>`);
+                        else if (i.effect_tag) {
+                            btns.push(`<button data-act="use" data-item="${id}">Drink</button>`);
+                            btns.push(`<button data-act="quick" data-item="${id}" title="Bind to Q"${
+                                quickId && quickId === i.item_id ? ' disabled' : ''}>Q</button>`);
+                        }
+                        const meta = [];
+                        if (i.slot) meta.push(esc(i.slot));
+                        if (i.tier) meta.push(esc(i.tier));
+                        if (i.price) meta.push(`${i.price}g`);
+                        return `<div class="hud-item"><span>${esc(i.name)}` +
+                               (i.quantity > 1 ? ` &times;${i.quantity}` : '') +
+                               (i.equipped ? ' <span style="color:#fbbf24;">&#9733;</span>' : '') +
+                               (meta.length ? ` <span class="muted">(${meta.join(' &middot; ')})</span>` : '') +
+                               `</span><span>${btns.join('')}</span></div>`;
+                      }).join('')
                     : '<div class="muted">Empty. Go find something shiny.</div>');
+            } else if (hudPanelMode === 'character') {
+                const s = lastPlayerState, eq = s.equipment || {}, c = s.combat || {};
+                const span = s.xp_for_level || 0;
+                panel.innerHTML = '<h4>Character</h4>' +
+                    `<div class="hud-item"><span>Level</span><span>${s.level ?? 1}</span></div>` +
+                    `<div class="hud-item"><span>Growth</span><span class="muted">${
+                        span ? `${s.xp_into_level ?? 0} / ${span}` : 'at the peak'}</span></div>` +
+                    `<div class="hud-item"><span>Vitality</span><span>${c.hearts ?? '?'} / ${c.max_hearts ?? '?'} hearts</span></div>` +
+                    `<div class="hud-item"><span>Strike</span><span>${c.light_damage ?? 1}` +
+                        (c.heavy_damage ? ` <span class="muted">/ ${c.heavy_damage} heavy</span>` : '') +
+                        `</span></div>` +
+                    ['weapon', 'armor', 'trinket'].map(sl => {
+                        const worn = eq[sl];
+                        return `<div class="hud-item"><span class="muted">${sl}</span><span>` +
+                            (worn
+                                ? `${esc(worn.name)}${worn.tier ? ` <span class="muted">(${esc(worn.tier)})</span>` : ''}` +
+                                  `<button data-act="unequip" data-slot="${sl}">Unequip</button>`
+                                : '&mdash;') +
+                            `</span></div>`;
+                    }).join('') +
+                    `<div class="hud-item"><span class="muted">quick slot (Q)</span><span>` +
+                        (c.quick_slot
+                            ? `${esc(c.quick_slot.name)}${c.quick_slot.quantity > 1 ? ` &times;${c.quick_slot.quantity}` : ''}` +
+                              `<button data-act="quick-clear">Clear</button>`
+                            : '&mdash;') +
+                    `</span></div>`;
+            } else if (hudPanelMode === 'campaign') {
+                panel.innerHTML = renderCampaignPanel();
             } else if (hudPanelMode === 'quests') {
                 const quests = lastPlayerState.quests || [];
                 panel.innerHTML = '<h4>Active Quests</h4>' + (quests.length
@@ -2170,8 +2449,114 @@
 
         function toggleHudPanel(mode) {
             hudPanelMode = (hudPanelMode === mode) ? null : mode;
+            if (hudPanelMode === 'campaign') refreshCampaignView();
             renderHudPanel();
         }
+
+        // --- Campaign panel (GET /api/campaign/{id} — already spoiler-safe:
+        //     sealed truths are never serialized, unfired beats never appear) ---
+        let campaignView = null;
+        let campaignViewPending = false;
+
+        async function refreshCampaignView() {
+            if (!currentPlayerId || campaignViewPending) return;
+            campaignViewPending = true;
+            try {
+                const res = await fetch(`/api/campaign/${currentPlayerId}`);
+                const data = await res.json();
+                campaignView = (data && data.campaign) ? data : null;
+                if (hudPanelMode === 'campaign') renderHudPanel();
+            } catch (e) {
+                console.warn('Campaign view unavailable:', e);
+            } finally {
+                campaignViewPending = false;
+            }
+        }
+
+        function renderCampaignPanel() {
+            const view = campaignView;
+            const c = (view && view.campaign) || (lastPlayerState && lastPlayerState.campaign);
+            if (!c) return '<h4>Story</h4><div class="muted">No campaign yet. Your story is still your own.</div>';
+
+            const parts = [`<h4>${esc(c.title || 'Story')}</h4>`];
+            if (c.premise) parts.push(`<div class="muted" style="margin-bottom:.5rem;">${esc(c.premise)}</div>`);
+            parts.push(
+                `<div class="hud-item"><span>${ROMAN[c.act] || `Act ${c.act}`}</span>` +
+                `<span class="muted">${esc(c.act_title || '')}</span></div>`
+            );
+            if (c.act_premise) {
+                parts.push(`<div class="muted" style="padding:.25rem 0;">${esc(c.act_premise)}</div>`);
+            }
+            parts.push(
+                `<div class="hud-item"><span class="muted">beats this act</span>` +
+                `<span>${c.beats_delivered ?? 0}/${c.beats_total ?? 0}</span></div>`
+            );
+
+            const clocks = (view && view.clocks) || c.clocks || [];
+            if (clocks.length) {
+                parts.push('<h4 style="margin-top:.7rem;">Running out of time</h4>');
+                for (const clock of clocks) {
+                    const color = { overdue: '#ef4444', imminent: '#f87171', soon: '#fbbf24' }[clock.urgency] || '';
+                    parts.push(
+                        `<div class="hud-item"><span>${esc(clock.label)}</span>` +
+                        `<span${color ? ` style="color:${color};"` : ' class="muted"'}>${esc(formatCountdown(clock))}</span></div>`
+                    );
+                }
+            }
+
+            const told = (view && view.delivered_beats)
+                ? view.delivered_beats.map(b => b.title)
+                : (c.delivered_titles || []);
+            if (told.length) {
+                parts.push('<h4 style="margin-top:.7rem;">Story so far</h4>');
+                parts.push(told.map(t => `<div class="hud-item"><span>${esc(t)}</span></div>`).join(''));
+            }
+
+            const truths = (view && view.revealed_truths)
+                ? view.revealed_truths.map(t => t.statement)
+                : (c.revealed_truths || []);
+            if (truths.length) {
+                parts.push('<h4 style="margin-top:.7rem;">What you know</h4>');
+                parts.push(truths.map(t => `<div class="hud-item"><span>${esc(t)}</span></div>`).join(''));
+            }
+            return parts.join('');
+        }
+
+        // One delegated listener for every gear/consumable button in the HUD
+        // panel. Each endpoint hands back a fresh state — the HUD never
+        // guesses what changed.
+        document.getElementById('hud-panel').addEventListener('click', async (ev) => {
+            const btn = ev.target.closest('button[data-act]');
+            if (!btn || !currentPlayerId) return;
+            const act = btn.dataset.act;
+            const path = {
+                equip: 'equip', unequip: 'unequip',
+                use: 'use-consumable', quick: 'quick-slot', 'quick-clear': 'quick-slot',
+            }[act];
+            if (!path) return;
+            const body = act === 'unequip' ? { slot: btn.dataset.slot }
+                       : act === 'use' ? { item_id: btn.dataset.item, in_combat: false }
+                       : act === 'quick-clear' ? { item_id: null }
+                       : { item_id: btn.dataset.item };
+            btn.disabled = true;
+            try {
+                const res = await fetch(`/api/player/${currentPlayerId}/${path}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                });
+                const data = await res.json();
+                if (data.state) applyPlayerState(data.state);
+                else if (data.error) showToast(esc(data.error), '', 2600);
+            } catch (err) {
+                console.error('HUD action failed:', err);
+            } finally {
+                btn.disabled = false;
+            }
+        });
+
+        // game.js pushes a fresh state after an optimistic quick-slot drink
+        window.addEventListener('forge-state', (e) => { if (e.detail) applyPlayerState(e.detail); });
 
         // --- First-run controls overlay ---
         function showControlsHint() {
@@ -2187,10 +2572,15 @@
                     <div style="display:grid;grid-template-columns:auto 1fr;gap:0.45rem 1rem;font-size:0.92rem;">
                         <b>WASD</b><span>walk around the scene</span>
                         <b>Click an NPC</b><span>address them, then type to talk</span>
-                        <b>Push an edge</b><span>travel to a connected place</span>
+                        <b>E</b><span>take, read, open or search what you're standing by</span>
+                        <b>Walk into a door</b><span>travel there instantly — no waiting on the DM</span>
+                        <b>Push an edge</b><span>find a way out when no door is visible</span>
                         <b>Type anything</b><span>the DM makes it real</span>
+                        <b>Q</b><span>drink your quick item</span>
                         <b>Space</b><span>dodge-roll (in combat)</span>
                         <b>J</b><span>strike (in combat)</span>
+                        <b>Hold J</b><span>charged heavy strike</span>
+                        <b>K</b><span>parry — stagger them, then punish</span>
                     </div>
                     <div style="margin-top:1rem;font-size:0.8rem;color:#9ca3af;">Click anywhere to begin &middot; press <b>?</b> up top to see this again</div>
                 </div>`;
@@ -2226,8 +2616,55 @@
             }, holdMs);
         }
 
+        /** A level is announced ONCE per level number, whichever path finds it
+         *  first: the SSE `level_up` event (quest XP) or the combat REST
+         *  response (canvas fights never carry progression on SSE). */
+        let levelUpShown = 0;
+        function showLevelUp(p) {
+            if (!p || !p.level || levelUpShown === p.level) return;
+            levelUpShown = p.level;
+            const lines = (p.unlocked || [])
+                .map(u => `<div class="muted" style="font-size:0.85rem;">${esc(u)}</div>`).join('');
+            showToast(`&#11041; <b>Level ${p.level}</b>${lines}`, 'level', 5200);
+            if (game && game.spawnLevelUpBurst) game.spawnLevelUpBurst(p.level);
+            if (window.forgeAudio && window.forgeAudio.playStinger) {
+                window.forgeAudio.playStinger('triumph', 9000);
+            }
+            pulseXpBar();
+        }
+
+        /** What a 'read' object says — a centred card over the canvas.
+         *  Click anywhere or press Escape to dismiss; auto-closes after 14 s. */
+        let lorePanelTimer = null;
+        function dismissLorePanel() {
+            const existing = document.getElementById('lore-panel');
+            if (existing) existing.remove();
+            clearTimeout(lorePanelTimer);
+            lorePanelTimer = null;
+        }
+
+        function showLorePanel(title, text) {
+            if (!text) return;
+            dismissLorePanel();
+            const el = document.createElement('div');
+            el.id = 'lore-panel';
+            el.innerHTML =
+                `<div class="lore-title">${esc(title || 'You read')}</div>` +
+                `<div class="lore-body">${esc(text)}</div>` +
+                `<div class="lore-dismiss">click to close &middot; Esc</div>`;
+            el.addEventListener('click', dismissLorePanel);
+            (document.getElementById('game-container') || document.body).appendChild(el);
+            lorePanelTimer = setTimeout(dismissLorePanel, 14000);
+        }
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && document.getElementById('lore-panel')) dismissLorePanel();
+        });
+
         document.getElementById('hud-quests-chip').addEventListener('click', () => toggleHudPanel('quests'));
         document.getElementById('hud-bag-chip').addEventListener('click', () => toggleHudPanel('inventory'));
+        document.getElementById('hud-level-chip').addEventListener('click', () => toggleHudPanel('character'));
+        document.getElementById('hud-campaign-chip').addEventListener('click', () => toggleHudPanel('campaign'));
 
         // --- Death & rebirth (the character dies; the world persists) ---
         let deathScreenShown = false;
@@ -2339,8 +2776,15 @@
             sendBtn.disabled = false;
             chatMessages.innerHTML = '';
 
+            // A different character has a different level and a different
+            // story — drop what we cached about the last one
+            lastPlayerState = null;
+            campaignView = null;
+            levelUpShown = 0;
+
             // 1. Get the session (we know this works now!)
             const session = await getSessionData(playerId);
+            refreshCampaignView();
 
             // 2. Load the assets using the ID from the session response
             if (session.location_id) {
@@ -2509,15 +2953,22 @@
 
             for (const exit of exits.slice(0, 8)) {
                 const btn = document.createElement('button');
-                btn.textContent = exit.name;
+                // A locked route still shows — trying it is a story beat
+                btn.textContent = exit.locked ? `\u{1F512} ${exit.name}` : exit.name;
                 btn.style.cssText =
                     'padding:.5rem .75rem;border-radius:8px;border:1px solid var(--border, #333);' +
-                    'background:var(--bg-tertiary, #1e1e2a);color:inherit;cursor:pointer;text-align:left;';
+                    'background:var(--bg-tertiary, #1e1e2a);color:inherit;cursor:pointer;text-align:left;' +
+                    (exit.locked ? 'color:#fbbf24;' : '');
                 btn.addEventListener('mouseenter', () => btn.style.borderColor = 'var(--accent, #6366f1)');
                 btn.addEventListener('mouseleave', () => btn.style.borderColor = 'var(--border, #333)');
                 btn.addEventListener('click', () => {
                     dismissExitChooser();
-                    sendMessage(`I head to ${exit.name}.`);
+                    // Unlocked: the same instant, LLM-free path the doors use.
+                    // Locked: the DM decides whether the way opens.
+                    if (exit.locked) sendMessage(`I head to ${exit.name}.`);
+                    else window.dispatchEvent(new CustomEvent('canvas-travel', {
+                        detail: { exitId: exit.id, name: exit.name, locked: false }
+                    }));
                 });
                 exitChooser.appendChild(btn);
             }
@@ -2533,6 +2984,71 @@
             document.body.appendChild(exitChooser);
             // Auto-dismiss if ignored
             setTimeout(() => dismissExitChooser(), 12000);
+        });
+
+        // --- Canvas-first play: walking through a door, touching an object ---
+        // Both are pure REST + code. No LLM, no DM turn, no waiting: the
+        // response carries the authoritative state and the next turn's
+        // context tells the DM what already happened.
+
+        window.addEventListener('canvas-travel', async (e) => {
+            const { exitId, name, locked } = e.detail || {};
+            if (!currentPlayerId || !exitId) return;
+            // A locked way out is a story problem, not a movement problem
+            if (locked) { sendMessage(`I try to get through to ${name}.`); return; }
+            try {
+                const res = await fetch('/api/travel', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        player_id: currentPlayerId, destination_id: exitId, source: 'door',
+                    }),
+                });
+                const data = await res.json();
+                if (data.busy) return;                      // DM mid-turn — try again later
+                if (data.blocked) {
+                    if (data.chat_prompt) sendMessage(data.chat_prompt);
+                    return;
+                }
+                if (!data.success) return;
+                if (data.state) applyPlayerState(data.state);
+                await handleLocationChange(data.destination_id, data.destination_name);
+                showToast(`${esc(data.destination_name)} &middot; ${data.minutes} min`, '', 2200);
+            } catch (err) {
+                console.error('canvas travel failed:', err);
+            }
+        });
+
+        window.addEventListener('canvas-interact', async (e) => {
+            const { objectId, label } = e.detail || {};
+            if (!currentPlayerId || !currentLocationId || !objectId) return;
+            try {
+                const res = await fetch('/api/interact', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        player_id: currentPlayerId,
+                        location_id: currentLocationId,
+                        object_id: objectId,
+                    }),
+                });
+                const data = await res.json();
+                if (data.locked) {
+                    if (data.chat_prompt) sendMessage(data.chat_prompt);
+                    return;
+                }
+                if (data.spent || !data.success) return;
+                if (data.state) applyPlayerState(data.state);   // floaters + HUD, free
+                if (data.consumed && game && game.markObjectConsumed) {
+                    game.markObjectConsumed(objectId);
+                }
+                const result = data.result || {};
+                if (result.panel_text) {
+                    showLorePanel(result.panel_title || label, result.panel_text);
+                }
+            } catch (err) {
+                console.error('canvas interact failed:', err);
+            }
         });
 
         // Editor mode indicator (Ctrl+E toggles NPC drag/scale editing)
@@ -2580,7 +3096,7 @@
             combatInputLock = !!(e.detail && e.detail.active);
             if (combatInputLock) {
                 userInput.disabled = true;
-                userInput.placeholder = '⚔ Fight! Space = dodge · J = strike';
+                userInput.placeholder = '⚔ Fight! Space dodge · J strike (hold: heavy) · K parry · Q potion';
             } else {
                 userInput.placeholder = 'What do you do?';
                 if (!isProcessing) {
@@ -2593,7 +3109,7 @@
         // A real-time fight ended: apply mechanics server-side (code
         // enforces), then hand the DM an aftermath that is already true
         window.addEventListener('combat-ended', async (e) => {
-            const { outcome, hitsTaken, defeated } = e.detail || {};
+            const { outcome, hitsTaken, heartsLost, heartsHealed, defeated } = e.detail || {};
             if (!currentPlayerId) return;
             try {
                 const res = await fetch('/api/combat/result', {
@@ -2603,10 +3119,25 @@
                         player_id: currentPlayerId,
                         outcome,
                         hits_taken: hitsTaken || 0,
+                        hearts_lost: heartsLost || 0,
+                        hearts_healed: heartsHealed || 0,
                         defeated_npc_ids: defeated || [],
                     }),
                 });
                 const data = await res.json();
+                // Combat XP NEVER rides SSE — this response is its only
+                // carrier, so the growth UI fires here and nowhere else for
+                // canvas fights (`showLevelUp` debounces on the level number).
+                const progression = data.progression || (data.changes && data.changes.progression);
+                if (progression) {
+                    if (progression.xp_gained) {
+                        pulseXpBar();
+                        if (game && game.spawnFloater) {
+                            game.spawnFloater(`+${progression.xp_gained} XP`, 0xa5b4fc);
+                        }
+                    }
+                    if (progression.leveled_up) showLevelUp(progression);
+                }
                 if (data.state) applyPlayerState(data.state);
                 if (data.dm_message) {
                     const label = outcome === 'victory' ? '⚔ The fight is over.'
@@ -2683,6 +3214,12 @@
                        .replace(/"/g, '&quot;');
         }
 
+        /** Null-safe escapeHtml — server payloads legitimately carry nulls
+         *  (an item with no slot, a beat with no clock label). */
+        function esc(value) {
+            return escapeHtml(String(value ?? ''));
+        }
+
         function formatText(text) {
             if (!text) return '';
             return escapeHtml(text)
@@ -2753,6 +3290,9 @@
             if (!input || !currentPlayerId || isProcessing) return;
 
             isProcessing = true;
+            // The canvas reads this: no doors, no barks, no instant travel
+            // underneath a turn the DM is still thinking about
+            window.forgeTurnBusy = true;
             if (!inputText) userInput.value = '';
             userInput.disabled = true;
             sendBtn.textContent = 'Stop';
@@ -2865,7 +3405,38 @@
                                     } else if (payload.type === 'quest_failed') {
                                         showToast(`Quest Failed: ${escapeHtml(payload.title || '')}`, 'quest-failed');
                                     } else if (payload.type === 'combat_start' && payload.enemies) {
-                                        if (game && game.startCombat) game.startCombat(payload.enemies);
+                                        // Server-authoritative roster: per-enemy tier/params
+                                        // and the boss object travel through untouched
+                                        if (game && game.startCombat) {
+                                            game.startCombat(payload.enemies, payload.boss || null);
+                                        }
+                                    } else if (payload.type === 'level_up') {
+                                        showLevelUp(payload);
+                                    } else if (payload.type === 'xp_gain') {
+                                        // Growth is felt, not counted — the bar moves and
+                                        // the canvas floats it; the chat stays prose
+                                        pulseXpBar();
+                                        if (game && game.spawnFloater && payload.amount) {
+                                            game.spawnFloater(`+${payload.amount} XP`, 0xa5b4fc);
+                                        }
+                                    } else if (payload.type === 'check_result') {
+                                        if (game && game.showCheckResult) game.showCheckResult(payload);
+                                    } else if (payload.type === 'campaign_beat') {
+                                        showToast(`&#9650; ${esc(payload.title)}`, 'campaign');
+                                        refreshCampaignView();
+                                    } else if (payload.type === 'campaign_act') {
+                                        showToast(`&#9650; Act ${payload.act} — ${esc(payload.act_title)}`,
+                                                  'campaign-act', 6000);
+                                        refreshCampaignView();
+                                    } else if (payload.type === 'campaign_resolved') {
+                                        showToast(`&#9650; ${esc(payload.campaign_title)} — ` +
+                                                  `${payload.status === 'won' ? 'Resolved' : 'Lost'}`,
+                                                  'campaign-act', 8000);
+                                        refreshCampaignView();
+                                    } else if (payload.type === 'cinematic' && payload.kind) {
+                                        // audio.js already saw this payload at the top
+                                        // of the loop — only the visual side is ours
+                                        if (game && game.playCinematic) game.playCinematic(payload);
                                     } else if (payload.type === 'npc_death' && payload.npc_id) {
                                         console.log(`NPC Death Event: ${payload.npc_name} (${payload.npc_id})`);
                                         if (game && game.playDeathAnimation) {
@@ -2901,7 +3472,11 @@
                 clearThinking(messageEl);
                 flushChatRender();
                 isProcessing = false;
+                window.forgeTurnBusy = false;
                 currentAbort = null;
+                // A vision never outlives the turn that opened it — it holds
+                // 2.5s past the last token, then the world comes back
+                if (game && game.endVision) game.endVision(2500);
                 userInput.disabled = combatInputLock;
                 sendBtn.textContent = 'Send';
                 sendBtn.disabled = false;
@@ -3908,6 +4483,34 @@
                     <input type="text" id="edit-npc-items" value="${(npc.inventory_notable || []).map(i => typeof i === 'object' ? i.name : i).join(', ')}" />
                 </div>
 
+                <h4 style="margin-top: 1rem; color: var(--text-secondary);">Combat</h4>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Danger Tier</label>
+                        <select id="edit-npc-danger">
+                            ${['', 'harmless', 'weak', 'standard', 'dangerous', 'deadly', 'boss'].map(t =>
+                                `<option value="${t}" ${(npc.danger_tier || '') === t ? 'selected' : ''}>${t || '(auto — inferred)'}</option>`
+                            ).join('')}
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Combat Archetype</label>
+                        <select id="edit-npc-archetype">
+                            ${['', 'brute', 'skirmisher', 'stalker', 'ranged'].map(a =>
+                                `<option value="${a}" ${(npc.combat_archetype || '') === a ? 'selected' : ''}>${a || '(auto — inferred)'}</option>`
+                            ).join('')}
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Boss Title (epithet)</label>
+                        <input type="text" id="edit-npc-boss-title" value="${npc.boss_title || ''}" placeholder="e.g., Warden of the Ashen Gate" />
+                    </div>
+                </div>
+                <div class="muted" style="font-size:0.75rem;color:var(--text-secondary);margin:-0.5rem 0 0.5rem;">
+                    This form is the only place <b>boss</b> can be set — the DM's tools refuse it.
+                    Boss Title is a display epithet only; it does nothing without the boss tier.
+                </div>
+
                 <h4 style="margin-top: 1rem; color: var(--text-secondary);">Position & Scale</h4>
                 <div class="form-row">
                     <div class="form-group">
@@ -3954,17 +4557,22 @@
                 position_x: parseFloat(document.getElementById('edit-npc-x').value),
                 position_y: parseFloat(document.getElementById('edit-npc-y').value),
                 scale: parseFloat(document.getElementById('edit-npc-scale').value),
+                // Empty string clears the column back to "infer it"
+                danger_tier: document.getElementById('edit-npc-danger').value,
+                combat_archetype: document.getElementById('edit-npc-archetype').value,
+                boss_title: document.getElementById('edit-npc-boss-title').value,
             };
             const res = await fetch(`/api/world/npcs/${id}`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(data)
             });
-            if ((await res.json()).success) {
+            const saved = await res.json();
+            if (saved.success) {
                 closeModal();
                 loadNPCs();
             } else {
-                alert('Failed to save NPC');
+                alert('Failed to save NPC' + (saved.error ? `: ${saved.error}` : ''));
             }
         }
 
