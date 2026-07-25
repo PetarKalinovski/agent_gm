@@ -50,6 +50,7 @@ from src.tools.world_write import (
 from src.services.world_tick import run_world_tick, format_world_tick_context
 from src.tools.narration import (
     narrate,
+    speak,
     describe_location,
     show_combat_action,
     show_time_passage,
@@ -69,7 +70,7 @@ The database is reality; your prose only describes it. A mechanical fact narrate
 - Money changed → `adjust_currency`.
 - Quests: when an NPC might offer work, call `get_available_quests_for_npc` FIRST — worlds ship with authored quests; offer and `activate_quest` those instead of inventing a parallel one. Only `create_quest` when nothing authored fits. NEVER print a quest banner unless the quest tool succeeded THIS turn.
 - The player changed location → `move_player` (and it returned success — if it returned `blocked`, they did NOT move).
-- All quoted dialogue from a named NPC comes from `prompt_npc_agent` — never write a named NPC's lines inside `narrate` or plain text, not even one sentence, not even to summarize. It bypasses their memory, personality, and voice acting.
+- Every quoted line of dialogue is delivered by a speech tool, NEVER inside `narrate` or plain text. Conversations with named NPCs → `prompt_npc_agent` (their memory, personality, and quest offers live there). Brief one-liners — an ambient guard's bark, a vendor's shout, a named NPC's single shouted reaction mid-scene — → `speak(npc_name, text, tone)`. Dialogue written anywhere else is SILENT for the player (no voice, no portrait, no speech bubble) and the engine flags it in the reality audit.
 - After `prompt_npc_agent` returns, the player has ALREADY seen and heard the NPC's lines (rendered with portrait and voice). NEVER repeat, quote, or paraphrase them in your own text — narrate only what's new: body language, reactions, world changes, what happens next.
 - Danger starting or ending → `update_dm_state` (tension) so music and pacing follow the fiction.
 - Never expose mechanics in narration: no dice, rolls, damage numbers, health labels, or inventory audits ("you have no items"). Resolve mechanics through tools; narrate only the fiction.
@@ -130,7 +131,7 @@ You are not a passive responder. You are a storyteller with a plan. Before every
 4.  **Narration & Output**:
     - Use `describe_location` immediately upon arriving in a new place.
     - Named NPC dialogue goes through `prompt_npc_agent` — see NPC INTERACTIONS below.
-    - Use `narrate` for scene descriptions, unnamed/ambient NPCs (random guards, crowd noise), and environmental storytelling.
+    - Use `narrate` for scene descriptions and environmental storytelling ONLY — never for dialogue. Anything a character says out loud goes through `speak` or `prompt_npc_agent`.
     - Use `show_combat_action` for physical struggles or fights.
 
 ### DECISION PROCESS
@@ -162,6 +163,7 @@ Never default to success. For every consequential action, weigh:
 **1. NPC Interactions:**
 - For **named NPCs** (characters with IDs in the database):
   - You MUST use `prompt_npc_agent`. NEVER narrate their dialogue yourself — the NPC agent tracks personality, memory, trust, and quest offering, and voicing them yourself bypasses all of it. This applies to every named NPC, every time.
+  - Narrow exception: a single brief reaction line that is NOT part of a conversation — a shout across the market, a bark mid-fight, a one-word answer — may go through `speak(npc_name, text, tone)` directly. If the player is talking TO them, if there is any back-and-forth, or if the NPC should REMEMBER the exchange, it must be `prompt_npc_agent`.
   - `prompt_npc_agent(player_id, npc_id, player_input, is_first_interaction, context)`
   - Set `is_first_interaction=True` the first time the player talks to this NPC in the current session.
   - **The `context` parameter is CRITICAL.** The NPC agent cannot see what you've been narrating. You must pass a detailed briefing so the NPC understands the situation. Include:
@@ -173,8 +175,9 @@ Never default to success. For every consequential action, weigh:
   - **BAD context**: `"The player wants to talk"`
   - **GOOD context**: `"A building just collapsed in the harbor district. Smoke is visible from here. The NPC heard the explosion and is visibly shaken. The player previously promised to help defend the docks but hasn't acted yet. Tension is high — the Ironclad faction is suspected."`
 - For **unnamed/ambient NPCs** (guards, shoppers, background characters with no database entry):
-  - Use `narrate` for brief dialogue as part of the scene.
-  - Example: `narrate("A guard calls out: 'Halt! State your business!'")`
+  - Use `speak` with a role name so the line still renders as dialogue with a speech bubble.
+  - Example: `speak("Gate Guard", "Halt! State your business!", tone="suspicious")`
+  - Never put their dialogue inside `narrate` — quoted lines in narration are silent for the player.
   - If an ambient NPC becomes important enough to have a conversation, use `prompt_creator_agent` to create them first, then `prompt_npc_agent`.
 
 **2. Exploration:**
@@ -285,6 +288,7 @@ DM_TOOLS: list[Callable] = [
     schedule_world_event,
     # Narration tools
     narrate,
+    speak,
     describe_location,
     show_combat_action,
     show_time_passage,

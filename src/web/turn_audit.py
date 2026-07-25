@@ -57,6 +57,105 @@ _CONSEQUENCE_TOOLS = {
     "create_event", "update_faction",
 }
 
+# Fabricated inline dialogue — the DM writing quoted NPC lines in narration
+# instead of delivering them through `speak`/`prompt_npc_agent`. Those lines
+# are silent for the player: no voice, no portrait, no speech bubble. The
+# deduper strips re-quotes of REAL speech before the audit runs, so any
+# attributed quote still present in the turn text never went through a
+# speech tool.
+_SPEECH_VERBS = (
+    "says|said|replies|replied|asks|asked|answers|answered|adds|added"
+    "|calls out|calls|called|growls|growled|mutters|muttered|murmurs|murmured"
+    "|whispers|whispered|shouts|shouted|yells|yelled|snaps|snapped|cries|cried"
+    "|hisses|hissed|barks|barked|rasps|rasped|sneers|sneered|grunts|grunted"
+    "|scoffs|scoffed|chuckles|chuckled|laughs|laughed|warns|warned"
+    "|insists|insisted|demands|demanded|offers|offered|drawls|drawled"
+    "|purrs|purred|croaks|croaked|wheezes|wheezed|spits|spat|snarls|snarled"
+    "|bellows|bellowed|roars|roared|declares|declared|announces|announced"
+    "|admits|admitted|promises|promised|urges|urged|pleads|pleaded|begs|begged"
+    "|continues|continued|interrupts|interrupted"
+)
+
+# Speakers that must never trigger the check: the player ("you"), inanimate
+# text-bearers, and generic sentence-starters that can precede a speech verb.
+_SPEAKER_STOPWORDS = {
+    "you", "i", "it", "we", "that", "this", "what", "who", "one", "some",
+    "someone", "somebody", "nobody", "everyone", "people", "others",
+    "word", "rumor", "rumors", "legend", "legends", "lore", "history",
+    "tradition", "locals", "then", "but", "and", "now", "even", "still",
+    "suddenly", "no", "yes", "as", "if", "when", "while", "so",
+    "my", "his", "her", "their", "your",
+}
+_INANIMATE_SPEAKERS = {
+    "sign", "note", "letter", "inscription", "plaque", "notice", "poster",
+    "label", "page", "book", "scroll", "carving", "graffiti", "banner",
+    "placard", "ledger", "wind", "echo", "stone", "walls", "air",
+}
+
+_SPEAKER_PATTERN = r"[A-Z][\w'’-]*(?:\s+[A-Z][\w'’-]*)?|[Tt]he\s+\w+|[Aa]n?\s+\w+|he|she|they"
+
+# "Coldiron growls, \"...\"" / "A guard calls out: '...'"
+_PRE_ATTRIBUTED_QUOTE = re.compile(
+    rf"\b(?P<speaker>{_SPEAKER_PATTERN})"
+    rf"(?:,[^,\n]{{0,30}},)?\s+(?:{_SPEECH_VERBS})\b[^\"“'‘.!?\n]{{0,25}}"
+    rf"(?:[\"“](?P<dq>[^\"”“\n]{{8,400}})[\"”]|['‘](?P<sq>[^'’\n]{{8,400}})['’])"
+)
+
+# "\"...,\" Piper says" / "\"...\" says Piper"
+_POST_ATTRIBUTED_QUOTE = re.compile(
+    rf"[\"“](?P<quote>[^\"”“\n]{{8,400}})[\"”],?\s+"
+    rf"(?:(?:{_SPEECH_VERBS})\s+(?P<speaker_a>[A-Z][\w'’-]*(?:\s+[A-Z][\w'’-]*)?)"
+    rf"|(?P<speaker_b>[A-Z][\w'’-]*(?:\s+[A-Z][\w'’-]*)?|he|she|they)\s+(?:{_SPEECH_VERBS}))\b"
+)
+
+# The speak()-output format mimicked in plain text: `Coldiron: "..."`
+_LABEL_QUOTE = re.compile(
+    r"(?m)^(?P<speaker>[A-Z][\w'’-]*(?:\s+[A-Z][\w'’-]*){0,2}):\s*"
+    r"[\"“](?P<quote>[^\"”“\n]{8,400})[\"”]"
+)
+
+
+def _speaker_is_person(speaker: str) -> bool:
+    tokens = speaker.strip().split()
+    if not tokens:
+        return False
+    first = tokens[0].lower()
+    if first in ("the", "a", "an"):
+        return tokens[-1].lower() not in _INANIMATE_SPEAKERS
+    if first in ("he", "she", "they"):
+        return True
+    if first in _SPEAKER_STOPWORDS:
+        return False
+    if tokens[-1].lower() in _INANIMATE_SPEAKERS:
+        return False
+    return speaker[0].isupper()
+
+
+def _find_fabricated_dialogue(text: str) -> list[str]:
+    """Speakers of attributed quotes that never went through a speech tool."""
+    speakers: list[str] = []
+
+    def consider(speaker: str | None, quote: str | None) -> None:
+        if not speaker or not quote or len(quote.split()) < 3:
+            return
+        if _speaker_is_person(speaker):
+            speakers.append(speaker.strip())
+
+    for m in _PRE_ATTRIBUTED_QUOTE.finditer(text):
+        consider(m.group("speaker"), m.group("dq") or m.group("sq"))
+    for m in _POST_ATTRIBUTED_QUOTE.finditer(text):
+        consider(m.group("speaker_a") or m.group("speaker_b"), m.group("quote"))
+    for m in _LABEL_QUOTE.finditer(text):
+        consider(m.group("speaker"), m.group("quote"))
+
+    seen: set[str] = set()
+    unique = []
+    for s in speakers:
+        if s.lower() not in seen:
+            seen.add(s.lower())
+            unique.append(s)
+    return unique
+
 
 def audit_turn(
     turn_text: str,
@@ -117,6 +216,23 @@ def audit_turn(
             "detail": (
                 "Narration claims relationship/reputation/event consequences but no "
                 "relationship, reputation, or event tool succeeded this turn."
+            ),
+        })
+
+    # Fabricated dialogue: the deduper already removed re-quotes of real
+    # speech, so attributed quotes remaining here were written inline — the
+    # player never heard them (no voice, no portrait, no bubble)
+    fabricated_speakers = _find_fabricated_dialogue(turn_text)
+    if fabricated_speakers:
+        names = ", ".join(fabricated_speakers)
+        warnings.append({
+            "check": "dialogue_without_speak",
+            "detail": (
+                f"Narration contains quoted dialogue attributed to {names} that was "
+                "written inline instead of delivered through a speech tool — the player "
+                "gets NO voice, portrait, or speech bubble for it. Deliver every spoken "
+                "line via prompt_npc_agent (conversations) or speak (one-liners and "
+                "ambient NPCs); never write dialogue inside narrate or plain text."
             ),
         })
 

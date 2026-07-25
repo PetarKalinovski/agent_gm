@@ -124,6 +124,53 @@ def test_audit_fake_consequence_ledger():
     assert not any(w["check"] == "consequences_without_tools" for w in warnings)
 
 
+def test_audit_fabricated_named_dialogue():
+    # Watchlist item: DM writes NEW quoted lines for named NPCs inline —
+    # never delivered through speak/prompt_npc_agent, so the player hears nothing
+    text = 'Captain Coldiron growls, "You picked the wrong gate, stranger." His hand finds the axe.'
+    warnings = audit_turn(text, [], STATE_A, STATE_A)
+    assert any(w["check"] == "dialogue_without_speak" for w in warnings)
+
+
+def test_audit_fabricated_dialogue_postfix_attribution():
+    text = '"The Hollow takes what it wants," Piper says, not looking up.'
+    warnings = audit_turn(text, [], STATE_A, STATE_A)
+    assert any(w["check"] == "dialogue_without_speak" for w in warnings)
+
+
+def test_audit_ambient_dialogue_inline_flagged():
+    # The old prompt sanctioned exactly this via narrate — now it must go
+    # through speak() so it gets voice treatment
+    text = "A guard calls out: 'Halt! State your business!'"
+    warnings = audit_turn(text, [], STATE_A, STATE_A)
+    assert any(w["check"] == "dialogue_without_speak" for w in warnings)
+
+
+def test_audit_speak_format_mimicry_flagged():
+    text = 'Coldiron: "Get out of my square before I lose patience."'
+    warnings = audit_turn(text, [], STATE_A, STATE_A)
+    assert any(w["check"] == "dialogue_without_speak" for w in warnings)
+
+
+def test_audit_signage_quote_clean():
+    text = 'The sign says "No entry after dark" in faded paint.'
+    warnings = audit_turn(text, [], STATE_A, STATE_A)
+    assert not any(w["check"] == "dialogue_without_speak" for w in warnings)
+
+
+def test_audit_player_own_words_clean():
+    text = '"Let me pass," you say, keeping your voice level.'
+    warnings = audit_turn(text, [], STATE_A, STATE_A)
+    assert not any(w["check"] == "dialogue_without_speak" for w in warnings)
+
+
+def test_audit_short_exclamation_clean():
+    # One- or two-word quotes are texture, not fabricated dialogue
+    text = 'He mutters "damn" under his breath and turns away.'
+    warnings = audit_turn(text, [], STATE_A, STATE_A)
+    assert not any(w["check"] == "dialogue_without_speak" for w in warnings)
+
+
 def test_audit_feedback_formatting():
     from src.web.turn_audit import format_audit_feedback
     assert format_audit_feedback([]) == ""
