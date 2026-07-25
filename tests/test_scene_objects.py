@@ -252,3 +252,62 @@ def test_unknown_object_and_wrong_room_rejected(db):
     assert resolve_interaction(player_id, "elsewhere", "notice") == {
         "success": False, "error": "not here",
     }
+
+
+# --- The authoring tools: whatever the creator wrote, normalized ------------
+
+
+def test_add_location_normalizes_authored_objects(db):
+    from src.tools.world_write.locations import add_location
+
+    created = add_location(
+        "Fisher's Rest", "Smoke and salt.", LocationType.BUILDING,
+        objects=[
+            {"kind": "read", "label": "Price list", "x": 200, "y": 40,
+             "payload": {"text": "Salt cod, four coins."}},
+            {"kind": "steal", "label": "The till"},              # not a kind
+            {"kind": "take", "label": "Coil of rope", "x": 30, "y": 70,
+             "payload": {"item": {"name": "Coil of Rope", "type": "misc",
+                                  "value": 4, "effects": {"heal": 99}}}},
+        ],
+    )
+    assert created["objects"] == 2, "an invented kind is dropped, not stored"
+
+    with get_session() as session:
+        stored = session.get(Location, created["id"]).objects
+    assert [o["kind"] for o in stored] == ["read", "take"]
+    assert stored[0]["x"] == 90.0, "coordinates are clamped into the placeable band"
+    assert "effects" not in stored[1]["payload"]["item"], "the engine owns every number"
+
+
+def test_add_location_without_objects_stores_null(db):
+    from src.tools.world_write.locations import add_location
+
+    created = add_location("Bare Room", "Nothing here.", LocationType.BUILDING)
+    with get_session() as session:
+        assert session.get(Location, created["id"]).objects is None
+
+
+def test_update_location_retrofits_objects(db):
+    from src.tools.world_write.locations import add_location, update_location
+
+    created = add_location("Bare Room", "Nothing here.", LocationType.BUILDING)
+    result = update_location(created["id"], objects=[
+        {"kind": "search", "label": "Woodpile", "payload": {"text": "Mostly kindling."}},
+    ])
+    assert result["objects"] == 1
+
+    with get_session() as session:
+        stored = session.get(Location, created["id"]).objects
+    assert stored[0]["kind"] == "search" and stored[0]["consumed"] is False
+
+
+def test_update_location_leaves_objects_alone_when_omitted(db):
+    from src.tools.world_write.locations import add_location, update_location
+
+    created = add_location("Bare Room", "Nothing here.", LocationType.BUILDING, objects=[
+        {"kind": "read", "label": "Notice", "payload": {"text": "Words."}},
+    ])
+    update_location(created["id"], description="Colder now.")
+    with get_session() as session:
+        assert len(session.get(Location, created["id"]).objects) == 1

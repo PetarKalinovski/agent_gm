@@ -62,6 +62,9 @@ from src.tools.world_read.quests import (
     get_quest,
 )
 
+# Campaign tools (read-only by design — there is no campaign write tool)
+from src.tools.world_read.campaign import get_campaign
+
 __all__ = [
     # Locations
     "get_current_location",
@@ -103,4 +106,6 @@ __all__ = [
     "get_all_quests",
     "get_available_quests_for_npc",
     "get_quest",
+    # Campaign
+    "get_campaign",
 ]

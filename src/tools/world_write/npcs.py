@@ -11,6 +11,15 @@ from src.models import (
     WorldClock,
     get_session,
 )
+from src.services.combat import ARCHETYPES, DANGER_TIERS
+
+
+def _clean_label(value: str | None, menu: tuple[str, ...]) -> str | None:
+    """A label from a fixed menu, or None. Never a coerced near-miss."""
+    if value is None:
+        return None
+    candidate = str(value).strip().lower()
+    return candidate if candidate in menu else None
 
 
 @tool
@@ -29,6 +38,8 @@ def add_npc(
     goals: list[str] | None,
     secrets: list[str] | None,
     current_mood: str | None,
+    combat_archetype: str | None = None,
+    danger_tier: str | None = None,
 ) -> dict[str, Any]:
     """Add a new NPC to the world.
 
@@ -47,10 +58,39 @@ def add_npc(
         goals: List of the NPC's goals.
         secrets: List of secrets the NPC holds.
         current_mood: Current mood of the NPC.
+        combat_archetype: How they FIGHT, if it ever comes to violence. One of:
+            "brute" (hulking, armoured, slow heavy swings),
+            "skirmisher" (fast, light, relentless),
+            "stalker" (circles and waits, then commits — predators, duellists),
+            "ranged" (keeps distance, attacks the ground you're standing on —
+            archers, casters, spitters). Leave None to auto-infer.
+        danger_tier: How DANGEROUS they are, ABSOLUTELY — never relative to the
+            player. This is a permanent fact about the character. One of:
+            "harmless"  — cannot hurt anyone: beggars, children, the bedridden,
+                          drunks, terrified civilians. They flee, they do no damage.
+            "weak"      — cutpurses, starving strays, green conscripts.
+            "standard"  — a competent armed adult: town guard, bandit, war hound.
+            "dangerous" — veterans and monsters: a captain, an ogre, an assassin.
+            "deadly"    — the best in the world or worse than human: a champion,
+                          a troll, an archmage. Most characters die to these.
+            "boss"      — a legend, a set-piece, the thing the whole arc points at.
+                          A dragon. A god. Use this at most a handful of times per
+                          world; it triggers an intro cinematic and a named health
+                          bar. Leave None to auto-infer (never infers "boss").
 
     Returns:
         Dictionary with the created NPC's details.
     """
+    # An unknown label is dropped, not coerced: a NULL tier infers from the
+    # description, which is a better answer than a word nobody wrote.
+    archetype_label = _clean_label(combat_archetype, ARCHETYPES)
+    tier_label = _clean_label(danger_tier, DANGER_TIERS)
+    warnings = []
+    if combat_archetype and not archetype_label:
+        warnings.append(f"combat_archetype {combat_archetype!r} ignored — use one of {list(ARCHETYPES)}")
+    if danger_tier and not tier_label:
+        warnings.append(f"danger_tier {danger_tier!r} ignored — use one of {list(DANGER_TIERS)}")
+
     with get_session() as session:
         npc = NPC(
             name=name,
@@ -67,16 +107,23 @@ def add_npc(
             goals=goals,
             secrets=secrets,
             current_mood=current_mood,
+            combat_archetype=archetype_label,
+            danger_tier=tier_label,
         )
         session.add(npc)
         session.commit()
 
-        return {
+        result = {
             "id": npc.id,
             "name": npc.name,
             "profession": npc.profession,
             "current_location_id": npc.current_location_id,
+            "danger_tier": npc.danger_tier,
+            "combat_archetype": npc.combat_archetype,
         }
+        if warnings:
+            result["warnings"] = warnings
+        return result
 
 
 @tool
@@ -93,6 +140,8 @@ def update_npc(
     remove_secret: str | None = None,
     add_skill: str | None = None,
     add_notable_item: str | None = None,
+    danger_tier: str | None = None,
+    combat_archetype: str | None = None,
 
 ) -> dict[str, Any]:
     """Update an NPC's attributes, goals, or secrets.
@@ -113,6 +162,14 @@ def update_npc(
         remove_secret: Remove a secret from the NPC's secrets list (exact match).
         add_skill: Add a new skill to the NPC's skills list.
         add_notable_item: Add a notable item to the NPC's inventory.
+        danger_tier: How dangerous this character is in a real fight, stated
+            ABSOLUTELY — never relative to the player. One of "harmless",
+            "weak", "standard", "dangerous", "deadly". Set it when you learn
+            something permanent about them (the "farmhand" turns out to be a
+            retired duellist). This is a fact about the character, not a
+            difficulty dial for the next fight.
+        combat_archetype: How they fight: "brute", "skirmisher", "stalker" or
+            "ranged".
     Returns:
         Dictionary with updated NPC details.
     """
@@ -120,6 +177,25 @@ def update_npc(
         npc = session.get(NPC, npc_id)
         if not npc:
             return {"error": "NPC not found"}
+
+        # Fight labels are validated BEFORE anything is written, so a bad word
+        # never leaves a half-applied update behind.
+        if danger_tier is not None:
+            if str(danger_tier).strip().lower() == "boss":
+                return {"error": (
+                    "danger_tier 'boss' cannot be set here — a boss is an authored "
+                    "set-piece. Create the character through prompt_creator_agent with "
+                    "danger_tier='boss', or set it in the world editor."
+                )}
+            if _clean_label(danger_tier, DANGER_TIERS) is None:
+                return {"error": f"danger_tier must be one of {list(DANGER_TIERS)}"}
+        if combat_archetype is not None and _clean_label(combat_archetype, ARCHETYPES) is None:
+            return {"error": f"combat_archetype must be one of {list(ARCHETYPES)}"}
+
+        if danger_tier is not None:
+            npc.danger_tier = _clean_label(danger_tier, DANGER_TIERS)
+        if combat_archetype is not None:
+            npc.combat_archetype = _clean_label(combat_archetype, ARCHETYPES)
 
         # Update simple attributes
         if description_physical is not None:
@@ -183,6 +259,8 @@ def update_npc(
                 "voice": voice_pattern is not None,
                 "profession": profession is not None,
                 "status": status is not None,
+                "danger_tier": npc.danger_tier,
+                "combat_archetype": npc.combat_archetype,
                 "goals": len(npc.goals),
                 "secrets": len(npc.secrets),
                 "skills": len(npc.skills),

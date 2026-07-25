@@ -6,7 +6,13 @@ from src.models.base import get_session
 from src.models.quests import Quest, QuestStatus
 from src.models.player import Player
 from src.models.item import Item
-from src.services.progression import grant_xp, strip_authored_xp, xp_for_quest
+from src.services.progression import (
+    auto_equip,
+    catalog_price,
+    grant_xp,
+    strip_authored_xp,
+    xp_for_quest,
+)
 from src.tools.world_write.player import _normalize_inventory
 
 
@@ -51,6 +57,7 @@ def _apply_rewards(session, player, rewards: dict) -> list[str]:
     items = rewards.get("items") or []
     if isinstance(items, list) and items:
         inventory = _normalize_inventory(player.inventory)
+        gear_ids = []
         for entry in items:
             try:
                 if isinstance(entry, str):
@@ -64,6 +71,12 @@ def _apply_rewards(session, player, rewards: dict) -> list[str]:
                     continue
             except Exception:
                 continue
+            # Reward gear is real gear: the catalog owns its price, and it
+            # goes on the character if the slot is free (same as pickups)
+            price = catalog_price(item.to_dict())
+            if price is not None:
+                item.value = price
+                gear_ids.append(item.id)
             for existing in inventory:
                 if existing.get("id") == item.id:
                     existing["quantity"] = existing.get("quantity", 1) + item.quantity
@@ -72,6 +85,13 @@ def _apply_rewards(session, player, rewards: dict) -> list[str]:
                 inventory.append(item.to_dict())
             applied.append(f"received {item.name}")
         player.inventory = inventory
+        for item_id in gear_ids:
+            try:
+                equipped = auto_equip(session, player, item_id)
+                if equipped:
+                    applied.append(f"equipped {item_id.replace('_', ' ')}")
+            except Exception:
+                pass
 
     # Reputation: {faction_id: delta}
     reputation = rewards.get("reputation") or {}

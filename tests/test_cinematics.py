@@ -442,3 +442,39 @@ def test_recent_returns_newest_first(world, wall):
     assert rows[1]["title"] == "THE ROAD NORTH"
     assert rows[1]["created_at"]
     assert len(recent(limit=1)) == 1
+
+
+# --- The `play_cinematic` tool: the DM's one entry point -------------------
+
+
+def test_tool_accepted_carries_the_event_key(world):
+    from src.tools.world_write.cinematics import play_cinematic
+
+    result = play_cinematic(world, "title_card", title="THE ROAD NORTH",
+                            subtitle="Three days from Emberfall")
+    assert result["success"] is True
+    assert result["event"] == "cinematic"
+    assert result["kind"] == "title_card"
+    assert result["title"] == "THE ROAD NORTH"
+    assert result["duration_ms"] == DURATIONS_MS["title_card"]
+    assert set(PAYLOAD_FIELDS) <= set(result)
+
+
+def test_tool_rejection_has_no_event_key(world, wall):
+    from src.tools.world_write.cinematics import play_cinematic
+
+    play_cinematic(world, "title_card", title="THE ROAD NORTH")
+    result = play_cinematic(world, "title_card", title="THE ROAD SOUTH")
+
+    assert result["success"] is False and result["rejected"] is True
+    assert "event" not in result, "a refused cinematic must not reach the client"
+    assert result["reason"] in REJECT_REASONS
+    assert "Do NOT mention it" in result["instruction"]
+
+
+def test_tool_cannot_call_the_engine_only_kill_cam(world):
+    from src.tools.world_write.cinematics import play_cinematic
+
+    result = play_cinematic(world, "kill_cam", title="Coldiron")
+    assert result["rejected"] is True and result["reason"] == "not_dm_callable"
+    assert "event" not in result

@@ -7,8 +7,10 @@ Flow:
    combatants (Hades-style: dodge/attack/telegraphs) using their sprites.
 2. The player fights. The room's exits lock while combat is live.
 3. The frontend POSTs the outcome to /api/combat/result. THIS module
-   applies the mechanics in code — health mapping, NPC deaths — before the
-   DM ever sees it, so the DM can only narrate what is already true.
+   applies the mechanics in code — health mapping, NPC deaths, and the XP
+   those deaths earned (re-read from each victim's danger tier, never from
+   the client) — before the DM ever sees it, so the DM can only narrate
+   what is already true.
 4. The frontend auto-sends a [COMBAT OUTCOME] turn so the DM narrates the
    aftermath (and the world reacts: reputation, events, consequences).
 """
@@ -19,12 +21,14 @@ from typing import Any
 from loguru import logger
 
 from src.models import NPC, Event, NPCTier, Player, WorldClock, get_session
+from src.services.cinematics import boss_intro_payload
+from src.services.progression import grant_xp
 from src.services.tension import apply_tension_floor
 
 ARCHETYPES = ("brute", "skirmisher", "stalker", "ranged")
 
-# Hits-taken → minimum health severity. Combat can only worsen health —
-# surviving a fight never heals you.
+# Severity units (hearts lost, or hits when the client is old) → minimum health
+# severity. Combat can only worsen health — surviving a fight never heals you.
 _HITS_TO_STATUS = {0: None, 1: "winded", 2: "hurt", 3: "badly_hurt"}
 _HEALTH_ORDER = ["healthy", "winded", "hurt", "badly_hurt", "critical", "dead"]
 
@@ -261,7 +265,13 @@ def _resolve_npc(session, ident: str, location_id: str | None):
 
 
 def build_combat_start(npc_ids: list[str], player_id: str) -> dict[str, Any]:
-    """Validate combatants and build the combat_start event payload."""
+    """Validate combatants and build the combat_start event payload.
+
+    Every number the client fights with is resolved HERE, from the freshly
+    loaded NPC rows: `start_combat` has no tier parameter and no difficulty
+    dial, so the DM can neither inflate nor deflate a fight.
+    """
+    boss_npc = None
     with get_session() as session:
         player = session.get(Player, player_id)
         if not player:
@@ -281,40 +291,105 @@ def build_combat_start(npc_ids: list[str], player_id: str) -> dict[str, Any]:
                         "first (move_npc) or pick someone who is present."
                     )
                 }
+            archetype = infer_archetype(npc)
+            tier = resolve_danger_tier(npc)
             enemies.append({
                 "npc_id": npc.id,
                 "name": npc.name,
-                "archetype": infer_archetype(npc),
+                "archetype": archetype,
+                "tier": tier,
+                "params": combat_params(tier, archetype),
+                "boss": tier == "boss",
+                "boss_title": npc.boss_title,
             })
+            # Only the first boss in a roster drives the bar and the entrance
+            if tier == "boss" and boss_npc is None:
+                boss_npc = npc
+
+        boss = None
+        if boss_npc is not None:
+            boss = {
+                "npc_id": boss_npc.id,
+                "name": boss_npc.name,
+                # The epithet is display only; the profession is the fallback
+                "title": boss_npc.boss_title or boss_npc.profession or "",
+            }
 
     if not enemies:
         return {"error": "No combatants given."}
 
-    # Danger is now mechanically real — the music layer follows immediately
-    apply_tension_floor("high", "combat started")
+    # Danger is now mechanically real — the music layer follows immediately.
+    # A boss is the top of the ladder, so it skips straight to climax.
+    apply_tension_floor(
+        "climax" if boss else "high",
+        "boss fight started" if boss else "combat started",
+    )
 
-    return {
+    roster = ", ".join(f"{e['name']} ({e['tier']} {e['archetype']})" for e in enemies)
+    instruction = (
+        "Real-time combat has begun ON THE CANVAS — the player is fighting it "
+        f"with their own reflexes right now. Combatants: {roster}. Write ONE "
+        "sentence that FREEZE-FRAMES the instant violence erupts (weapons "
+        "coming out, the first step forward), pitched to the weight of those "
+        "labels — a 'harmless' foe is pitiful, a 'deadly' one is a death "
+        "sentence someone else usually receives — and then END your turn "
+        "immediately. Absolutely no exchanges of blows, no parries, no hits, "
+        "no wounds, no outcome of any kind — anything you write about the "
+        "fight will contradict what the player actually does. You will receive "
+        "a [COMBAT OUTCOME] message when it's over; mechanics (health, deaths) "
+        "will already be applied — then you narrate the aftermath."
+    )
+    if boss:
+        instruction += (
+            f" This is a BOSS encounter. The engine is playing an entrance for "
+            f"{boss['name']} — your one sentence is the moment before it lands, "
+            "not the fight. Stop after it."
+        )
+
+    result: dict[str, Any] = {
         "success": True,
         "event": "combat_start",
         "enemies": enemies,
-        "instruction": (
-            "Real-time combat has begun ON THE CANVAS — the player is fighting "
-            "it with their own reflexes right now. Write ONE sentence that "
-            "FREEZE-FRAMES the instant violence erupts (weapons coming out, the "
-            "first step forward) and then END your turn immediately. Absolutely "
-            "no exchanges of blows, no parries, no hits, no wounds, no outcome "
-            "of any kind — anything you write about the fight will contradict "
-            "what the player actually does. You will receive a [COMBAT OUTCOME] "
-            "message when it's over; mechanics (health, deaths) will already be "
-            "applied — then you narrate the aftermath."
-        ),
+        "boss": boss,               # None when no boss-tier combatant
+        "roster": roster,
+        "instruction": instruction,
     }
+
+    # The entrance rides on THIS tool result: the tracker emits it as a
+    # `cinematic` SSE event BEFORE combat_start and the client defers the
+    # spawn until it ends. One entrance per boss ever — a rematch (or a
+    # cinematic on cooldown) simply starts the fight.
+    if boss_npc is not None:
+        cinematic = boss_intro_payload(boss_npc, player_id)
+        if cinematic:
+            result["cinematic"] = cinematic
+
+    return result
+
+
+def _severity_units(hits_taken: int, hearts_lost: int, hearts_healed: int) -> int:
+    """How badly the fight actually hurt, in hearts.
+
+    A 3-heart boss slam is not "one hit", and a potion drunk mid-fight is a
+    wound that did not stick. `hearts_lost` is authoritative when the client
+    reports it; an old client sending only `hits_taken` still works.
+    """
+    def _int(value: Any) -> int:
+        try:
+            return int(value or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    taken = max(_int(hits_taken), _int(hearts_lost))
+    return max(0, taken - max(0, _int(hearts_healed)))
 
 
 def apply_combat_result(
     player_id: str,
     outcome: str,
     hits_taken: int = 0,
+    hearts_lost: int = 0,
+    hearts_healed: int = 0,
     defeated_npc_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     """Apply a finished fight to the database. Returns what changed.
@@ -323,12 +398,23 @@ def apply_combat_result(
     Health only ever worsens here; "defeat" means downed → critical (the DM
     decides on death afterward, with full context — permadeath is a
     narrative call, not a physics one).
+
+    XP is re-read from the DB rows of everyone who died in THIS call — the
+    client reports who fell, never what they were worth — and granted inside
+    the same transaction as the deaths, so a rolled-back fight pays nothing.
     """
     if outcome not in ("victory", "defeat", "fled"):
         return {"error": f"Invalid outcome {outcome!r}"}
 
     defeated_npc_ids = defeated_npc_ids or []
-    changes: dict[str, Any] = {"outcome": outcome, "npc_deaths": [], "health": None}
+    changes: dict[str, Any] = {
+        "outcome": outcome,
+        "npc_deaths": [],
+        "health": None,
+        "xp_awarded": 0,
+        "xp_breakdown": [],
+        "level_up": False,
+    }
 
     with get_session() as session:
         player = session.get(Player, player_id)
@@ -337,9 +423,12 @@ def apply_combat_result(
 
         # --- Player health: monotonic worsening ---
         if outcome == "defeat":
+            # Potions cannot rescue a downed player
             floor = "critical"
         else:
-            floor = _HITS_TO_STATUS.get(min(hits_taken, 3))
+            floor = _HITS_TO_STATUS.get(
+                min(_severity_units(hits_taken, hearts_lost, hearts_healed), 3)
+            )
         if floor:
             current_idx = _HEALTH_ORDER.index(player.health_status) if player.health_status in _HEALTH_ORDER else 0
             floor_idx = _HEALTH_ORDER.index(floor)
@@ -351,10 +440,17 @@ def apply_combat_result(
         clock = session.query(WorldClock).first()
         day = clock.day if clock else 1
         hour = clock.hour if clock else 8
+        xp_total = 0
         for npc_id in defeated_npc_ids:
             npc = session.get(NPC, npc_id)
             if not npc or npc.status == "dead":
-                continue
+                continue        # a corpse is worth nothing — retried POSTs are free
+            tier = resolve_danger_tier(npc)
+            gain = TIER_ROWS[tier]["xp"]
+            xp_total += gain
+            changes["xp_breakdown"].append(
+                {"npc_name": npc.name, "tier": tier, "xp": gain}
+            )
             npc.status = "dead"
             session.add(Event(
                 name=f"Death of {npc.name}",
@@ -373,6 +469,15 @@ def apply_combat_result(
             ))
             changes["npc_deaths"].append({"npc_id": npc.id, "npc_name": npc.name})
 
+        # --- Growth, in the same transaction as the kills that earned it ---
+        changes["xp_awarded"] = xp_total
+        if xp_total and player.health_status != "dead":
+            progression = grant_xp(session, player, xp_total, "combat")
+            if progression:
+                changes["progression"] = progression
+                changes["level_up"] = bool(progression.get("leveled_up"))
+                changes["new_level"] = progression.get("level")
+
         session.commit()
 
     # Fight's over — the aftermath stays hot (and the danger counter resets:
@@ -382,18 +487,69 @@ def apply_combat_result(
     else:
         apply_tension_floor("high", f"combat {outcome}")
 
+    _record_combat_in_ledger(player_id, changes)
+
     logger.info(f"Combat result applied: {changes}")
     return changes
 
 
-def combat_outcome_message(changes: dict[str, Any], fled: bool = False) -> str:
-    """The system turn text the frontend sends so the DM narrates aftermath."""
-    parts = [f"[COMBAT OUTCOME — resolved in real-time by the player, mechanics already applied: {changes['outcome']}."]
+def _record_combat_in_ledger(player_id: str, changes: dict[str, Any]) -> None:
+    """Tell the next DM turn what the engine already applied.
+
+    The health mapping and the deaths land BEFORE the DM narrates them, so
+    `[COMBAT OUTCOME]` prose about wounds and corpses would otherwise trip the
+    reality audit's `damage_without_tool` / `death_without_tool` checks. The
+    ledger hands those tool names to `audit_turn(code_actions=...)`.
+    """
+    try:
+        from src.web.pending_actions import record_action
+    except Exception as e:      # web layer absent (CLI play) — never break a fight
+        logger.debug(f"Combat ledger note skipped: {e}")
+        return
+
+    summary = f"Fight resolved on the canvas: {changes.get('outcome')}"
     if changes.get("npc_deaths"):
-        names = ", ".join(d["npc_name"] for d in changes["npc_deaths"])
-        parts.append(f"Killed: {names} (already marked dead — do NOT call kill_npc).")
+        summary += " — killed " + ", ".join(d["npc_name"] for d in changes["npc_deaths"])
+    if changes.get("health"):
+        summary += f"; health now {changes['health']}"
+    record_action(
+        player_id, "combat", summary,
+        tools={"update_player_health", "kill_npc"},
+    )
+
+
+def _kill_roster(changes: dict[str, Any]) -> str:
+    """`Vex (dangerous), Coldiron (deadly)` — the tier as a WORD, never a number."""
+    breakdown = changes.get("xp_breakdown") or []
+    if breakdown:
+        return ", ".join(f"{d['npc_name']} ({d['tier']})" for d in breakdown)
+    return ", ".join(d["npc_name"] for d in changes.get("npc_deaths") or [])
+
+
+def combat_outcome_message(changes: dict[str, Any], fled: bool = False) -> str:
+    """The system turn text the frontend sends so the DM narrates aftermath.
+
+    Labels only. Not one digit reaches the DM from here: tiers arrive as words
+    so the aftermath can be pitched to the weight of the kill, and growth is
+    named as a felt change rather than a level.
+    """
+    parts = [f"[COMBAT OUTCOME — resolved in real-time by the player, mechanics already applied: {changes['outcome']}."]
+    roster = _kill_roster(changes)
+    if roster:
+        parts.append(
+            f"Killed: {roster} (already marked dead — do NOT call kill_npc). "
+            "Match the weight of your aftermath to those words: a 'harmless' kill "
+            "is an ugly little murder; a 'boss' kill is the end of a chapter."
+        )
     if changes.get("health"):
         parts.append(f"Player health is now '{changes['health']}' (already applied — do NOT call update_player_health for these wounds).")
+    if changes.get("level_up"):
+        parts.append(
+            "The character has grown from what they survived (the engine already "
+            "applied it). Acknowledge it ONCE, obliquely, in the fiction — steadier "
+            "hands, a wound that would have put them down a week ago. Never print a "
+            "number, a level, or the word 'experience'."
+        )
     parts.append(
         "Narrate the aftermath in the fiction — the scene, reactions, consequences. "
         "Apply follow-on consequences with tools (reputation, events, quest updates) as the story demands.]"

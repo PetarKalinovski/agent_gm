@@ -1,13 +1,14 @@
 """The engine rolls, the DM narrates.
 
-`roll_skill_check` is the pure service behind the `roll_check` DM tool (the
-tool wrapper — event key, instruction text, `_debug` stripping — is Wave B's).
+`roll_skill_check` is the pure service behind the `roll_check` DM tool.
 What matters here: the DM picks WORDS, gets back a LABEL, and the numbers
-never leave `_debug`.
+never leave `_debug` — which the tool wrapper strips before the DM can read
+it (last section).
 """
 
 from src.models import Player
 from src.services import progression as prog
+from src.tools.world_write.progression import roll_check
 
 
 class _ScriptedRNG:
@@ -178,3 +179,36 @@ def test_set_seed_makes_the_stream_reproducible():
     prog.set_seed(7)
     second = [prog.roll_skill_check(_player(), "stealth", "tricky")["outcome"] for _ in range(20)]
     assert first == second
+
+
+# --- The `roll_check` tool: what actually reaches the DM ------------------
+
+
+def test_tool_returns_a_label_and_no_dice(player, monkeypatch):
+    _force(monkeypatch, 11)
+    result = roll_check(player, "stealth", "tricky", reason="slipping past the dock guard")
+
+    assert "_debug" not in result, "the dice must never reach the DM"
+    assert set(result) == {"success", "outcome", "skill", "difficulty", "event", "instruction"}
+    assert result["outcome"] == "success"
+    assert result["event"] == "check_result"
+    assert result["instruction"] == prog.OUTCOME_INSTRUCTIONS["success"]
+    assert not any(isinstance(v, (int, float)) and not isinstance(v, bool)
+                   for v in result.values()), "no number may leak to the DM"
+
+
+def test_tool_instruction_matches_the_outcome(player, monkeypatch):
+    _force(monkeypatch, 9)   # total 10 vs DC 12 -> partial
+    result = roll_check(player, "stealth", "tricky")
+    assert result["outcome"] == "partial"
+    assert result["instruction"].startswith("PARTIAL SUCCESS")
+
+
+def test_tool_refuses_an_invented_word(player):
+    result = roll_check(player, "lockpicking", "tricky")
+    assert "error" in result and result["valid"] == list(prog.SKILLS)
+    assert "event" not in result, "a refused check must not reach the client"
+
+
+def test_tool_needs_a_real_player(db):
+    assert roll_check("nobody", "stealth", "tricky") == {"error": "Player not found"}

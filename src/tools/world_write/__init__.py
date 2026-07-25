@@ -49,6 +49,15 @@ from src.tools.world_write.items import (
     spawn_item_to_user,
 )
 
+# Progression tools (the engine rolls, the engine prices)
+from src.tools.world_write.progression import (
+    roll_check,
+    stock_merchant,
+)
+
+# Cinematic tools
+from src.tools.world_write.cinematics import play_cinematic
+
 # Event tools
 from src.tools.world_write.events import create_event
 
@@ -109,6 +118,11 @@ __all__ = [
     "transfer_item",
     "use_item",
     "spawn_item_to_user",
+    # Progression
+    "roll_check",
+    "stock_merchant",
+    # Cinematics
+    "play_cinematic",
     # Events
     "create_event",
     # DM State

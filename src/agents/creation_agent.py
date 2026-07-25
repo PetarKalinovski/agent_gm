@@ -131,12 +131,72 @@ For modifying existing entities (preferred over creating new):
 - **MINOR**: Functional characters with profession, 1 goal, 1 secret. Shopkeepers, guards.
 - **AMBIENT**: Background characters with minimal detail. Generated descriptions only.
 
+## DANGER TIERS (set one on every NPC you create)
+
+Every NPC gets a `danger_tier` — how dangerous they are in a real fight, stated
+ABSOLUTELY. This is never relative to the player: a beggar is `harmless` on day one
+and still `harmless` when the player is a legend. That permanence is how the player
+feels themselves grow.
+
+  harmless  — cannot hurt anyone. Beggars, children, the sick, drunks, civilians.
+  weak      — cutpurses, strays, green recruits, desperate amateurs.
+  standard  — a competent armed adult. Guards, bandits, hounds, soldiers.
+  dangerous — veterans and real monsters. Captains, ogres, assassins, alphas.
+  deadly    — the best there is. Champions, trolls, archmages. Most people die here.
+  boss      — a set-piece legend. Dragons, gods, the arc's final answer. Use at most
+              a handful of times per world; it gets an intro and a named health bar.
+              Never hand `boss` to a random encounter.
+
+Most NPCs are `harmless` or `standard`. A world where everyone is `dangerous` has no
+ladder and teaches the player nothing.
+
+Also set `combat_archetype` (how they fight, if it comes to that):
+brute / skirmisher / stalker / ranged. Pick the word that matches the body and the
+weapon — you are choosing a fighting STYLE, not a difficulty.
+
 ## LOCATION TYPES
 
 Use appropriate types for hierarchy:
 - galaxy, sector, system, planet, station (sci-fi)
 - world, continent, kingdom, province, city, town, village, building, room (fantasy)
 - settlement, district, poi, interior (generic)
+
+## SCENE OBJECTS (things the player can touch without asking)
+
+Every location you create SHOULD carry 0-3 objects. Pass them as the
+`objects` argument to `add_location` (or `update_location`). They are the
+difference between a painted backdrop and a place.
+
+Each object is exactly:
+{"kind": "<take|read|open|search>",
+ "label": "<3-5 words, shown on screen>",
+ "x": <0-100>, "y": <0-100>,
+ "payload": {...}}
+
+The kind menu — pick ONE of these four words. Never invent a fifth:
+- "take"   a loose thing lying there for the taking.
+           payload: {"item": {"name": "...", "type": "consumable|weapon|armor|quest_item|misc",
+                              "description": "...", "value": <int>}}
+- "read"   words in the world: a notice, a grave marker, a torn page.
+           payload: {"text": "<the words themselves, 1-3 sentences>"}
+- "open"   a container. Add "lock" ONLY if it should resist the player.
+           payload: {"item": {...}, "lock": "<what it needs, e.g. 'a small brass key'>"}
+- "search" a place to rummage: a woodpile, a bunk, a rubbish heap.
+           payload: {"text": "<what they turn up>", "item": {...}}   (item optional)
+
+Rules:
+1. x/y are positions in the SCENE IMAGE, 0-100, where y=0 is the far
+   background and y=100 is the front edge. Keep both between 15 and 85, and
+   keep objects apart from each other.
+2. Only author things NOBODY MINDS the player touching. Anything owned,
+   guarded, sacred, or dangerous is not an object — leave it to the DM, or
+   make it an "open" with a "lock" so the DM handles the attempt.
+3. Never hand out quest-critical items, money, or weapons of consequence
+   this way. Flavour, supplies, and lore only.
+4. Write no numbers except the item's `value`. No effects, no stats, no
+   damage, no healing amounts — the engine owns all of that.
+5. "read" objects are the cheapest worldbuilding you will ever write. Use
+   them: a price list tells the player more about a town than a paragraph.
 
 ## IMPORTANT RULES
 

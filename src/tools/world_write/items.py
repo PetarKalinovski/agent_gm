@@ -1,4 +1,10 @@
-"""Tools for item and inventory management."""
+"""Tools for item and inventory management.
+
+Prices for anything mechanical (tiered gear, potions) come from
+`progression.catalog_price`, never from the `value` an LLM wrote: the DM picks
+the WORD ("a fine blade") and the engine picks the coin. Plain stuff — a
+letter, a lucky stone, a crate of turnips — keeps its authored value.
+"""
 
 from typing import Any
 
@@ -10,6 +16,26 @@ from src.models import (
     Player,
     get_session,
 )
+from src.services import progression as prog
+
+
+def _mechanical_annotations(owner, entry: dict[str, Any], is_player: bool) -> dict[str, Any]:
+    """The mechanical keys `get_inventory` adds to an entry.
+
+    A player gets the full reading (equipped/equippable too); an NPC's shelf
+    gets slot/tier/effect_tag/price, which is what the DM needs to quote a
+    true price without inventing one.
+    """
+    if is_player:
+        return prog.annotate_item(owner, entry)
+    mech = prog.mechanize_item(entry) or {}
+    price = prog.catalog_price(entry)
+    return {
+        "slot": mech.get("slot"),
+        "tier": prog.tier_label(mech.get("tier")),
+        "effect_tag": mech.get("effect_tag"),
+        "price": price if price is not None else entry.get("value", 0),
+    }
 
 
 def _validate_inventory(raw: list) -> list[dict[str, Any]]:
@@ -45,6 +71,9 @@ def create_item_template(
     description: str,
     effects: dict[str, Any] | None = None,
     stackable: bool = True,
+    slot: str | None = None,
+    tier: str | None = None,
+    effect_tag: str | None = None,
 ) -> dict[str, Any]:
     """Create an item template that can be used throughout the game.
 
@@ -52,10 +81,16 @@ def create_item_template(
         item_id: Unique identifier for this item type (e.g., "health_potion").
         name: Display name of the item.
         item_type: Type of item (consumable, weapon, armor, quest_item, misc).
-        value: Base value in currency.
+        value: Base value in currency. Ignored for gear and potions — the
+            engine prices those from their tier.
         description: Description of the item.
         effects: Dictionary of effects (e.g., {"heal": 30, "buff_strength": 5}).
         stackable: Whether multiple can stack in one inventory slot.
+        slot: If this is gear: "weapon", "armor" or "trinket". Requires tier.
+        tier: Gear quality: "crude", "common", "fine", "superior", "master",
+            "legendary". Only meaningful with slot.
+        effect_tag: If this is a potion or draught: "heal_light", "heal_strong"
+            or "surge". The engine owns what it does.
 
     Returns:
         Dictionary with the validated item template.
@@ -70,7 +105,15 @@ def create_item_template(
         effects=effects or {},
         stackable=stackable,
         quantity=1,  # Default quantity for template
+        slot=slot,
+        tier=tier,
+        effect_tag=effect_tag,
     )
+
+    # Anything mechanical is priced by the table, whatever `value` said
+    price = prog.catalog_price(item.to_dict())
+    if price is not None:
+        item.value = price
 
     return {"success": True, "item": item.to_dict()}
 
@@ -78,6 +121,9 @@ def create_item_template(
 @tool
 def get_inventory(owner_id: str, owner_type: str = "player") -> dict[str, Any]:
     """Get the inventory of a player or NPC.
+
+    Each item carries its `price` — the true, engine-owned number. Quote THAT
+    when you sell something; never invent a price.
 
     Args:
         owner_id: The ID of the owner.
@@ -91,22 +137,24 @@ def get_inventory(owner_id: str, owner_type: str = "player") -> dict[str, Any]:
             owner = session.get(Player, owner_id)
             if not owner:
                 return {"error": "Player not found"}
-
-            return {
-                "inventory": _validate_inventory(owner.inventory),
-                "currency": owner.currency,
-            }
+            is_player = True
+            raw = owner.inventory
+            currency = owner.currency
         elif owner_type == "npc":
             owner = session.get(NPC, owner_id)
             if not owner:
                 return {"error": "NPC not found"}
-
-            return {
-                "inventory": _validate_inventory(owner.inventory_notable),
-                "currency": getattr(owner, 'currency', 0),  # Default to 0 if not set
-            }
+            is_player = False
+            raw = owner.inventory_notable
+            currency = getattr(owner, 'currency', 0)  # Default to 0 if not set
         else:
             return {"error": "Invalid owner_type"}
+
+        inventory = _validate_inventory(raw)
+        for entry in inventory:
+            entry.update(_mechanical_annotations(owner, entry, is_player))
+
+        return {"inventory": inventory, "currency": currency}
 
 
 @tool
@@ -155,7 +203,8 @@ def transfer_item(
         quantity: How many to transfer.
         from_type: Source type ("player" or "npc").
         to_type: Destination type ("player" or "npc").
-        is_purchase: If True, deduct item value from recipient's currency.
+        is_purchase: If True, charge the recipient. Gear and potions are
+            charged at the engine's catalog price, not at any price you name.
 
     Returns:
         Dictionary with result.
@@ -206,10 +255,16 @@ def transfer_item(
         if source_item.quantity < quantity:
             return {"error": "Not enough quantity"}
 
+        # Mechanical items are priced by the table; plain stuff keeps the
+        # value whoever authored it wrote.
+        unit_price = prog.catalog_price(source_item.to_dict())
+        if unit_price is None:
+            unit_price = source_item.value
+
         # Handle purchase
         total_cost = 0
         if is_purchase:
-            total_cost = source_item.value * quantity
+            total_cost = unit_price * quantity
             if to_type == "player":
                 if dest.currency < total_cost:
                     return {"error": "Not enough currency"}
@@ -232,30 +287,46 @@ def transfer_item(
         if dest_item_idx is not None:
             dest_inv[dest_item_idx].quantity += quantity
         else:
-            # Create new item in dest inventory
+            # Create new item in dest inventory — the mechanical fields travel
+            # with it (a bought sword that arrives untiered is a bought stick),
+            # stamped with the catalog price.
             new_item = Item(
                 id=source_item.id,
                 name=source_item.name,
                 type=source_item.type,
-                value=source_item.value,
+                value=unit_price,
                 description=source_item.description,
                 effects=source_item.effects,
                 stackable=source_item.stackable,
                 quantity=quantity,
+                slot=source_item.slot,
+                tier=source_item.tier,
+                effect_tag=source_item.effect_tag,
             )
             dest_inv.append(new_item)
 
         # Convert back to dicts and update inventories
         setattr(source, source_inv_field, [item.to_dict() for item in source_inv])
         setattr(dest, dest_inv_field, [item.to_dict() for item in dest_inv])
+
+        # A sword that sits in the bag doing nothing is a bug report
+        equipped = None
+        if to_type == "player":
+            auto = prog.auto_equip(session, dest, source_item.id)
+            if auto:
+                equipped = auto.get("item_name")
+
         session.commit()
 
-        return {
+        result = {
             "success": True,
             "item_id": item_id,
             "quantity": quantity,
             "cost": total_cost if is_purchase else 0,
         }
+        if equipped:
+            result["auto_equipped"] = equipped
+        return result
 
 
 @tool
@@ -280,6 +351,25 @@ def use_item(user_id: str, item_id: str, user_type: str = "player") -> dict[str,
 
         if not user:
             return {"error": "User not found"}
+
+        # Anything the engine recognises as a draught (an authored effect_tag,
+        # or a legacy healing potion the repair rules read as one) resolves
+        # through the same code the HUD's Use button calls, so the DM tool and
+        # the player's own hand agree on what a potion does.
+        if user_type == "player":
+            entry = prog.find_item(user, item_id)
+            mech = prog.mechanize_item(entry) if entry else None
+            if mech and mech.get("effect_tag"):
+                result = prog.apply_consumable(session, user, item_id, in_combat=False)
+                if "error" in result:
+                    return result
+                session.commit()
+                return {
+                    "success": True,
+                    "item_used": result["item_name"],
+                    "effects": result["effect"],
+                    "remaining": result["remaining"],
+                }
 
         inventory_raw = getattr(user, inv_field) or []
 
@@ -339,7 +429,8 @@ def spawn_item_to_user(
 
     Args:
         user_id: The user's ID.
-        item_data: Dictionary with item template data.
+        item_data: Dictionary with item template data. May carry "slot"+"tier"
+            (gear) or "effect_tag" (a potion) — the engine then owns its price.
         quantity: How many to spawn.
         user_type: Type of user ("player" or "npc").
 
@@ -362,7 +453,8 @@ def spawn_item_to_user(
         # Parse inventory as Item objects
         inventory = [Item.from_dict(item) for item in _validate_inventory(inventory_raw)]
 
-        # Create new item
+        # Create new item — mechanical fields travel with it, priced by the
+        # table rather than by whatever `value` the template carried
         new_item = Item(
             id=item_data["id"],
             name=item_data["name"],
@@ -372,7 +464,13 @@ def spawn_item_to_user(
             effects=item_data.get("effects", {}),
             stackable=item_data.get("stackable", True),
             quantity=quantity,
+            slot=item_data.get("slot"),
+            tier=item_data.get("tier"),
+            effect_tag=item_data.get("effect_tag"),
         )
+        price = prog.catalog_price(new_item.to_dict())
+        if price is not None:
+            new_item.value = price
 
         # Add to inventory
         dest_item_idx = None
@@ -388,10 +486,20 @@ def spawn_item_to_user(
 
         # Convert back to dicts and save
         setattr(user, inv_field, [item.to_dict() for item in inventory])
+
+        equipped = None
+        if user_type == "player":
+            auto = prog.auto_equip(session, user, new_item.id)
+            if auto:
+                equipped = auto.get("item_name")
+
         session.commit()
 
-        return {
+        result = {
             "success": True,
             "item_id": new_item.id,
             "quantity": quantity,
         }
+        if equipped:
+            result["auto_equipped"] = equipped
+        return result

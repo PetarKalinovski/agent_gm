@@ -37,6 +37,24 @@ from src.services.voice_generator import VoiceGenerator, compute_audio_id
 from src.services.world_tick import snapshot_clock, enforce_minimum_time_cost
 from src.services.world_simulation import maybe_advance_world
 from src.services.tension import snapshot_turn_tension, enforce_tension
+from src.services import barks as barks_service
+from src.services import progression
+from src.services.campaign import (
+    campaign_public_view,
+    campaign_state,
+    ensure_campaign,
+    get_last_tick,
+    mark_beat_delivery,
+    pop_pending_events,
+    reset_state as reset_campaign_state,
+)
+from src.services.combat import ARCHETYPES as COMBAT_ARCHETYPES, DANGER_TIERS
+from src.services.cinematics import drain_pending as drain_pending_cinematics
+from src.services.cinematics import recent as recent_cinematics
+from src.services.scene_exits import compute_exit_doors
+from src.services.scene_objects import normalize_objects, resolve_interaction
+from src.services.travel import check_route, travel_now
+from src.web import pending_actions
 from src.web.turn_filters import DialogueDeduper
 from src.web.turn_audit import audit_turn, format_audit_feedback
 
@@ -174,29 +192,59 @@ async def list_players():
         ]
 
 
+# Weather is world state, but it is invisible indoors — code decides which
+# location types are "inside" so the client never has to know what a room is
+INDOOR_LOCATION_TYPES = frozenset({"interior", "room", "building"})
+
+# What a state payload carries for a world with no player row at all
+_NO_PLAYER_PROGRESS = {"level": 1, "xp": 0, "xp_into_level": 0, "xp_for_level": 0}
+_NO_PLAYER_EQUIPMENT = {slot: None for slot in progression.SLOTS}
+
+# The mechanical keys a legacy bare-string inventory entry reads as
+_PLAIN_ITEM_MECHANICS = {
+    "slot": None, "tier": None, "effect_tag": None,
+    "equipped": False, "equippable": False, "price": 0,
+}
+
+
 def build_player_state(player_id: str) -> dict[str, Any]:
     """Snapshot of everything the HUD needs — sent as an SSE `state` event
-    after each turn and included in /api/session."""
+    after each turn and included in /api/session.
+
+    Runs after every successful world-write tool, so everything derived here
+    is pure dict math over the already-loaded rows (`progression.combat_stats`
+    issues no query) plus the campaign summary's handful of indexed reads.
+    """
     location = get_current_location(player_id)
     clock = get_world_clock()
 
+    inventory: list[dict[str, Any]] = []
     with get_session() as db:
         p = db.query(Player).filter(Player.id == player_id).first()
         health = p.health_status if p else "healthy"
         currency = p.currency if p else 0
-        inventory_raw = list(p.inventory or []) if p else []
-
-    inventory = []
-    for entry in inventory_raw:
-        if isinstance(entry, dict):
-            inventory.append({
-                "name": entry.get("name", "?"),
-                "quantity": entry.get("quantity", 1),
-                "type": entry.get("type", "misc"),
-                "description": entry.get("description", ""),
-            })
-        elif isinstance(entry, str):
-            inventory.append({"name": entry, "quantity": 1, "type": "misc", "description": ""})
+        for entry in (list(p.inventory or []) if p else []):
+            if isinstance(entry, dict):
+                item = {
+                    "item_id": progression.item_key(entry),
+                    "name": entry.get("name", "?"),
+                    "quantity": entry.get("quantity", 1),
+                    "type": entry.get("type", "misc"),
+                    "description": entry.get("description", ""),
+                }
+                # slot / tier / effect_tag / equipped / equippable / price
+                item.update(progression.annotate_item(p, entry))
+                inventory.append(item)
+            elif isinstance(entry, str):
+                inventory.append({
+                    "item_id": entry, "name": entry, "quantity": 1,
+                    "type": "misc", "description": "", **_PLAIN_ITEM_MECHANICS,
+                })
+        # Level, gear and combat numbers are the engine's — the client renders
+        # them and never derives them from raw items
+        progress = progression.xp_progress(p) if p else dict(_NO_PLAYER_PROGRESS)
+        equipment = progression.equipment_summary(p) if p else dict(_NO_PLAYER_EQUIPMENT)
+        combat = progression.combat_stats(p) if p else None
 
     try:
         quests = [
@@ -211,14 +259,29 @@ def build_player_state(player_id: str) -> dict[str, Any]:
         wc = db.query(WorldClock).first()
         minute = (wc.minute or 0) if wc else 0
 
-    # Tension drives the adaptive music layer client-side
+    # Tension drives the adaptive music layer client-side; weather is durable
+    # world state, so it survives reloads and scene changes through here
+    tension = "low"
+    weather = "clear"
     try:
         with get_session() as db:
             from src.models.world_state import DMState
             dm_state = db.query(DMState).first()
-            tension = dm_state.tension if dm_state else "low"
+            if dm_state:
+                tension = dm_state.tension or "low"
+                weather = dm_state.weather or "clear"
     except Exception:
-        tension = "low"
+        pass
+
+    if str(location.get("type", "")).lower() in INDOOR_LOCATION_TYPES:
+        weather = "clear"
+
+    # Spoiler-free by construction — never a sealed truth or an unfired beat
+    try:
+        campaign = campaign_state(player_id)
+    except Exception as e:
+        logger.debug(f"Campaign state unavailable: {e}")
+        campaign = None
 
     return {
         "location_id": location.get("id"),
@@ -232,6 +295,14 @@ def build_player_state(player_id: str) -> dict[str, Any]:
         "inventory": inventory,
         "quests": quests,
         "tension": tension,
+        "level": progress["level"],
+        "xp": progress["xp"],
+        "xp_into_level": progress["xp_into_level"],
+        "xp_for_level": progress["xp_for_level"],
+        "equipment": equipment,
+        "combat": combat,
+        "campaign": campaign,
+        "weather": weather,
     }
 
 
@@ -438,7 +509,34 @@ STATE_MUTATING_TOOLS = frozenset({
     "move_player",
     "advance_time",
     "update_player_reputation",
+    "use_item",
+    # A merchant's stock does not move the HUD, but its catalog prices echo
+    # into the next get_inventory — keeping the set honest costs nothing
+    "stock_merchant",
 })
+
+
+def _drain_story_events(player_id: str) -> list[str]:
+    """SSE frames for everything the story engine queued out-of-band.
+
+    Campaign beats/acts/resolutions and campaign-deferred cinematics fire in
+    pure code (inside the world tick, or in `mark_beat_delivery` after the
+    turn), so they have no tool result to ride on. Drained twice per turn:
+    once after the context build, once after delivery marking.
+    """
+    frames: list[str] = []
+    try:
+        for event in pop_pending_events(player_id):
+            frames.append(f"data: {json.dumps(event, ensure_ascii=False, default=str)}\n\n")
+    except Exception as e:
+        logger.warning(f"Campaign event drain failed: {e}")
+    try:
+        for cine in drain_pending_cinematics(player_id):
+            payload = {"type": "cinematic", **cine}
+            frames.append(f"data: {json.dumps(payload, ensure_ascii=False, default=str)}\n\n")
+    except Exception as e:
+        logger.warning(f"Cinematic queue drain failed: {e}")
+    return frames
 
 
 @app.post("/api/play")
@@ -483,10 +581,24 @@ async def play_sse(request: GameRequest):
             turn_text_parts: list[str] = []
             last_state_json: str | None = None
 
+            # The campaign tick caches its briefing per player; hold the old
+            # object so a turn where it did NOT run can be told apart from one
+            # where it did (a resolved campaign stops ticking, and its final
+            # beat must not keep exempting the audit forever)
+            previous_tick = get_last_tick(request.player_id)
+
+            # What the ENGINE did between turns — canvas travel, pickups,
+            # potions, gear, growth. Drained under the play lock; the DM reads
+            # it as already-true facts and must not re-apply any of it.
+            canvas_actions = pending_actions.drain(request.player_id)
+            canvas_notes = pending_actions.format_pending_actions(canvas_actions)
+            code_actions = pending_actions.tool_equivalents(canvas_actions)
+
             # Build the full DM context — runs the world tick (fires scheduled
-            # events) and includes player health/inventory/quests, same as the
-            # CLI path.
-            context = dm._build_context(request.player_input)
+            # events) and the campaign tick, and includes player
+            # health/inventory/quests, same as the CLI path. Block order (R11)
+            # is the orchestrator's: briefing -> canvas ledger -> campaign.
+            context = dm._build_context(request.player_input, canvas_notes=canvas_notes)
 
             # If the player clicked an NPC on the canvas, tell the DM who they're addressing
             if request.npc_id:
@@ -497,6 +609,21 @@ async def play_sse(request: GameRequest):
             prior_warnings = _pending_audit_feedback.pop(request.player_id, None)
             if prior_warnings:
                 context += format_audit_feedback(prior_warnings)
+
+            # A campaign beat that fired inside _build_context already moved
+            # NPCs, flipped quests and wrote events in code. Its exemption
+            # categories join the ledger's tool names as the ONE suppression
+            # mechanism the reality audit reads (R4).
+            campaign_tick = get_last_tick(request.player_id) or {}
+            if campaign_tick is previous_tick:
+                campaign_tick = {}          # the tick did not run this turn
+            campaign_audit = campaign_tick.get("audit")
+            code_actions |= set((campaign_tick.get("fired_beat") or {}).get("audit_exempt") or ())
+
+            # Flush whatever the tick queued (the beat itself, an act it just
+            # resolved) and any cinematic it deferred, BEFORE the first token.
+            for chunk in _drain_story_events(request.player_id):
+                yield chunk
 
             # Set up narration callback
             narration_buffer: list[str] = []
@@ -606,12 +733,24 @@ async def play_sse(request: GameRequest):
             except Exception as e:
                 logger.warning(f"Could not build state event: {e}")
 
+            # Did the DM actually deliver the beat the engine gave it? Runs
+            # BEFORE the audit so a delivered beat is never flagged, and may
+            # itself close an act (queueing more events + a title card).
+            turn_text = "".join(turn_text_parts)
+            try:
+                mark_beat_delivery(request.player_id, turn_text)
+            except Exception as e:
+                logger.warning(f"Campaign delivery marking failed: {e}")
+            for chunk in _drain_story_events(request.player_id):
+                yield chunk
+
             # Fiction/database consistency audit — logged and attached to
             # the complete event (self-playtests read it as a scoreboard)
             audit_warnings = []
             try:
                 audit_warnings = audit_turn(
-                    "".join(turn_text_parts), tool_tracker.snapshot(), state_before, state_after
+                    turn_text, tool_tracker.snapshot(), state_before, state_after,
+                    code_actions=code_actions, campaign=campaign_audit,
                 )
                 for w in audit_warnings:
                     logger.warning(f"Turn audit [{w['check']}]: {w['detail']}")
@@ -865,16 +1004,34 @@ async def get_location_assets(location_id: str, player_id: str):
         # Pre-warm backgrounds for connected locations so travel feels instant
         asset_manager.prewarm_connected_locations(location_id)
 
-        # Available exits so the canvas can offer transitions at scene edges
+        # Available exits so the canvas can draw doors at scene edges. Doors
+        # are DERIVED (never stored) from the destination's bearing on the
+        # world map, and each carries the same route verdict `move_player`
+        # would give — the canvas can never walk somewhere the DM would block.
         try:
-            destinations = get_available_destinations(location_id)
+            destinations = get_available_destinations(location_id) or []
             exits = []
             seen_exit_ids = set()
-            for d in (destinations or []):
-                if isinstance(d, dict) and d.get("id") and d["id"] not in seen_exit_ids:
+            with get_session() as db:
+                loc = db.query(Location).filter(Location.id == location_id).first()
+                doors = compute_exit_doors(loc, destinations)
+                for d in destinations:
+                    if not isinstance(d, dict) or not d.get("id") or d["id"] in seen_exit_ids:
+                        continue
                     seen_exit_ids.add(d["id"])
-                    exits.append({"id": d["id"], "name": d.get("name"), "type": d.get("type", "")})
-        except Exception:
+                    route = check_route(db, location_id, d["id"])
+                    exits.append({
+                        "id": d["id"],
+                        "name": d.get("name"),
+                        "type": d.get("type", ""),
+                        "travel_type": d.get("travel_type", ""),
+                        "travel_time_hours": route["travel_time_hours"],
+                        "locked": route["blocked"],
+                        "requirements": route["requirements"],
+                        "door": doors.get(d["id"]),      # None past MAX_DOORS
+                    })
+        except Exception as e:
+            logger.warning(f"Exit enrichment failed for {location_id}: {e}")
             exits = []
 
         # Convert paths to URLs
@@ -884,6 +1041,7 @@ async def get_location_assets(location_id: str, player_id: str):
             "background_url": _url(assets["background_path"]),
             "walkable_bounds": assets["walkable_bounds"],
             "obstacles": assets.get("obstacles", []),
+            "objects": assets.get("objects", []),
             "exits": exits,
             "pending": assets.get("pending", False),
             "player": {
@@ -981,10 +1139,18 @@ async def get_portrait(npc_id: str):
 
 
 class CombatResultRequest(BaseModel):
-    """Outcome of a real-time canvas fight, reported by the frontend."""
+    """Outcome of a real-time canvas fight, reported by the frontend.
+
+    `hearts_lost` and `hearts_healed` are the honest severity: a 3-heart boss
+    slam is not "one hit", and a potion drunk mid-fight is a wound that did
+    not stick. Both default to 0, so an un-updated client keeps working off
+    `hits_taken` alone.
+    """
     player_id: str
     outcome: str                        # "victory" | "defeat" | "fled"
     hits_taken: int = 0
+    hearts_lost: int = 0
+    hearts_healed: int = 0
     defeated_npc_ids: list[str] = []
 
 
@@ -992,9 +1158,10 @@ class CombatResultRequest(BaseModel):
 async def combat_result(request: CombatResultRequest):
     """Apply a finished real-time fight to the world — code enforces.
 
-    Health mapping and NPC deaths land here, BEFORE the DM sees anything;
-    the frontend then auto-sends the returned `dm_message` through /api/play
-    so the DM narrates an aftermath that is already true.
+    Health mapping, NPC deaths and the XP those deaths earned land here,
+    BEFORE the DM sees anything; the frontend then auto-sends the returned
+    `dm_message` through /api/play so the DM narrates an aftermath that is
+    already true. Growth rides this response, never SSE.
     """
     from src.services.combat import apply_combat_result, combat_outcome_message
 
@@ -1003,17 +1170,302 @@ async def combat_result(request: CombatResultRequest):
         request.player_id,
         request.outcome,
         hits_taken=request.hits_taken,
+        hearts_lost=request.hearts_lost,
+        hearts_healed=request.hearts_healed,
         defeated_npc_ids=request.defeated_npc_ids,
     )
     if "error" in changes:
         return JSONResponse(changes, status_code=400)
 
-    return {
+    # A level earned in a canvas fight is news the DM must acknowledge once,
+    # obliquely — the ledger carries the instruction into the next turn
+    if changes.get("level_up"):
+        pending_actions.record_action(request.player_id, "levelup", "")
+
+    response: dict[str, Any] = {
         "success": True,
         "changes": changes,
         "dm_message": combat_outcome_message(changes),
         "state": build_player_state(request.player_id),
     }
+    if changes.get("progression"):
+        response["progression"] = changes["progression"]
+    return response
+
+
+# =====================
+# Progression: gear, quick slot, consumables (HUD, zero DM latency)
+# =====================
+
+class EquipRequest(BaseModel):
+    item_id: str
+
+
+class UnequipRequest(BaseModel):
+    slot: str
+
+
+class QuickSlotRequest(BaseModel):
+    item_id: str | None = None
+
+
+class UseConsumableRequest(BaseModel):
+    item_id: str
+    in_combat: bool = False
+
+
+@app.post("/api/player/{player_id}/equip")
+async def equip_item(player_id: str, request: EquipRequest):
+    """Wear/wield an inventory item. The item stays in the bag — equipment is
+    a pointer, so every existing inventory path keeps working."""
+    init_db(get_active_db_path())
+    with get_session() as db:
+        player = db.query(Player).filter(Player.id == player_id).first()
+        if not player:
+            return JSONResponse({"error": "Player not found", "reason": "missing"}, status_code=404)
+        result = progression.equip(db, player, request.item_id)
+        if "error" in result:
+            return JSONResponse(result, status_code=400)
+        db.commit()
+
+    pending_actions.record_action(
+        player_id, "equip",
+        pending_actions.equip_note(result["item_name"], result["slot"]),
+    )
+    return {**result, "state": build_player_state(player_id)}
+
+
+@app.post("/api/player/{player_id}/unequip")
+async def unequip_item(player_id: str, request: UnequipRequest):
+    """Clear one equipment slot."""
+    init_db(get_active_db_path())
+    with get_session() as db:
+        player = db.query(Player).filter(Player.id == player_id).first()
+        if not player:
+            return JSONResponse({"error": "Player not found", "reason": "missing"}, status_code=404)
+        result = progression.unequip(db, player, request.slot)
+        if "error" in result:
+            return JSONResponse(result, status_code=400)
+        db.commit()
+
+    if result.get("item_name"):
+        pending_actions.record_action(
+            player_id, "equip", pending_actions.unequip_note(result["item_name"]),
+        )
+    return {**result, "state": build_player_state(player_id)}
+
+
+@app.post("/api/player/{player_id}/quick-slot")
+async def set_quick_slot(player_id: str, request: QuickSlotRequest):
+    """Bind (or clear) the Q hotkey. No note to the DM — a hotkey is not fiction."""
+    init_db(get_active_db_path())
+    with get_session() as db:
+        player = db.query(Player).filter(Player.id == player_id).first()
+        if not player:
+            return JSONResponse({"error": "Player not found", "reason": "missing"}, status_code=404)
+        if request.item_id:
+            item = progression.find_item(player, request.item_id)
+            if not item:
+                return JSONResponse(
+                    {"error": "Not in your inventory.", "reason": "missing"}, status_code=400
+                )
+            player.quick_slot_item_id = progression.item_key(item)
+        else:
+            player.quick_slot_item_id = None
+        db.commit()
+        quick_slot = progression.quick_slot_payload(player)
+
+    return {"success": True, "quick_slot": quick_slot, "state": build_player_state(player_id)}
+
+
+@app.post("/api/player/{player_id}/use-consumable")
+async def use_consumable(player_id: str, request: UseConsumableRequest):
+    """Drink/apply one consumable. Hearts apply only IN combat, health steps
+    only out of it — one item, two honest readings of the fiction."""
+    init_db(get_active_db_path())
+    with get_session() as db:
+        player = db.query(Player).filter(Player.id == player_id).first()
+        if not player:
+            return JSONResponse({"error": "Player not found", "reason": "missing"}, status_code=404)
+        result = progression.apply_consumable(db, player, request.item_id, request.in_combat)
+        if "error" in result:
+            return JSONResponse(result, status_code=400)
+        db.commit()
+
+    pending_actions.record_action(
+        player_id, "consume",
+        pending_actions.consume_note(
+            result["item_name"], result["remaining"],
+            effect=result["effect_tag"], in_combat=request.in_combat,
+        ),
+    )
+    return {**result, "state": build_player_state(player_id)}
+
+
+# =====================
+# Canvas play: travel, interaction, ambient chatter
+# =====================
+
+class TravelRequest(BaseModel):
+    player_id: str
+    destination_id: str
+    source: str = "door"        # "door" | "chooser" — logging only
+
+
+class InteractRequest(BaseModel):
+    player_id: str
+    location_id: str
+    object_id: str
+
+
+@app.post("/api/travel")
+async def canvas_travel(request: TravelRequest):
+    """Walk through an unlocked door — no LLM, no DM turn.
+
+    Blocked while a turn streams: a mid-turn location change desyncs the DM's
+    own location reads and races the frontend's scene load. (A mid-turn pickup
+    is transactional and harmless, so /api/interact has no such guard.)
+    """
+    init_db(get_active_db_path())
+    if _play_lock.locked():
+        return JSONResponse({"success": False, "busy": True}, status_code=409)
+
+    result = await asyncio.to_thread(travel_now, request.player_id, request.destination_id)
+    if result.get("blocked"):
+        result["chat_prompt"] = f"I try to get through to {result['destination_name']}."
+        return JSONResponse({"success": False, **result}, status_code=409)
+    if "error" in result:
+        status = 404 if result["error"] in ("not_found", "no_player") else 403
+        return JSONResponse({"success": False, **result}, status_code=status)
+
+    logger.info(
+        f"Canvas travel ({request.source}): {result['from_name']} -> {result['destination_name']}"
+    )
+    pending_actions.record_action(
+        request.player_id, "move",
+        f"{result['from_name']} -> {result['destination_name']}",
+        tools=("move_player", "advance_time"),
+        minutes=result["minutes"], first_visit=result["first_visit"],
+    )
+    return {"success": True, **result, "state": build_player_state(request.player_id)}
+
+
+# HTTP status for each way an interaction can refuse
+_INTERACT_ERROR_STATUS = {"no such object": 404, "no player": 404, "not here": 409}
+
+# A read's summary quotes the words; anything longer is a paragraph
+_INTERACT_SUMMARY_MAX = 90
+
+
+def _interact_summary(result: dict[str, Any]) -> str:
+    """The one-line note the DM reads: what they picked up, or what they read."""
+    label = result.get("label") or ""
+    items = result.get("result", {}).get("items_gained") or []
+    if items:
+        return ", ".join(str(i.get("name") or "") for i in items if i.get("name")) or label
+    text = result.get("result", {}).get("panel_text")
+    if text:
+        return f'{label} ("{str(text)[:_INTERACT_SUMMARY_MAX]}")'
+    return label
+
+
+@app.post("/api/interact")
+async def canvas_interact(request: InteractRequest):
+    """Touch a scene object. Code owns the whole interaction: the payloads
+    were stripped of numbers and effects when they were authored."""
+    init_db(get_active_db_path())
+    result = await asyncio.to_thread(
+        resolve_interaction, request.player_id, request.location_id, request.object_id
+    )
+
+    if result.get("locked"):
+        return JSONResponse(result, status_code=409)
+    if result.get("spent"):
+        return JSONResponse(result, status_code=409)
+    if not result.get("success"):
+        return JSONResponse(
+            result, status_code=_INTERACT_ERROR_STATUS.get(result.get("error"), 400)
+        )
+
+    items = result.get("result", {}).get("items_gained") or []
+    pending_actions.record_action(
+        request.player_id, result["kind"], _interact_summary(result),
+        tools=("add_to_inventory",) if items else (),
+    )
+    return {**result, "state": build_player_state(request.player_id)}
+
+
+# Poll cadence for the client: a settled pool, and a shorter retry while one
+# is generating (one more poll, then it gives up until the next scene load)
+BARK_REFRESH_MS = 180000
+BARK_PENDING_MS = 20000
+
+
+@app.get("/api/barks/{location_id}")
+async def get_location_barks(location_id: str):
+    """Ambient one-liners for a scene. Always serves what is cached — a stale
+    pool beats silence — and regenerates in the background when it goes off."""
+    init_db(get_active_db_path())
+    if not barks_service.barks_enabled():
+        return {"location_id": location_id, "barks": [], "pending": False, "unavailable": True,
+                "refresh_after_ms": BARK_REFRESH_MS}
+
+    with get_session() as db:
+        from src.models import WorldClock
+        location = db.query(Location).filter(Location.id == location_id).first()
+        if not location:
+            return JSONResponse({"error": "Location not found"}, status_code=404)
+        clock = db.query(WorldClock).first()
+        barks = barks_service.cached_barks(location)
+        stale = barks_service.barks_stale(location, clock)
+
+    pending = False
+    if stale:
+        pending = get_asset_manager().spawn_generation(
+            f"barks:{location_id}",
+            lambda: barks_service.generate_barks(location_id),
+        )
+
+    return {
+        "location_id": location_id,
+        "barks": barks,
+        "pending": pending,
+        "unavailable": False,
+        "refresh_after_ms": BARK_PENDING_MS if pending else BARK_REFRESH_MS,
+    }
+
+
+# =====================
+# Campaign + cinematics (read models; the story writes itself in code)
+# =====================
+
+class CampaignGenerateRequest(BaseModel):
+    force: bool = False
+
+
+@app.get("/api/campaign/{player_id}")
+async def get_campaign_view(player_id: str, spoilers: int = 0):
+    """The player-facing campaign view. Sealed truth STATEMENTS are never
+    serialized — a curious player with devtools must not read the ending.
+    `?spoilers=1` returns them and is a documented author/debug flag."""
+    init_db(get_active_db_path())
+    return campaign_public_view(player_id, spoilers=bool(spoilers))
+
+
+@app.post("/api/campaign/{player_id}/generate")
+async def generate_campaign(player_id: str, request: CampaignGenerateRequest | None = None):
+    """Author (or re-author) this character's campaign off-thread."""
+    init_db(get_active_db_path())
+    force = bool(request.force) if request else False
+    return await asyncio.to_thread(ensure_campaign, player_id, None, force)
+
+
+@app.get("/api/cinematics/recent")
+async def get_recent_cinematics(limit: int = 20):
+    """The cinematic ledger — played, pending and rejected. Read-only, for
+    playtest scoreboards ('did the DM try to spam title cards?')."""
+    init_db(get_active_db_path())
+    return {"cinematics": recent_cinematics(limit)}
 
 
 class MoveRequest(BaseModel):
@@ -1209,6 +1661,12 @@ class NPCUpdate(BaseModel):
     position_y: float | None = None
     scale: float | None = None
     reference_search_query: str | None = None
+    # Combat authoring. `boss` is authored-only — it never arrives by
+    # inference and the DM's update_npc tool refuses it; the world editor is
+    # the one place it can be set. `boss_title` is a display epithet.
+    danger_tier: str | None = None
+    combat_archetype: str | None = None
+    boss_title: str | None = None
 
 
 class LocationUpdate(BaseModel):
@@ -1225,6 +1683,7 @@ class LocationUpdate(BaseModel):
     visited: bool | None = None
     discovered: bool | None = None
     obstacles: list | None = None  # collision polygons, normalized 0-100
+    objects: list | None = None    # canvas interactables (normalized on write)
     reference_search_query: str | None = None
 
 
@@ -1443,6 +1902,9 @@ async def get_npc_detail(npc_id: str):
             "position_y": npc.position_y,
             "scale": npc.scale,
             "reference_search_query": npc.reference_search_query,
+            "danger_tier": npc.danger_tier,
+            "combat_archetype": npc.combat_archetype,
+            "boss_title": npc.boss_title,
         }
 
 
@@ -1496,6 +1958,20 @@ async def update_npc(npc_id: str, update: NPCUpdate):
             npc.position_y = update.position_y
         if update.scale is not None:
             npc.scale = update.scale
+        if update.danger_tier is not None:
+            tier = update.danger_tier.strip().lower()
+            if tier and tier not in DANGER_TIERS:
+                return {"error": f"Unknown danger_tier {update.danger_tier!r}",
+                        "valid": list(DANGER_TIERS)}
+            npc.danger_tier = tier or None
+        if update.combat_archetype is not None:
+            archetype = update.combat_archetype.strip().lower()
+            if archetype and archetype not in COMBAT_ARCHETYPES:
+                return {"error": f"Unknown combat_archetype {update.combat_archetype!r}",
+                        "valid": list(COMBAT_ARCHETYPES)}
+            npc.combat_archetype = archetype or None
+        if update.boss_title is not None:
+            npc.boss_title = update.boss_title.strip() or None
         if update.reference_search_query is not None:
             old_query = npc.reference_search_query
             npc.reference_search_query = update.reference_search_query if update.reference_search_query != "" else None
@@ -1607,8 +2083,16 @@ async def create_player(req: PlayerCreate):
         )
         db.add(player)
         db.commit()
+        player_id = player.id
 
-        return {"success": True, "player_id": player.id, "location_id": location_id}
+    # A character deserves a story of their own. Authoring it is one fast-model
+    # call that takes 10-30s — fire and forget, never on the response path. A
+    # failure degrades to exactly today's game.
+    asyncio.create_task(
+        asyncio.to_thread(ensure_campaign, player_id, req.predecessor_id)
+    )
+
+    return {"success": True, "player_id": player_id, "location_id": location_id}
 
 
 @app.put("/api/world/players/{player_id}")
@@ -1680,6 +2164,7 @@ async def get_location_detail(location_id: str):
             "controlling_faction_id": loc.controlling_faction_id,
             "visited": loc.visited,
             "discovered": loc.discovered,
+            "objects": loc.objects or [],
             "reference_search_query": loc.reference_search_query,
         }
 
@@ -1719,6 +2204,10 @@ async def update_location(location_id: str, update: LocationUpdate):
             loc.discovered = update.discovered
         if update.obstacles is not None:
             loc.obstacles = update.obstacles
+        if update.objects is not None:
+            # Never trust authored objects: the normalizer strips effects,
+            # numbers and unknown kinds before anything reaches a scene
+            loc.objects = normalize_objects(update.objects) or None
         if update.reference_search_query is not None:
             old_query = loc.reference_search_query
             loc.reference_search_query = update.reference_search_query if update.reference_search_query != "" else None
@@ -2463,9 +2952,11 @@ async def select_world(request: WorldSelectRequest):
     if not Path(db_path).exists():
         return {"success": False, "error": f"Database not found: {db_path}"}
 
-    # Clear all active sessions (they're tied to the old database)
+    # Clear all active sessions (they're tied to the old database), plus the
+    # per-player caches keyed by ids that belong to the world we are leaving
     sessions.clear()
     _asset_manager = None
+    reset_campaign_state()
 
     # Reset the database engine and set new path
     reset_engine()

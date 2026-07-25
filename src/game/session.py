@@ -13,6 +13,7 @@ from src.config import load_settings
 import threading
 
 from src.game.context import assemble_context
+from src.services.campaign import mark_beat_delivery
 from src.services.world_tick import snapshot_clock, enforce_minimum_time_cost
 from src.services.world_simulation import maybe_advance_world
 from src.services.tension import snapshot_turn_tension, enforce_tension
@@ -271,6 +272,10 @@ class GameSession:
 
                 # Mechanical tension floor/decay from what happened this turn
                 enforce_tension(turn_start_tension, self.player_id)
+
+                # Did the DM actually deliver the campaign beat it was handed?
+                # (the web path does the same before its reality audit)
+                mark_beat_delivery(self.player_id, response)
 
                 # New in-game day → advance the world offscreen (background
                 # thread so the player isn't kept waiting)

@@ -307,3 +307,77 @@ def test_archetype_inference_is_unchanged_without_ranged_words():
     assert infer_archetype(_npc(description_physical="a hulking massive brawler")) == "brute"
     assert infer_archetype(_npc(description_physical="a silent shadow, a predator")) == "stalker"
     assert infer_archetype(_npc(description_physical="a wiry youth")) == "skirmisher"
+
+
+# --- The tool surface: labels in, no dials ---------------------------------
+
+
+def _make_npc(**kwargs):
+    from src.models import get_session
+    from src.tools.world_write.npcs import add_npc
+
+    fields = {
+        "name": "Coldiron", "tier": NPCTier.MINOR, "species": "human", "age": 40,
+        "profession": "armourer", "faction_id": None, "current_location_id": None,
+        "home_location_id": None, "description_physical": "", "description_personality": "",
+        "voice_pattern": "", "goals": [], "secrets": [], "current_mood": "calm",
+    }
+    fields.update(kwargs)
+    created = add_npc(**fields)
+    with get_session() as session:
+        return created, session.get(NPC, created["id"])
+
+
+def test_add_npc_records_the_authored_labels(db):
+    created, npc = _make_npc(danger_tier="deadly", combat_archetype="ranged")
+    assert npc.danger_tier == "deadly" and npc.combat_archetype == "ranged"
+    assert created["danger_tier"] == "deadly"
+    assert resolve_danger_tier(npc) == "deadly"
+
+
+def test_add_npc_may_author_a_boss(db):
+    _created, npc = _make_npc(name="The Ashen Warden", danger_tier="boss")
+    assert is_boss(npc), "a boss is an authored set-piece — authoring must work"
+
+
+def test_add_npc_drops_an_invented_label_instead_of_storing_it(db):
+    created, npc = _make_npc(danger_tier="apocalyptic", combat_archetype="sniper")
+    assert npc.danger_tier is None and npc.combat_archetype is None
+    assert len(created["warnings"]) == 2
+    assert resolve_danger_tier(npc) == "standard", "a NULL tier still infers"
+
+
+def test_update_npc_refuses_to_promote_anyone_to_boss(db):
+    from src.tools.world_write.npcs import update_npc
+
+    _created, npc = _make_npc()
+    result = update_npc(npc.id, danger_tier="boss")
+    assert "error" in result and "authored" in result["error"]
+
+    from src.models import get_session
+    with get_session() as session:
+        assert session.get(NPC, npc.id).danger_tier is None
+
+
+def test_update_npc_sets_a_legal_tier(db):
+    from src.models import get_session
+    from src.tools.world_write.npcs import update_npc
+
+    _created, npc = _make_npc()
+    result = update_npc(npc.id, danger_tier="dangerous", combat_archetype="stalker")
+    assert result["success"]
+    with get_session() as session:
+        row = session.get(NPC, npc.id)
+        assert row.danger_tier == "dangerous" and row.combat_archetype == "stalker"
+
+
+def test_update_npc_refuses_an_invented_tier_without_writing_anything(db):
+    from src.models import get_session
+    from src.tools.world_write.npcs import update_npc
+
+    _created, npc = _make_npc()
+    result = update_npc(npc.id, profession="duellist", danger_tier="apocalyptic")
+    assert "error" in result and list(DANGER_TIERS)[0] in result["error"]
+    with get_session() as session:
+        row = session.get(NPC, npc.id)
+        assert row.profession == "armourer", "a refused update writes nothing at all"

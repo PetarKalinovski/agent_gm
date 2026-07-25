@@ -11,6 +11,7 @@ from src.models.player import Player
 from src.models.world_bible import WorldBible
 from src.services.image_generator import ImageGenerator
 from src.services.reference_search import ReferenceImageSearch
+from src.services.scene_objects import public_objects
 from loguru import logger
 
 if TYPE_CHECKING:
@@ -462,6 +463,7 @@ class AssetManager:
                 "background_path_cached": location.background_image_path,
                 "walkable_bounds": location.walkable_bounds,
                 "obstacles": location.obstacles or [],
+                "objects": public_objects(location.objects),
                 "player": {
                     "id": player_id,
                     "name": player.name,
@@ -537,6 +539,7 @@ class AssetManager:
             "background_path": background_path,
             "walkable_bounds": scene["walkable_bounds"],
             "obstacles": scene["obstacles"],
+            "objects": scene["objects"],
             "player": scene["player"],
             "npcs": scene["npcs"],
             "pending": pending,

@@ -10,6 +10,10 @@ from src.models import (
     LocationType,
     get_session,
 )
+from src.services.scene_objects import normalize_objects
+
+# `objects` is written by an LLM and normalised by code on the way in: unknown
+# kinds are dropped, coordinates clamped, and every stat/effect stripped.
 
 
 @tool
@@ -30,6 +34,7 @@ def add_location(
     controlling_faction_id: str | None = None,
     atmosphere_tags: list[str] | None = None,
     discovered: bool = False,
+    objects: list[dict] | None = None,
 ) -> dict[str, Any]:
     """Add a new location to the world.
 
@@ -50,10 +55,16 @@ def add_location(
         controlling_faction_id: ID of faction controlling this location.
         atmosphere_tags: List of atmosphere tags (e.g., ["dangerous", "wealthy"]).
         discovered: Whether the location is already discovered.
+        objects: 0-3 canvas interactables. Each is
+            {"kind": "take"|"read"|"open"|"search", "label": str,
+             "x": 0-100, "y": 0-100, "payload": {...}}.
+            See the SCENE OBJECTS section of your instructions for the exact
+            payload per kind. Invalid entries are dropped by the engine.
 
     Returns:
         Dictionary with the created location's details.
     """
+    normalized_objects = normalize_objects(objects)
     with get_session() as session:
         location = Location(
             name=name,
@@ -72,6 +83,7 @@ def add_location(
             atmosphere_tags=atmosphere_tags or [],
             visited=False,
             discovered=discovered,
+            objects=normalized_objects or None,
         )
         session.add(location)
         session.commit()
@@ -100,6 +112,7 @@ def add_location(
             "type": location.type.value,
             "parent_id": location.parent_id,
             "position": {"x": location.position_x, "y": location.position_y},
+            "objects": len(normalized_objects),
         }
 
 
@@ -124,6 +137,7 @@ def update_location(
     discovered: bool | None = None,
     visited: bool | None = None,
     parent_id: str | None = None,
+    objects: list[dict] | None = None,
 ) -> dict[str, Any]:
     """Update an existing location's details.
 
@@ -146,6 +160,12 @@ def update_location(
         current_state: State of location (peaceful, under_siege, destroyed).
         discovered: Whether location is discovered.
         visited: Whether location has been visited.
+        parent_id: New parent location ID.
+        objects: Replaces the location's canvas interactables (0-3). Each is
+            {"kind": "take"|"read"|"open"|"search", "label": str,
+             "x": 0-100, "y": 0-100, "payload": {...}}.
+            See the SCENE OBJECTS section of your instructions for the exact
+            payload per kind. Invalid entries are dropped by the engine.
 
     Returns:
         Dictionary with the updated location's details.
@@ -191,6 +211,8 @@ def update_location(
             location.visited = visited
         if parent_id is not None:
             location.parent_id = parent_id
+        if objects is not None:
+            location.objects = normalize_objects(objects) or None
 
         session.commit()
 
@@ -199,6 +221,7 @@ def update_location(
             "name": location.name,
             "type": location.type.value,
             "position": {"x": location.position_x, "y": location.position_y},
+            "objects": len(location.objects or []),
             "updated": True,
         }
 

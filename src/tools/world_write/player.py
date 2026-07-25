@@ -10,6 +10,7 @@ from src.models import (
     Player,
     get_session,
 )
+from src.services import progression as prog
 from src.services.travel import check_route
 
 
@@ -213,6 +214,9 @@ def add_to_inventory(
     value: int = 0,
     quantity: int = 1,
     effects: dict[str, Any] | None = None,
+    slot: str | None = None,
+    tier: str | None = None,
+    effect_tag: str | None = None,
 ) -> dict[str, Any]:
     """Add an item to the player's inventory (found, gifted, looted, stolen).
 
@@ -223,9 +227,15 @@ def add_to_inventory(
         item_name: Display name of the item (e.g., "Rusty Key").
         item_type: One of: consumable, weapon, armor, quest_item, misc.
         description: Short description of the item.
-        value: Base value in currency.
+        value: Base value in currency. Ignored for gear and potions — the
+            engine prices those from their tier.
         quantity: How many to add.
         effects: Optional effects when used (e.g., {"heal": 30}).
+        slot: If this is gear: "weapon", "armor" or "trinket". Requires tier.
+        tier: Gear quality — "crude", "common", "fine", "superior", "master",
+            "legendary". You pick the word; the engine sets the numbers.
+        effect_tag: If this is a potion or draught: "heal_light", "heal_strong"
+            or "surge". The engine owns what it does and what it costs.
 
     Returns:
         Dictionary with result.
@@ -243,22 +253,40 @@ def add_to_inventory(
                 entry["quantity"] = entry.get("quantity", 1) + quantity
                 break
         else:
-            inventory.append(
-                Item(
-                    id=item_id,
-                    name=item_name,
-                    type=item_type,
-                    value=value,
-                    description=description,
-                    effects=effects or {},
-                    quantity=quantity,
-                ).to_dict()
+            item = Item(
+                id=item_id,
+                name=item_name,
+                type=item_type,
+                value=value,
+                description=description,
+                effects=effects or {},
+                quantity=quantity,
+                slot=slot,
+                tier=tier,
+                effect_tag=effect_tag,
             )
+            # Anything mechanical is priced by the table, not by the fiction
+            price = prog.catalog_price(item.to_dict())
+            if price is not None:
+                item.value = price
+            inventory.append(item.to_dict())
 
         player.inventory = inventory
+
+        # Auto-equip: a sword that sits in the bag doing nothing is a bug
+        # report. Only into an EMPTY slot — code never swaps worn gear.
+        auto = prog.auto_equip(session, player, item_id)
         session.commit()
 
-        return {"success": True, "item": item_name, "quantity_added": quantity, "inventory_size": len(inventory)}
+        result = {
+            "success": True,
+            "item": item_name,
+            "quantity_added": quantity,
+            "inventory_size": len(inventory),
+        }
+        if auto:
+            result["auto_equipped"] = auto.get("item_name")
+        return result
 
 
 @tool

@@ -9,11 +9,16 @@ from src.models import (
     WorldClock,
     get_session,
 )
+from src.services import progression as prog
 
 
 @tool
 def get_player(player_id: str) -> dict[str, Any]:
     """Get player character details.
+
+    `equipped` is what they are actually wearing and wielding right now, with
+    the quality of each piece. `level` is how far they have come — you may
+    feel it in the fiction, but never say the word or the number.
 
     Args:
         player_id: The player's ID.
@@ -26,6 +31,8 @@ def get_player(player_id: str) -> dict[str, Any]:
         if not player:
             return {"error": "Player not found"}
 
+        # NOTE: xp is deliberately absent. The DM has no business narrating an
+        # experience total, so it never gets to see one.
         return {
             "id": player.id,
             "name": player.name,
@@ -33,6 +40,8 @@ def get_player(player_id: str) -> dict[str, Any]:
             "background": player.background,
             "traits": player.traits,
             "health_status": player.health_status,
+            "level": prog.player_level(player),
+            "equipped": prog.equipped_labels(player),
             "inventory": player.inventory,
             "active_quests": player.active_quests,
             "party_members": player.party_members,

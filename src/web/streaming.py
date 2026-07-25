@@ -197,6 +197,16 @@ class ToolUsageTracker:
                 if isinstance(content_block, dict) and "text" in content_block:
                     self._parse_tool_output_for_events(content_block.get("text", "{}"))
 
+    _CINE_FIELDS = ("kind", "title", "subtitle", "npc_id", "mood", "duration_ms")
+
+    def _push_cinematic(self, data: Any) -> None:
+        """Queue a `cinematic` notification from a validated payload dict."""
+        if not isinstance(data, dict) or not data.get("kind"):
+            return
+        note: dict[str, Any] = {"type": "cinematic"}
+        note.update({key: data.get(key) for key in self._CINE_FIELDS})
+        self._notifications.append(note)
+
     def _parse_tool_output_for_events(self, text_value: str) -> None:
         """Parse tool output text for special game events like NPC death."""
         try:
@@ -209,6 +219,12 @@ class ToolUsageTracker:
 
             if not isinstance(output_data, dict):
                 return
+
+            # A cinematic can ride along on ANY tool result (start_combat
+            # carries the boss intro, campaign ops carry title cards). Pushed
+            # BEFORE the tool's own event so the client can defer whatever that
+            # event triggers — the boss intro must land ahead of combat_start.
+            self._push_cinematic(output_data.get("cinematic"))
 
             event = output_data.get("event")
 
@@ -252,12 +268,50 @@ class ToolUsageTracker:
                 })
 
             # Real-time combat kickoff (start_combat) — frontend spawns
-            # the enemies and locks the room
+            # the enemies and locks the room. Per-enemy tier/params/boss and
+            # the top-level boss object travel through untouched: the server
+            # resolved them, the client never recomputes.
             elif event == "combat_start":
                 self._notifications.append({
                     "type": "combat_start",
                     "enemies": output_data.get("enemies") or [],
+                    "boss": output_data.get("boss"),
                 })
+
+            # Skill check outcome (roll_check) — labels only, never numbers
+            elif event == "check_result":
+                self._notifications.append({
+                    "type": "check_result",
+                    "outcome": output_data.get("outcome"),
+                    "skill": output_data.get("skill"),
+                })
+
+            # Cinematic moment (play_cinematic's own result)
+            elif event == "cinematic":
+                self._push_cinematic(output_data)
+
+            # Progression rides ALONGSIDE the event, not instead of it — a
+            # quest completion carries both `event: "quest_completed"` and a
+            # `progression` block, so this runs after the chain, not inside it.
+            progression = output_data.get("progression")
+            if isinstance(progression, dict) and progression.get("xp_gained"):
+                self._notifications.append({
+                    "type": "xp_gain",
+                    "amount": progression.get("xp_gained"),
+                    "source": progression.get("source"),
+                    "xp": progression.get("xp"),
+                    "level": progression.get("level"),
+                    "xp_into_level": progression.get("xp_into_level"),
+                    "xp_for_level": progression.get("xp_for_level"),
+                })
+                if progression.get("leveled_up"):
+                    self._notifications.append({
+                        "type": "level_up",
+                        "level": progression.get("level"),
+                        "previous_level": progression.get("previous_level"),
+                        "unlocked": progression.get("unlocked") or [],
+                        "stats": progression.get("stats") or {},
+                    })
         except (json.JSONDecodeError, TypeError, ValueError, SyntaxError):
             pass  # Not parseable as dict, ignore
 

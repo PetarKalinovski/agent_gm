@@ -1002,3 +1002,28 @@ def test_ensure_campaign_marks_failure_and_the_world_plays_on(world):
     assert _campaign_row(world["player"]).generation_error == "model said no"
     assert camp.run_campaign_tick(world["player"]) == {}
     assert camp.campaign_state(world["player"]) is None
+
+
+# ----------------------------------------------------------------------
+# The read tool (there is deliberately no write tool)
+# ----------------------------------------------------------------------
+
+
+def test_get_campaign_tool_hands_the_dm_the_dm_view(world):
+    from src.tools.world_read.campaign import get_campaign
+
+    camp.persist_campaign(world["player"], _payload(world))
+    assert get_campaign(world["player"]) == camp.campaign_dm_view(world["player"])
+
+
+def test_get_campaign_tool_is_quiet_without_a_campaign(world):
+    from src.tools.world_read.campaign import get_campaign
+
+    assert get_campaign(world["player"]) == {"campaign": None}
+
+
+def test_no_campaign_write_tool_exists():
+    """The DM physically cannot author or alter a beat, a truth or an act."""
+    import src.tools.world_write as ww
+
+    assert not [name for name in ww.__all__ if "campaign" in name.lower()]
