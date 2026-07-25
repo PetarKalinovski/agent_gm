@@ -24,3 +24,7 @@ class Quest(Base):
     objectives: Mapped[list] = mapped_column(JSON, default=list)  # List of objectives
     rewards: Mapped[dict] = mapped_column(JSON, default=dict)  # e
     assigned_by_npc_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("npcs.id"), nullable=True)
+
+    # Effort scale — a LABEL. Code maps it to XP. NULL reads as "job".
+    scale: Mapped[str | None] = mapped_column(String(20), nullable=True, default=None)
+    # errand | job | mission | saga

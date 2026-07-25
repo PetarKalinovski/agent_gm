@@ -19,6 +19,11 @@ class Item(BaseModel):
     stackable: bool = Field(True, description="Whether multiple can stack in one inventory slot")
     quantity: int = Field(1, description="Quantity in inventory", ge=0)
 
+    # --- Mechanical fields (all optional; legacy items have none) ---
+    slot: str | None = Field(None, description="weapon | armor | trinket — equippable if set")
+    tier: str | None = Field(None, description="crude|common|fine|superior|master|legendary")
+    effect_tag: str | None = Field(None, description="heal_light | heal_strong | surge")
+
     class Config:
         """Pydantic config."""
         json_schema_extra = {

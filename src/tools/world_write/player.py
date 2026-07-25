@@ -5,12 +5,12 @@ from typing import Any
 from strands import tool
 
 from src.models import (
-    Connection,
     Item,
     Location,
     Player,
     get_session,
 )
+from src.services.travel import check_route
 
 
 def _normalize_inventory(raw: list) -> list[dict[str, Any]]:
@@ -57,64 +57,35 @@ def move_player(player_id: str, destination_id: str, requirements_met: bool = Fa
         if not destination:
             return {"error": "Destination not found"}
 
-        # Find the connection to determine travel time
-        old_location_id = player.current_location_id
-        travel_time = 0.5  # Default
+        # One shared route check with the canvas (src/services/travel.py):
+        # a direct connection's requirements, plus the gate-bypass guard
+        # that stops a hierarchy hop from walking around a locked gate
+        route = check_route(session, player.current_location_id, destination_id)
+        travel_time = route["travel_time_hours"]
+        requirements = route["requirements"]
 
-        if old_location_id:
-            conn = session.query(Connection).filter(
-                ((Connection.from_location_id == old_location_id) & (Connection.to_location_id == destination_id)) |
-                ((Connection.from_location_id == destination_id) & (Connection.to_location_id == old_location_id) & (Connection.bidirectional == True))
-            ).first()
-
-            if conn:
-                travel_time = conn.travel_time_hours
-
-                # Enforce route requirements
-                requirements = conn.requirements or []
-                if requirements and not requirements_met:
-                    return {
-                        "blocked": True,
-                        "destination": destination.name,
-                        "requirements": requirements,
-                        "message": (
-                            "This route has requirements the player must satisfy: "
-                            f"{', '.join(str(r) for r in requirements)}. "
-                            "Check the player's inventory/state; if satisfied, call move_player "
-                            "again with requirements_met=True. Otherwise narrate why they can't pass."
-                        ),
-                    }
+        if route["blocked"] and not requirements_met:
+            if route["reason"] == "gate":
+                message = (
+                    f"{destination.name} is behind a controlled route: "
+                    f"{', '.join(str(r) for r in requirements)}. There is no way "
+                    "around it. Check the player's inventory/state; if satisfied, call "
+                    "move_player again with requirements_met=True. Otherwise narrate "
+                    "why they can't get through."
+                )
             else:
-                if destination.parent_id == old_location_id or old_location_id == destination.parent_id:
-                    # Entering/exiting a building
-                    travel_time = 0.1
-
-                # Gate-bypass guard: when EVERY modeled route INTO the
-                # destination (edges authored toward it) is requirement-
-                # locked, approaching it via the location hierarchy or an
-                # unmodeled path is locked too (playtest: square -> town
-                # container -> gated hollow walked around the north gate).
-                # One open route in = public place. Only to-side edges count:
-                # a hub whose one locked road leads OUT must not inherit the
-                # lock through a bidirectional edge.
-                if not requirements_met:
-                    entries = session.query(Connection).filter(
-                        Connection.to_location_id == destination_id
-                    ).all()
-                    gate_requirements = [r for c in entries for r in (c.requirements or [])]
-                    if entries and gate_requirements and all(c.requirements for c in entries):
-                        return {
-                            "blocked": True,
-                            "destination": destination.name,
-                            "requirements": gate_requirements,
-                            "message": (
-                                f"{destination.name} is behind a controlled route: "
-                                f"{', '.join(str(r) for r in gate_requirements)}. There is no way "
-                                "around it. Check the player's inventory/state; if satisfied, call "
-                                "move_player again with requirements_met=True. Otherwise narrate "
-                                "why they can't get through."
-                            ),
-                        }
+                message = (
+                    "This route has requirements the player must satisfy: "
+                    f"{', '.join(str(r) for r in requirements)}. "
+                    "Check the player's inventory/state; if satisfied, call move_player "
+                    "again with requirements_met=True. Otherwise narrate why they can't pass."
+                )
+            return {
+                "blocked": True,
+                "destination": destination.name,
+                "requirements": requirements,
+                "message": message,
+            }
 
         # Update player location and mark destination visited — one transaction
         player.current_location_id = destination_id

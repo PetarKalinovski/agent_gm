@@ -5,10 +5,20 @@ from src.models.location import Location, LocationType, Connection
 from src.models.npc import NPC, NPCTier
 from src.models.faction import Faction, FactionRelationship
 from src.models.player import Player
-from src.models.world_state import WorldClock, NPCRelationship, Event, Message, DMState
+from src.models.world_state import Cinematic, WorldClock, NPCRelationship, Event, Message, DMState
 from src.models.item import Item
 from src.models.quests import Quest, QuestStatus
 from src.models.world_bible import WorldBible, HistoricalEvent
+from src.models.campaign import (
+    Campaign,
+    StoryBeat,
+    BEAT_TYPES,
+    TRUTH_KINDS,
+    TRIGGER_TYPES,
+    CINEMATIC_LABELS,
+    BEAT_STATUSES,
+    CAMPAIGN_STATUSES,
+)
 
 __all__ = [
     "Base",
@@ -29,9 +39,18 @@ __all__ = [
     "Event",
     "Message",
     "DMState",
+    "Cinematic",
     "Item",
     "Quest",
     "QuestStatus",
     "WorldBible",
     "HistoricalEvent",
+    "Campaign",
+    "StoryBeat",
+    "BEAT_TYPES",
+    "TRUTH_KINDS",
+    "TRIGGER_TYPES",
+    "CINEMATIC_LABELS",
+    "BEAT_STATUSES",
+    "CAMPAIGN_STATUSES",
 ]

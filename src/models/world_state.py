@@ -164,8 +164,40 @@ class DMState(Base):
     # Last in-game day the offscreen world simulation ran (one turn per day)
     last_world_turn_day: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
+    # Persistent weather label (rain|snow|fog|embers|ash) — NULL/"clear" = none.
+    # The frontend restores it on reload and on scene change from the state event.
+    weather: Mapped[str | None] = mapped_column(String(30), nullable=True)
+
     def __repr__(self) -> str:
         return f"<DMState(arc={self.current_arc!r}, tension={self.tension})>"
+
+
+class Cinematic(Base):
+    """Ledger of played/rejected cinematics + queue for deferred ones.
+
+    Cooldown enforcement reads this table; it is the only reason cinematics
+    stay rare across page reloads and server restarts.
+    """
+    __tablename__ = "cinematics"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    player_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    kind: Mapped[str] = mapped_column(String(30), nullable=False)          # title_card | boss_intro | vision | weather
+    dedupe_key: Mapped[str | None] = mapped_column(String(120), nullable=True)  # npc_id | slug(title) | weather label
+    title: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    subtitle: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    npc_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    mood: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    source: Mapped[str] = mapped_column(String(20), default="dm")          # dm | auto | campaign
+    status: Mapped[str] = mapped_column(String(20), default="played")      # played | pending | rejected
+    reject_reason: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    game_day: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    game_hour: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    game_minute: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    def __repr__(self) -> str:
+        return f"<Cinematic(kind={self.kind}, status={self.status}, key={self.dedupe_key!r})>"
 
 
 class Message(Base):

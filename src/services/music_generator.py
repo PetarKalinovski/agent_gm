@@ -34,6 +34,9 @@ MOODS: dict[str, str] = {
     "somber": "grief, loss, mourning, sparse and quiet",
     "night": "nocturnal, mysterious, calm ambient, moonlit",
     "triumph": "victorious, hopeful, soaring resolution",
+    # Boss entrances, act openings, the finale — bigger than "danger", the
+    # sound of a moment the story has been building toward
+    "epic": "monumental, heroic, choir and low brass, slow relentless build, immense",
 }
 
 SUNO_BASE_URL = "https://api.sunoapi.org"

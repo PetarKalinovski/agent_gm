@@ -104,6 +104,17 @@ class Location(Base):
     # of [x, y] points in normalized 0-100 scene coordinates. Auto-detected
     # from the background image; editable with the in-game collision editor.
     obstacles: Mapped[list | None] = mapped_column(JSON, nullable=True)
+
+    # Canvas interactables: list of dicts, see src/services/scene_objects.py
+    # {"id","kind","label","x","y","payload","consumed"} — normalized 0-100 coords
+    objects: Mapped[list | None] = mapped_column(JSON, nullable=True)
+
+    # Pre-generated ambient one-liners for this scene (no TTS, no DM)
+    # [{"npc_id": str|None, "text": str}, ...]
+    ambient_barks: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    # {"signature": str, "day": int, "hour": int} — staleness bookkeeping
+    ambient_barks_meta: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
     reference_search_query: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
     # Relationships

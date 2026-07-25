@@ -60,9 +60,19 @@ class NPC(Base):
     # TTS voice (ElevenLabs voice ID, auto-assigned on first spoken line)
     voice_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
 
-    # Real-time combat archetype ("brute", "skirmisher", "stalker") — set by
-    # authors/the DM; NULL means infer from description at fight time
+    # Real-time combat archetype ("brute", "skirmisher", "stalker", "ranged") —
+    # set by authors/the DM; NULL means infer from description at fight time
     combat_archetype: Mapped[str | None] = mapped_column(String(50), nullable=True)
+
+    # Absolute danger rung ("harmless" | "weak" | "standard" | "dangerous"
+    # | "deadly" | "boss"). NEVER scaled to the player. NULL = infer from
+    # profession/description at fight time. "boss" is authored-only.
+    danger_tier: Mapped[str | None] = mapped_column(String(20), nullable=True)
+
+    # Display epithet for a boss ("Warden of the Ashen Gate") — used as the
+    # intro subtitle and boss-bar title, falling back to profession. It is a
+    # label only: danger_tier == "boss" is the single boss flag.
+    boss_title: Mapped[str | None] = mapped_column(String(120), nullable=True)
 
     # Goals and secrets
     goals: Mapped[list] = mapped_column(JSON, default=list)

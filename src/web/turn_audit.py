@@ -8,7 +8,10 @@ catches what slips through — warnings are logged and attached to the
 `complete` SSE event so self-playtests get a scoreboard.
 
 High-precision checks only: a false alarm every turn would train everyone
-to ignore the audit.
+to ignore the audit. Mutations the ENGINE performed between turns (canvas
+travel, pickups, potions, combat results, campaign beat ops) arrive as
+`code_actions` and are unioned into the succeeded tool set — one mechanism,
+every check corrected at once.
 """
 
 import re
@@ -114,6 +117,78 @@ _LABEL_QUOTE = re.compile(
     r"[\"“](?P<quote>[^\"”“\n]{8,400})[\"”]"
 )
 
+# Risky actions the DM resolved in the player's favour without asking the
+# engine. Fires only on RESOLUTION phrases (the attempt succeeded), never on
+# attempts — the whole point of roll_check is that the dice decide.
+_RISK_RESOLUTION = re.compile(
+    r"\byou\b[^.!?\n]{0,40}\b(?:"
+    r"slip past|sneak past|slip by|slip inside|go unnoticed|remain unseen|"
+    r"are not seen|pass unnoticed|"
+    r"manage to (?:convince|persuade|talk|climb|pry|force|pick|slip|reach)|"
+    r"pick the lock|force the lock|jimmy the|"
+    r"scale the|haul yourself (?:up|over)|clear the (?:wall|gap|fence)|"
+    r"convince(?!\s+yourself)|persuade(?!\s+yourself)|"
+    r"talk (?:him|her|them|it) (?:into|down|around|out of)|"
+    r"pickpocket|lift the (?:purse|key|coin|pouch)|"
+    r"catch the (?:glint|movement|flicker)|spot the (?:tripwire|ambush|trap)"
+    r")\b",
+    re.IGNORECASE,
+)
+# A live fight exempts the turn: combat resolves on the canvas and its prose
+# legitimately describes closing distance, dodging, and landing blows.
+_RISK_EXEMPT_TOOLS = {"roll_check", "start_combat"}
+
+# Engine mechanics printed as prose — numbers next to xp/level/HP/damage, and
+# the bare vocabulary itself ("level up", "XP", "you feel stronger"). Growth is
+# invisible: even a REAL level-up may not be narrated in mechanical language,
+# so this one fires regardless of code_actions.
+_MECHANICS_IN_NARRATION = re.compile(
+    r"(?:"
+    r"\b\+?\d+\s*(?:xp|exp|experience|hit\s*points?|damage|hp)\b"
+    r"|\b(?:hp|health)\s*[:\-]?\s*\d+"
+    r"|\blevel(?:led|ed)?\s*(?:up)?\s*\d+"
+    r"|\breach(?:ed|es)\s+level\s+\d+"
+    r"|\byou\s+are\s+now\s+level\b"
+    r"|\blevel(?:ed)?\s*up\b"
+    r"|\bgain(?:ed)?\s+(?:a\s+)?level\b"
+    r"|\bexperience\s+points?\b"
+    r"|\bxp\b"
+    r"|\byou\s+feel\s+(?:stronger|more\s+experienced)\b"
+    r")",
+    re.IGNORECASE,
+)
+
+# The DM typing the card instead of playing it (especially after a rejected
+# play_cinematic). Literal-string precise: ordinary fantasy prose cannot trip it.
+_CINEMATIC_TEXT_CLAIM = re.compile(
+    r"(?m)(?:^\s*(?:ACT|CHAPTER|PART|EPISODE)\s+(?:[IVXL]+|\d+|ONE|TWO|THREE|FOUR|FIVE)\b"
+    r"|\btitle card\b|\bcut to black\b|\bfade to black\b|\bletterbox\b"
+    r"|\bthe screen (?:goes|fades|shakes)\b)",
+    re.IGNORECASE,
+)
+
+# Category labels some callers use instead of tool names (campaign beat ops,
+# combat results). Translated to the tools the engine actually ran so the one
+# suppression mechanism stays "union into succeeded".
+CODE_ACTION_TOOLS = {
+    "quest": {"activate_quest", "update_quest_status"},
+    "item": {"add_to_inventory"},
+    "consequence": {"create_event"},
+    "health": {"update_player_health"},
+    "arrival": {"move_player"},
+}
+
+
+def _expand_code_actions(code_actions: set[str] | None) -> set[str]:
+    """Tool names the engine ran, with category labels translated."""
+    names: set[str] = set()
+    for action in code_actions or ():
+        if not action:
+            continue
+        names.add(action)
+        names |= CODE_ACTION_TOOLS.get(action, set())
+    return names
+
 
 def _speaker_is_person(speaker: str) -> bool:
     tokens = speaker.strip().split()
@@ -162,8 +237,19 @@ def audit_turn(
     tools: list[dict[str, Any]],
     state_before: dict[str, Any] | None,
     state_after: dict[str, Any] | None,
+    *,
+    code_actions: set[str] | None = None,
+    campaign: dict[str, Any] | None = None,
 ) -> list[dict[str, str]]:
     """Compare what the narration claims against what actually happened.
+
+    code_actions: tool names (or the category labels in CODE_ACTION_TOOLS)
+        the ENGINE executed on the player's behalf between turns — canvas
+        travel and pickups, potions, equips, combat results, campaign beat
+        ops. They are unioned into the succeeded set: the DM may legitimately
+        narrate their consequences without having called them.
+    campaign: {"beat": {...} | None, "sealed_truths": [...]} — when present,
+        the two campaign checks run.
 
     Returns a list of {check, detail} warnings (empty = clean turn).
     """
@@ -175,7 +261,7 @@ def audit_turn(
         t.get("name")
         for t in (tools or [])
         if t.get("status") == "success" and t.get("name")
-    }
+    } | _expand_code_actions(code_actions)
     before = state_before or {}
     after = state_after or {}
 
@@ -249,6 +335,75 @@ def audit_turn(
                 "not the character."
             ),
         })
+
+    # The DM decided an uncertain outcome itself instead of asking the engine.
+    # This is the check that kills "everything is negotiable".
+    if _RISK_RESOLUTION.search(turn_text) and not (succeeded & _RISK_EXEMPT_TOOLS):
+        warnings.append({
+            "check": "risky_action_without_check",
+            "detail": (
+                "Narration resolves a risky action (sneaking, persuading, climbing, "
+                "lock-picking, spotting) in the player's favour without calling "
+                "roll_check. You decided an uncertain outcome yourself — the engine "
+                "decides those. Call roll_check BEFORE narrating whether it worked."
+            ),
+        })
+
+    # Fires even on a legitimate level-up: the numbers are never the player's
+    if _MECHANICS_IN_NARRATION.search(turn_text):
+        warnings.append({
+            "check": "mechanics_in_narration",
+            "detail": (
+                "Narration printed engine mechanics (experience, levels, hit points, "
+                "damage numbers). Progression is engine-owned and invisible: never "
+                "write 'level', 'XP', 'experience points', 'you feel stronger', or a "
+                "number of damage. If the engine told you the character grew, show it "
+                "in the fiction — how they carry themselves, what they no longer "
+                "flinch at."
+            ),
+        })
+
+    # Printing screen directions is always wrong, played cinematic or not
+    if _CINEMATIC_TEXT_CLAIM.search(turn_text):
+        warnings.append({
+            "check": "cinematic_text_in_narration",
+            "detail": (
+                "Narration prints a cinematic instead of playing one (act/chapter "
+                "heading, 'title card', 'cut to black', or screen directions). The "
+                "screen is the engine's job: call play_cinematic for the effect and "
+                "write only the fiction. If the tool was rejected, narrate the "
+                "moment in prose without describing the screen."
+            ),
+        })
+
+    # Campaign checks — high precision by construction: they only run when a
+    # campaign exists, and the truth check needs EVERY spoiler keyword present
+    if campaign:
+        lowered = turn_text.lower()
+        beat = campaign.get("beat") or {}
+        keywords = [str(k) for k in (beat.get("delivery_keywords") or []) if k]
+        if keywords and not any(k.lower() in lowered for k in keywords):
+            title = beat.get("title") or "untitled beat"
+            warnings.append({
+                "check": "campaign_beat_not_delivered",
+                "detail": (
+                    f"The engine gave you a MUST-DELIVER story beat this turn ('{title}') "
+                    "and the world has already changed for it, but your narration never "
+                    "mentioned it. Deliver it in your NEXT response before anything else."
+                ),
+            })
+        for truth in campaign.get("sealed_truths") or []:
+            spoilers = [str(k) for k in (truth.get("spoiler_keywords") or []) if k]
+            if len(spoilers) >= 2 and all(k.lower() in lowered for k in spoilers):
+                warnings.append({
+                    "check": "campaign_truth_frontrun",
+                    "detail": (
+                        "Your narration is leaking a SEALED story truth the player has "
+                        "not earned. Stop hinting at it — it is revealed by a beat, on "
+                        "schedule, not by you."
+                    ),
+                })
+                break
 
     return warnings
 

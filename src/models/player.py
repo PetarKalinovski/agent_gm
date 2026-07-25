@@ -58,6 +58,18 @@ class Player(Base):
     active_quests: Mapped[list] = mapped_column(JSON, default=list)
     completed_quests: Mapped[list] = mapped_column(JSON, default=list)
 
+    # --- Progression (nullable: existing rows read as level 1 / 0 xp) ---
+    level: Mapped[int | None] = mapped_column(Integer, nullable=True, default=1)
+    xp: Mapped[int | None] = mapped_column(Integer, nullable=True, default=0)
+
+    # Equipped item ids, pointing INTO Player.inventory (items are never moved
+    # out of the bag — every existing inventory code path keeps working).
+    # {"weapon": "iron_sword" | null, "armor": ..., "trinket": ...}
+    equipment: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=dict)
+
+    # Item id bound to the Q hotkey (canvas quick-use)
+    quick_slot_item_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
     # Relationships
     current_location: Mapped["Location | None"] = relationship("Location")
 

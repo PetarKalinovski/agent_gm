@@ -31,6 +31,25 @@ class GameConfig(BaseModel):
     recent_messages_limit: int = 10
     summary_trigger_threshold: int = 20
 
+    # Ambient scene chatter — one background LLM call per location, cached
+    # in the DB and reused until the pool goes stale
+    barks_enabled: bool = True
+    bark_pool_size: int = 10
+    bark_refresh_hours: int = 12  # in-game hours before a pool goes stale
+
+
+class CampaignConfig(BaseModel):
+    """Campaign spine — the authored story generated per player character."""
+    enabled: bool = True
+    # Generate a campaign for an existing character that has none, on their
+    # first turn (background thread; the turn is never blocked)
+    auto_generate_on_first_turn: bool = True
+    acts: int = 3
+    beats_min: int = 9
+    beats_max: int = 15
+    deadline_clocks_min: int = 2
+    deadline_clocks_max: int = 3
+
 
 class DatabaseConfig(BaseModel):
     """Database configuration."""
@@ -121,6 +140,7 @@ class Settings(BaseModel):
     """Full application settings."""
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)
     game: GameConfig = Field(default_factory=GameConfig)
+    campaign: CampaignConfig = Field(default_factory=CampaignConfig)
     api: ApiConfig = Field(default_factory=ApiConfig)
     display: DisplayConfig = Field(default_factory=DisplayConfig)
     image_generation: ImageGenerationConfig = Field(default_factory=ImageGenerationConfig)

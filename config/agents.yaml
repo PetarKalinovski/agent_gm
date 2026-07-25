@@ -50,6 +50,20 @@ agents:
     max_tokens: 512
     description: "Summarizes recent play into a short resume-session recap"
 
+  # Campaign spine — ONE call at character creation, in the background
+  campaign_forge:
+    model: "openrouter/deepseek/deepseek-v3.2"
+    temperature: 0.85
+    max_tokens: 8192
+    description: "Authors the three-act campaign, fixed truths, and story beats for a new character"
+
+  # Ambient scene chatter — one background call per location, cached in the DB
+  bark:
+    model: "openrouter/deepseek/deepseek-v3.2"
+    temperature: 0.9
+    max_tokens: 600
+    description: "Generates a pool of ambient one-liners for a location"
+
   # World Forge agents
   world_forge:
     model: "openrouter/deepseek/deepseek-v3.2"

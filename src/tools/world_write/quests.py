@@ -6,6 +6,7 @@ from src.models.base import get_session
 from src.models.quests import Quest, QuestStatus
 from src.models.player import Player
 from src.models.item import Item
+from src.services.progression import grant_xp, strip_authored_xp, xp_for_quest
 from src.tools.world_write.player import _normalize_inventory
 
 
@@ -35,6 +36,8 @@ def _sync_player_quest_lists(player, quest_id: str, status: str) -> None:
 def _apply_rewards(session, player, rewards: dict) -> list[str]:
     """Apply quest rewards to the player. Returns human-readable summary lines."""
     applied = []
+    # The DM authors quest rewards. XP is NOT theirs to author — strip and log.
+    rewards = strip_authored_xp(rewards)
     if not rewards or not player:
         return applied
 
@@ -81,6 +84,38 @@ def _apply_rewards(session, player, rewards: dict) -> list[str]:
         player.reputation = rep
 
     return applied
+
+
+def _complete_quest(session, quest, player) -> dict:
+    """Complete a quest exactly once: status flip, list sync, rewards, XP.
+
+    The ONE completion path. Both the DM tool (`update_quest_status`) and the
+    campaign engine's `complete_quest` beat op call it, so an engine-driven
+    completion pays identical rewards and identical XP (integration doc R12).
+
+    Mutates inside the CALLER'S open transaction and never commits — rewards
+    and the XP grant must land or roll back together.
+
+    Returns {"already_completed", "rewards_applied", "progression"}.
+    """
+    if quest.status == QuestStatus.COMPLETED:
+        # Idempotence: a retried completion must not pay twice
+        return {"already_completed": True, "rewards_applied": [], "progression": {}}
+
+    quest.status = QuestStatus.COMPLETED
+
+    rewards_applied: list[str] = []
+    progression: dict = {}
+    if player:
+        _sync_player_quest_lists(player, quest.id, QuestStatus.COMPLETED)
+        rewards_applied = _apply_rewards(session, player, quest.rewards or {})
+        progression = grant_xp(session, player, xp_for_quest(quest), "quest")
+
+    return {
+        "already_completed": False,
+        "rewards_applied": rewards_applied,
+        "progression": progression,
+    }
 
 
 @tool
@@ -156,16 +191,19 @@ def update_quest_status(quest_id: str, status: str) -> dict:
         if not quest:
             return {"error": f"Quest {quest_id} not found"}
 
-        quest.status = status
-
-        # Keep the player's quest lists in sync, and apply rewards on
+        # Keep the player's quest lists in sync, and apply rewards + XP on
         # completion — in the same transaction
         rewards_applied = []
+        progression = {}
         player = _get_player(session)
-        if player:
-            _sync_player_quest_lists(player, quest.id, status)
-            if status == QuestStatus.COMPLETED:
-                rewards_applied = _apply_rewards(session, player, quest.rewards or {})
+        if status == QuestStatus.COMPLETED:
+            outcome = _complete_quest(session, quest, player)
+            rewards_applied = outcome["rewards_applied"]
+            progression = outcome["progression"]
+        else:
+            quest.status = status
+            if player:
+                _sync_player_quest_lists(player, quest.id, status)
 
         session.commit()
 
@@ -184,6 +222,9 @@ def update_quest_status(quest_id: str, status: str) -> dict:
         if rewards_applied:
             result["rewards_applied"] = rewards_applied
             result["message"] += f". Rewards applied: {', '.join(rewards_applied)} — narrate this to the player."
+        # Rides to the frontend as xp_gain / level_up — never narrated as numbers
+        if progression:
+            result["progression"] = progression
         return result
 
 

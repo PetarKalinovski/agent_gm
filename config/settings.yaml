@@ -21,6 +21,23 @@ game:
   # Trigger summary compression after this many messages with NPC
   summary_trigger_threshold: 20
 
+  # Ambient scene chatter (one background call per location, cached in the DB)
+  barks_enabled: true
+  bark_pool_size: 10
+  bark_refresh_hours: 12
+
+# Campaign spine — the authored story generated per player character
+campaign:
+  enabled: true
+  # Generate a campaign for an existing character that has none, on their
+  # first turn (runs in a background thread; the turn is never blocked)
+  auto_generate_on_first_turn: true
+  acts: 3
+  beats_min: 9
+  beats_max: 15
+  deadline_clocks_min: 2
+  deadline_clocks_max: 3
+
 # API configuration (keys should be in environment variables)
 api:
   # Environment variable names for API keys

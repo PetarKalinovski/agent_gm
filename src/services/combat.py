@@ -13,14 +13,15 @@ Flow:
    aftermath (and the world reacts: reputation, events, consequences).
 """
 
+import re
 from typing import Any
 
 from loguru import logger
 
-from src.models import NPC, Event, Player, WorldClock, get_session
+from src.models import NPC, Event, NPCTier, Player, WorldClock, get_session
 from src.services.tension import apply_tension_floor
 
-ARCHETYPES = ("brute", "skirmisher", "stalker")
+ARCHETYPES = ("brute", "skirmisher", "stalker", "ranged")
 
 # Hits-taken → minimum health severity. Combat can only worsen health —
 # surviving a fight never heals you.
@@ -30,6 +31,14 @@ _HEALTH_ORDER = ["healthy", "winded", "hurt", "badly_hurt", "critical", "dead"]
 _BRUTE_WORDS = ("huge", "massive", "hulking", "brawn", "heavy", "giant", "bear", "ox", "broad")
 _STALKER_WORDS = ("stealth", "shadow", "hunter", "predator", "wolf", "cat", "silent", "ambush")
 
+# Fights from a distance. Word-boundary matched, unlike the lists above:
+# bare substrings would fire on "damage"/"image" ("mage") and "elbow" ("bow").
+_RANGED_RE = re.compile(
+    r"\b(?:archer|archery|bow|bowman|longbow|crossbow|sling|slinger|sniper|"
+    r"caster|spellcaster|mage|spitter|gunner|gunslinger|thrower|marksman|"
+    r"arrow|quiver|musket|rifle)\b"
+)
+
 
 def infer_archetype(npc: NPC) -> str:
     """Pick a combat archetype from the NPC's authored fields."""
@@ -38,11 +47,204 @@ def infer_archetype(npc: NPC) -> str:
     text = " ".join(
         filter(None, [npc.description_physical or "", npc.description_personality or "", npc.profession or ""])
     ).lower()
+    # The weapon wins over the body: a hulking archer still fights at range
+    if _RANGED_RE.search(text):
+        return "ranged"
     if any(w in text for w in _BRUTE_WORDS):
         return "brute"
     if any(w in text for w in _STALKER_WORDS):
         return "stalker"
     return "skirmisher"
+
+
+# ============================================================================
+# Danger tiers — the absolute ladder
+#
+# Danger is a property of the ENEMY, never of the player. Nothing below reads
+# player level, gear, or session time: a harmless beggar has 1 HP and deals 0
+# damage at level 1 and at level 40, and that invariance is the only thing
+# that makes growth legible. Python is authoritative — the resolved numbers
+# travel to the client inside combat_start; the JS table is a fallback only.
+# ============================================================================
+
+DANGER_TIERS = ("harmless", "weak", "standard", "dangerous", "deadly", "boss")
+
+# Shape of the fight. Times in ms, distances in normalized 0-100 scene units.
+ARCH_ROWS: dict[str, dict] = {
+    "brute":      {"hp_mul": 1.4, "speed": 4.8, "windup": 650, "lunge_dist": 10,
+                   "lunge_ms": 215, "recover": 800, "engage": 7,  "scale_mul": 1.12},
+    "skirmisher": {"hp_mul": 0.6, "speed": 8.5, "windup": 340, "lunge_dist": 8,
+                   "lunge_ms": 150, "recover": 430, "engage": 6,  "scale_mul": 0.95},
+    "stalker":    {"hp_mul": 0.8, "speed": 6.8, "windup": 280, "lunge_dist": 12,
+                   "lunge_ms": 140, "recover": 520, "engage": 9,  "scale_mul": 1.00,
+                   "circles": True},
+    "ranged":     {"hp_mul": 0.7, "speed": 6.0, "windup": 900, "lunge_dist": 0,
+                   "lunge_ms": 120, "recover": 900, "engage": 22, "scale_mul": 0.98,
+                   "ranged": True, "standoff": 14, "ring_radius": 9},
+}
+
+# Weight of the fight. The `standard` row reproduces today's shipped numbers
+# exactly (brute 7 / skirmisher 3 / stalker 4, windups 650/340/280), so a world
+# where every danger_tier is NULL plays identically to before the ladder.
+TIER_ROWS: dict[str, dict] = {
+    # hp is the REFERENCE hp (archetype hp_mul multiplies it, except boss).
+    # damage is in PLAYER HEARTS and is ABSOLUTE — it never scales.
+    "harmless":  {"hp": 1,  "damage": 0, "speed_mul": 0.55, "windup_mul": 1.00,
+                  "recover_mul": 1.00, "lunge_mul": 1.00, "scale_mul": 0.90,
+                  "stagger": 1200, "knock_mul": 1.6, "flees": True,  "xp": 0},
+    "weak":      {"hp": 3,  "damage": 1, "speed_mul": 0.88, "windup_mul": 1.30,
+                  "recover_mul": 1.20, "lunge_mul": 1.10, "scale_mul": 0.95,
+                  "stagger": 1100, "knock_mul": 1.2, "xp": 5},
+    "standard":  {"hp": 5,  "damage": 1, "speed_mul": 1.00, "windup_mul": 1.00,
+                  "recover_mul": 1.00, "lunge_mul": 1.00, "scale_mul": 1.00,
+                  "stagger": 900,  "knock_mul": 1.0, "xp": 15},
+    "dangerous": {"hp": 8,  "damage": 2, "speed_mul": 1.10, "windup_mul": 0.85,
+                  "recover_mul": 0.88, "lunge_mul": 0.92, "scale_mul": 1.08,
+                  "stagger": 750,  "knock_mul": 0.7, "xp": 40},
+    "deadly":    {"hp": 14, "damage": 2, "speed_mul": 1.20, "windup_mul": 0.72,
+                  "recover_mul": 0.78, "lunge_mul": 0.86, "scale_mul": 1.16,
+                  "stagger": 620,  "knock_mul": 0.5, "xp": 100},
+    "boss":      {"hp": 24, "damage": 2, "speed_mul": 1.12, "windup_mul": 0.80,
+                  "recover_mul": 0.85, "lunge_mul": 0.90, "scale_mul": 1.50,
+                  "stagger": 520,  "knock_mul": 0.0, "boss": True, "xp": 300},
+}
+
+WINDUP_FLOOR_MS = 220   # human reaction floor — no enemy telegraph is shorter
+
+# The one boss pattern set (v1), applied to any boss-tier NPC regardless of
+# archetype. The entrance itself is a cinematic, queued server-side — this
+# table is only the fight.
+BOSS_PATTERN = {
+    "phase2_at":         0.5,    # fraction of max hp
+    "phase_transition_ms": 1200, # invulnerable roar
+    "slam_first_at":     4000,
+    "slam_every":        9000,   # phase 1
+    "slam_every_p2":     6500,
+    "slam_windup":       900,    # ring grows over this
+    "slam_radius":       18,     # normalized units
+    "slam_damage":       3,      # hearts — the only damage above 2 in the game
+    "slam_recover":      1100,   # the punish window; land your heavy here
+    "combo_count":       3,      # phase 2 basic attack becomes a 3-lunge chain
+    "combo_gap":         180,
+    "p2_speed_mul":      1.15,
+    "p2_windup_mul":     0.78,
+    "p2_stagger":        440,
+}
+
+
+def _r(x: float) -> int:
+    """Round-half-UP. Python's round() is banker's rounding — do not use it here."""
+    return int(x + 0.5)
+
+
+def combat_params(tier: str, archetype: str) -> dict:
+    """Fixed table lookup. Deterministic, pure, no DB, no player state.
+
+    The two-argument signature IS the no-scaling guarantee: there is no code
+    path from any player value into an enemy stat.
+    """
+    T = TIER_ROWS.get(tier) or TIER_ROWS["standard"]
+    A = ARCH_ROWS.get(archetype) or ARCH_ROWS["skirmisher"]
+    is_boss_tier = bool(T.get("boss"))
+
+    hp = T["hp"] if is_boss_tier else max(1, _r(T["hp"] * A["hp_mul"]))
+
+    params = {
+        "hp": hp,
+        "damage": T["damage"],
+        "speed": round(A["speed"] * T["speed_mul"], 2),
+        "windup": max(WINDUP_FLOOR_MS, _r(A["windup"] * T["windup_mul"])),
+        "lungeDist": A["lunge_dist"],
+        "lungeMs": _r(A["lunge_ms"] * T["lunge_mul"]),
+        "recover": _r(A["recover"] * T["recover_mul"]),
+        "engage": A["engage"],
+        "scaleMul": round(A["scale_mul"] * T["scale_mul"], 3),
+        "stagger": T["stagger"],
+        "knockMul": T["knock_mul"],
+        "circles": bool(A.get("circles")),
+        "ranged": bool(A.get("ranged")),
+        "standoff": A.get("standoff", 0),
+        "ringRadius": A.get("ring_radius", 0),
+        "flees": bool(T.get("flees")),
+        "boss": is_boss_tier,
+        "tier": tier,
+        "archetype": archetype,
+    }
+    if is_boss_tier:
+        params["bossPattern"] = dict(BOSS_PATTERN)
+    return params
+
+
+# Evaluated in this order, first match wins — highest danger first, so
+# "veteran guard" resolves `dangerous` rather than `standard`.
+_TIER_WORDS: list[tuple[str, tuple[str, ...]]] = [
+    ("deadly", (
+        "champion", "warlord", "archmage", "high priest", "demon", "wraith",
+        "revenant", "giant", "wyvern", "chimera", "abomination", "nightmare",
+        "blademaster", "master assassin", "legendary", "monstrosity", "titan",
+    )),
+    ("dangerous", (
+        "captain", "veteran", "knight", "assassin", "duelist", "duellist",
+        "berserker", "ogre", "troll", "bear", "alpha", "beast", "witch",
+        "sorcerer", "warden", "inquisitor", "executioner", "elite", "guardian",
+        "commander", "war-chief", "warchief", "hunter of",
+    )),
+    ("standard", (
+        "guard", "soldier", "bandit", "raider", "mercenary", "sellsword",
+        "hunter", "watchman", "sentry", "marine", "trooper", "warrior",
+        "brawler", "pirate", "smuggler", "enforcer", "wolf", "boar", "hound",
+        "constable", "legionary", "swordsman", "archer", "gunman",
+    )),
+    ("weak", (
+        "cutpurse", "pickpocket", "thug", "lackey", "apprentice", "recruit",
+        "conscript", "deckhand", "dockworker", "labourer", "laborer", "miner",
+        "hooligan", "footpad", "initiate", "stray", "rat", "novice",
+    )),
+    ("harmless", (
+        "beggar", "child", "kid", "infant", "drunk", "drunkard", "invalid",
+        "cripple", "elderly", "grandmother", "grandfather", "urchin",
+        "peasant", "farmhand", "scribe", "clerk", "servant", "maid", "cook",
+        "baker", "weaver", "tailor", "minstrel", "pilgrim", "patient",
+        "wounded", "bedridden", "blind", "prisoner", "refugee", "orphan",
+    )),
+]
+
+# Last resort: narrative weight is not combat weight, but an AMBIENT extra is
+# more likely a bystander than a soldier.
+_TIER_BY_NPC_TIER = {
+    NPCTier.AMBIENT: "weak",
+    NPCTier.MINOR: "standard",
+    NPCTier.MAJOR: "standard",
+}
+
+
+def infer_danger_tier(npc: NPC) -> str:
+    """Keyword fallback for NPCs with no authored tier.
+
+    NEVER returns "boss" — a boss is an authored set-piece with an entrance
+    and a named health bar, and one must never appear by accident.
+    """
+    text = " ".join(filter(None, [
+        npc.profession or "", npc.description_physical or "",
+        npc.description_personality or "", npc.species or "",
+    ])).lower()
+    for tier, words in _TIER_WORDS:
+        if any(w in text for w in words):
+            return tier
+    return _TIER_BY_NPC_TIER.get(npc.tier, "standard")
+
+
+def resolve_danger_tier(npc: NPC) -> str:
+    """Row wins; otherwise infer. The ONLY place a tier is decided."""
+    if npc.danger_tier in DANGER_TIERS:
+        return npc.danger_tier
+    return infer_danger_tier(npc)
+
+
+def is_boss(npc: NPC) -> bool:
+    """The single boss flag. `NPC.boss_title` is a display epithet only —
+    a title without the tier does nothing."""
+    return resolve_danger_tier(npc) == "boss"
 
 
 def _resolve_npc(session, ident: str, location_id: str | None):
