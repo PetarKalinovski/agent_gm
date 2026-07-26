@@ -1074,6 +1074,11 @@ async def get_location_assets(location_id: str, player_id: str):
             # GET /api/assets/appearance/{player_id}, saves a round-trip
             "appearance": assets.get("appearance"),
             "pending": assets.get("pending", False),
+            # The client's buffering gate: hold the loading overlay until the
+            # scene is playable, not merely visible (background + player set +
+            # a body for every present NPC)
+            "scene_ready": assets.get("scene_ready", True),
+            "readiness": assets.get("readiness"),
             "player": {
                 "id": assets["player"]["id"],
                 "name": assets["player"]["name"],

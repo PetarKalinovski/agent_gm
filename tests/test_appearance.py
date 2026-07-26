@@ -930,3 +930,68 @@ def test_legacy_scene_spawns_the_legacy_way(manager, db):
     # Only the missing background is pending — no sprite work of any kind
     assert spawned == ["bg:square"]
     assert not (manager.assets_dir / "sprites" / "variants").exists()
+
+
+# --- scene readiness (the buffering gate) ----------------------------------
+
+
+def _paint_background(manager: AssetManager) -> None:
+    bg = manager.assets_dir / "locations" / "square.png"
+    _png(bg)
+    with get_session() as session:
+        session.get(Location, "square").background_image_path = str(bg)
+        session.commit()
+
+
+def test_scene_not_ready_until_everyone_has_a_body(manager, db):
+    """The reveal gate: background painted + the player's full set + one body
+    per NPC present. Half-built scenes stay behind the buffering overlay."""
+    from src.models import NPC
+
+    _seed_scene(manager, None)
+    _seed_base_sprites(manager, "pc")
+    with get_session() as session:
+        session.add(NPC(id="maera", name="Maera", current_location_id="square"))
+        session.commit()
+    manager.spawn_generation = lambda key, factory: True
+
+    assets = asyncio.run(manager.get_location_assets_fast("square", "pc"))
+    assert assets["scene_ready"] is False
+    assert assets["readiness"] == {
+        "background": False, "player": True, "npcs_ready": 0, "npcs_total": 1,
+    }
+
+    # Paint the background and the NPC's body — the gate opens
+    _paint_background(manager)
+    _png(manager.assets_dir / "sprites" / "maera_front.png")
+
+    assets = asyncio.run(manager.get_location_assets_fast("square", "pc"))
+    assert assets["scene_ready"] is True
+    assert assets["readiness"]["npcs_ready"] == 1
+
+
+def test_scene_not_ready_while_the_player_paints(manager, db):
+    """A brand-new character (idles only, walks still generating) keeps the
+    overlay up — you never see the world before you can walk in it."""
+    _seed_scene(manager, None)
+    _seed_base_sprites(manager, "pc", walk=False)
+    _paint_background(manager)
+    manager.spawn_generation = lambda key, factory: True
+
+    assets = asyncio.run(manager.get_location_assets_fast("square", "pc"))
+    assert assets["scene_ready"] is False
+    assert assets["readiness"]["player"] is False
+
+
+def test_outfit_swap_never_blocks_the_scene(manager, db):
+    """A generating outfit VARIANT keeps the scene playable in the old look —
+    equipping a coat must never re-trigger the buffering overlay."""
+    _seed_scene(manager, COAT)
+    _seed_base_sprites(manager, "pc")
+    _paint_background(manager)
+    manager.spawn_generation = lambda key, factory: True
+
+    assets = asyncio.run(manager.get_location_assets_fast("square", "pc"))
+    assert assets["pending"] is True        # the coat variant is generating
+    assert assets["scene_ready"] is True    # but the scene plays in base
+    assert assets["readiness"]["player"] is True

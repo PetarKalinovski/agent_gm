@@ -1045,10 +1045,12 @@ class AssetManager:
             pending = True
 
         # NPC front sprites
+        npcs_ready = 0
         for npc in scene["npcs"]:
             npc_sprite = self.assets_dir / "sprites" / f"{npc['id']}_front.png"
             if npc_sprite.exists():
                 npc["sprite_path"] = str(npc_sprite)
+                npcs_ready += 1
             else:
                 npc_id = npc["id"]
                 if self.spawn_generation(
@@ -1056,6 +1058,20 @@ class AssetManager:
                     lambda npc_id=npc_id: self.ensure_all_sprites_generated(npc_id, "npc"),
                 ):
                     pending = True
+
+        # Scene readiness: the client holds its buffering overlay until the
+        # world can actually be PLAYED, not merely glimpsed — background on
+        # screen, the player's full serving set (idles + walks) on disk, and
+        # a body for every character present. NPC walk frames and portraits
+        # stream in after the reveal; a missing outfit VARIANT never blocks
+        # (the serving set is the complete one by contract, so an equip swap
+        # keeps the scene playable in the old look while the new one paints).
+        if serving_body == appearance.BASE_BODY_SIG:
+            player_ready = self._check_all_sprites_exist(player_id, include_walk=True)
+        else:
+            player_ready = True
+        background_ready = background_path is not None
+        scene_ready = background_ready and player_ready and npcs_ready == len(scene["npcs"])
 
         return {
             "location_id": location_id,
@@ -1071,6 +1087,13 @@ class AssetManager:
             # scene load. Same shape as GET /api/assets/appearance/{player_id}.
             "appearance": self._appearance_block(player_id, wanted, spawn=False),
             "pending": pending,
+            "scene_ready": scene_ready,
+            "readiness": {
+                "background": background_ready,
+                "player": player_ready,
+                "npcs_ready": npcs_ready,
+                "npcs_total": len(scene["npcs"]),
+            },
         }
 
     def prewarm_connected_locations(self, location_id: str, limit: int = 3) -> None:

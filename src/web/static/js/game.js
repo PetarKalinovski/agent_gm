@@ -23,6 +23,9 @@ class GameRenderer {
         this.npcs = {};
         this.walkableBounds = null;
         this.isLoading = false;
+        this.sceneReady = true;     // false = buffering overlay holds a half-built scene
+        this._loadingSince = 0;     // when the current buffering wait began
+        this._lastReadiness = null; // server's last readiness report (overlay progress)
 
         // Camera/World settings
         this.worldWidth = 1600;  // Virtual world size (larger than screen)
@@ -412,7 +415,7 @@ class GameRenderer {
             this.updatePlayerPosition();
         }
 
-        this.showLoading(true);
+        this.showLoading(true, this._lastReadiness);
 
         try {
             const response = await fetch(`/api/assets/location/${locationId}?player_id=${playerId}`);
@@ -465,9 +468,23 @@ class GameRenderer {
 
             console.log(`Loaded location: ${data.location_name}`);
 
+            // Scene readiness: the world is revealed only when it can be
+            // PLAYED, not merely glimpsed — background painted, the player's
+            // full sprite set on disk, a body for every character present.
+            // Until then the buffering overlay holds and input stays gated.
+            this.sceneReady = data.scene_ready !== false;
+            this._lastReadiness = data.readiness || null;
+            if (this.sceneReady) {
+                this._loadingSince = 0;
+            } else if (!this._loadingSince) {
+                this._loadingSince = performance.now();
+            }
+
             // Assets still generating server-side? Poll until the scene is
-            // complete (placeholders show meanwhile, the game stays playable)
-            if (data.pending && (this.pendingRetries || 0) < 20) {
+            // complete. A not-ready scene gets a longer leash — a brand-new
+            // character paints idles plus full walk cycles before the reveal.
+            const cap = this.sceneReady ? 20 : 50;
+            if (data.pending && (this.pendingRetries || 0) < cap) {
                 this.pendingRetries = (this.pendingRetries || 0) + 1;
                 console.log(`Assets pending, re-checking in 6s (attempt ${this.pendingRetries})`);
                 setTimeout(() => {
@@ -478,14 +495,24 @@ class GameRenderer {
                 }, 6000);
             } else if (!data.pending) {
                 this.pendingRetries = 0;
+            } else if (!this.sceneReady) {
+                // Generation stalled outright — never trap the player behind
+                // the overlay; reveal with placeholders like the old behavior
+                console.warn('Scene never finished generating — revealing anyway');
+                this.sceneReady = true;
+                this._loadingSince = 0;
             }
 
         } catch (error) {
             console.error('Failed to load location:', error);
+            this.sceneReady = true;   // an error screen beats a stuck overlay
+            this._loadingSince = 0;
             this.showError(error.message);
         } finally {
             this.isLoading = false;
-            this.showLoading(false);
+            // The overlay outlives the fetch while the scene is unplayable —
+            // that persistence IS the buffering the reveal waits behind
+            this.showLoading(!this.sceneReady, this._lastReadiness);
         }
     }
 
@@ -752,6 +779,9 @@ class GameRenderer {
 
     update() {
         if (!this.player || this.isLoading) return;
+        // Buffering: the world is not playable until the scene is ready —
+        // no movement, no doors, no wandering under the overlay
+        if (!this.sceneReady) return;
 
         const realDt = this.app.ticker.deltaMS;
         this._updateCinematic(realDt);      // always real time — the show must finish
@@ -1729,25 +1759,77 @@ class GameRenderer {
         }
     }
 
-    showLoading(show) {
+    /** Buffering overlay. A scene under construction is HIDDEN, not shown
+     *  half-built: the scrim covers placeholder sprites and the dark
+     *  background stand-in, progress lines mirror the server's readiness
+     *  report, and after 45s of waiting the overlay becomes a clickable
+     *  escape hatch so a stalled generation can never trap the player. */
+    showLoading(show, readiness = null) {
         const existing = this.uiLayer.getChildByName('loading');
         if (existing) this.uiLayer.removeChild(existing);
+        if (!show) return;
 
-        if (show) {
-            const loading = new PIXI.Text({
-                text: 'Generating scene...',
-                style: {
-                    fontFamily: 'Arial',
-                    fontSize: 20,
-                    fill: 0x6366f1,
-                }
-            });
-            loading.anchor.set(0.5);
-            loading.x = this.app.screen.width / 2;
-            loading.y = this.app.screen.height / 2;
-            loading.name = 'loading';
-            this.uiLayer.addChild(loading);
+        const w = this.app.screen.width, h = this.app.screen.height;
+        const overlay = new PIXI.Container();
+        overlay.name = 'loading';
+
+        const scrim = new PIXI.Graphics();
+        scrim.rect(0, 0, w, h);
+        scrim.fill({ color: 0x0b0e16, alpha: 0.97 });
+        overlay.addChild(scrim);
+
+        const title = new PIXI.Text({
+            text: 'Bringing the scene to life…',
+            style: { fontFamily: 'Georgia, serif', fontSize: 26, fill: 0xe5e7eb },
+        });
+        title.anchor.set(0.5);
+        title.x = w / 2;
+        title.y = h / 2 - 74;
+        overlay.addChild(title);
+
+        const lines = [];
+        if (readiness) {
+            const mark = (ok) => (ok ? '✓' : '…');
+            lines.push([readiness.background, `${mark(readiness.background)}  Painting the scene`]);
+            lines.push([readiness.player, `${mark(readiness.player)}  Your character`]);
+            if (readiness.npcs_total > 0) {
+                const done = readiness.npcs_ready === readiness.npcs_total;
+                lines.push([done, `${mark(done)}  The locals  ${readiness.npcs_ready}/${readiness.npcs_total}`]);
+            }
+        } else {
+            lines.push([false, '…  Reading the scene']);
         }
+        lines.forEach(([done, text], i) => {
+            const line = new PIXI.Text({
+                text,
+                style: { fontFamily: 'Arial', fontSize: 17, fill: done ? 0x9ca3af : 0x818cf8 },
+            });
+            line.anchor.set(0.5);
+            line.x = w / 2;
+            line.y = h / 2 - 16 + i * 28;
+            overlay.addChild(line);
+        });
+
+        const waited = this._loadingSince ? performance.now() - this._loadingSince : 0;
+        if (waited > 45000) {
+            const skip = new PIXI.Text({
+                text: 'Taking a while — click to step in early',
+                style: { fontFamily: 'Arial', fontSize: 14, fill: 0x9ca3af },
+            });
+            skip.anchor.set(0.5);
+            skip.x = w / 2;
+            skip.y = h / 2 + 96;
+            overlay.addChild(skip);
+            overlay.eventMode = 'static';
+            overlay.cursor = 'pointer';
+            overlay.on('pointerdown', () => {
+                this.sceneReady = true;
+                this._loadingSince = 0;
+                this.showLoading(false);
+            });
+        }
+
+        this.uiLayer.addChild(overlay);
     }
 
     showError(message) {
@@ -2172,7 +2254,7 @@ class GameRenderer {
 
     /** E: hand the action to the page (index.html owns the REST calls). */
     _tryInteract() {
-        if (this.combat || this.playerDead || this.editorMode || this.cine) return;
+        if (this.combat || this.playerDead || this.editorMode || this.cine || !this.sceneReady) return;
         if (this.nearObject) {
             window.dispatchEvent(new CustomEvent('canvas-interact', {
                 detail: { objectId: this.nearObject.id, label: this.nearObject.label },
@@ -2346,7 +2428,7 @@ class GameRenderer {
      *  While a combat-blocking cinematic (boss_intro) plays, the roster is
      *  parked in _pendingCombat and spawns when the entrance ends. */
     startCombat(enemies, boss) {
-        if (!this.player || this.playerDead || this.isLoading) return;
+        if (!this.player || this.playerDead || this.isLoading || !this.sceneReady) return;
         if (this.cine && GameRenderer.CINE[this.cine.kind]?.blocksCombat) {
             this._pendingCombat = { enemies: enemies || [], boss: boss || null };
             window.dispatchEvent(new CustomEvent('combat-active', { detail: { active: true } }));
@@ -2376,7 +2458,7 @@ class GameRenderer {
     }
 
     _spawnTestEnemy() {
-        if (!this.player || this.playerDead || this.isLoading) return;
+        if (!this.player || this.playerDead || this.isLoading || !this.sceneReady) return;
         this._ensureCombat();
         this._spawnCombatant(null, 'test', null);
         console.log('Gray-box enemy spawned (Space = dodge, J = attack)');
