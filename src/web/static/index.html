@@ -1857,8 +1857,8 @@
     <!-- ?v= busts browser caches — bump when these files change, or stale
          clients keep running old code (live bug: combat frames never
          requested because a cached game.js predated them) -->
-    <script src="/static/js/game.js?v=20260725a"></script>
-    <script src="/static/js/audio.js?v=20260725a"></script>
+    <script src="/static/js/game.js?v=20260726a"></script>
+    <script src="/static/js/audio.js?v=20260726a"></script>
 
     <script>
         // State
@@ -2329,6 +2329,9 @@
             // so it survives reloads and scene changes (indoor is suppressed
             // server-side, so 'clear' here is authoritative)
             if (game && game.setWeather) game.setWeather(state.weather || 'clear');
+            // Visible equipment: the engine names the sprite set, the renderer
+            // swaps to it when its art is completely on disk
+            if (game && game.setAppearance) game.setAppearance(state.appearance);
 
             gameLocation.textContent = state.location;
             gameTime.textContent = ` - Day ${state.day}, ${String(state.hour).padStart(2, '0')}:${String(state.minute || 0).padStart(2, '0')}`;
@@ -2424,6 +2427,8 @@
                                 : '&mdash;') +
                             `</span></div>`;
                     }).join('') +
+                    `<div class="hud-item"><span class="muted">reads as</span><span>${
+                        esc((s.appearance && s.appearance.read_as) || 'an ordinary townsperson')}</span></div>` +
                     `<div class="hud-item"><span class="muted">quick slot (Q)</span><span>` +
                         (c.quick_slot
                             ? `${esc(c.quick_slot.name)}${c.quick_slot.quantity > 1 ? ` &times;${c.quick_slot.quantity}` : ''}` +

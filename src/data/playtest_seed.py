@@ -26,6 +26,10 @@ test surface:
 - Canvas objects            -> 3 per location (read/take/open/search spread;
                                the tavern satchel is lock-gated to chat)
 - Quest XP                  -> "Teeth on the North Road" is scale="mission"
+- Attire & dress codes      -> The Drowned Lantern bans hoods and mudflat
+                               filth at the door; three garments on three
+                               NPCs cover the whole matrix (Watch uniform,
+                               concealing hood, filthy oilskin)
 
 Run with: uv run main.py playtest   (creates data/emberfall.db)
 """
@@ -46,9 +50,48 @@ from src.models import (
     get_session,
     init_db,
 )
+from src.services import progression as prog
+from src.services.perception import normalize_attire, normalize_dress_code
 from src.services.scene_objects import normalize_objects
 
 PLAYTEST_DB_PATH = "data/emberfall.db"
+
+
+def _garment(
+    name: str,
+    tier: str,
+    style: str,
+    *,
+    description: str,
+    visual_desc: str,
+    uniform_faction_id: str | None = None,
+    concealing: bool = False,
+) -> dict:
+    """One wearable seeded onto an NPC's shelf, a `transfer_item` away.
+
+    Scene objects are stripped of slot/tier by `normalize_objects`, so gear
+    reaches the player through NPC stock — which is also where the fiction
+    wants it (buy the hood from Vex, get the coat off Brann).
+    """
+    return {
+        "id": prog._slug(name),
+        "name": name,
+        "type": "armor",
+        "value": prog.TIER_PRICE["armor"][prog.TIER_LABELS.index(tier)],
+        "description": description,
+        "effects": {},
+        "stackable": False,
+        "quantity": 1,
+        "slot": "armor",
+        "tier": tier,
+        "effect_tag": None,
+        "visual_desc": visual_desc,
+        "attire": normalize_attire(
+            {"style": style, "uniform_faction_id": uniform_faction_id,
+             "concealing": concealing},
+            slot="armor",
+        ),
+    }
 
 
 def create_playtest_world(db_path: str = PLAYTEST_DB_PATH) -> None:
@@ -274,6 +317,14 @@ def create_playtest_world(db_path: str = PLAYTEST_DB_PATH) -> None:
             current_state="peaceful",
             genre_type="fantasy",
             discovered=True,
+            # Both dress rules on one door: Maera has a reason to hate hoods
+            # (the ash-signed ledger entry), and she keeps a clean floor.
+            dress_code=normalize_dress_code({
+                "min_style": None,
+                "banned_styles": ["concealing", "filthy"],
+                "reason": ("Maera keeps a warm room and a clean floor: no covered faces "
+                           "under her roof, and nobody who has been sleeping in the mudflats."),
+            }),
             objects=normalize_objects([
                 {
                     "kind": "read",
@@ -446,6 +497,14 @@ def create_playtest_world(db_path: str = PLAYTEST_DB_PATH) -> None:
             current_mood="grim",
             danger_tier="dangerous",
             combat_archetype="brute",
+            # Wear it and strangers salute; Brann himself knows exactly who you
+            # are and has an opinion about the coat.
+            inventory_notable=[_garment(
+                "Lantern Watch Coat", "common", "common",
+                uniform_faction_id=watch.id,
+                description="Watch issue. Nobody hands one of these over lightly.",
+                visual_desc="a boiled-leather Watch coat with the brass lantern badge",
+            )],
         )
         session.add(brann)
 
@@ -536,6 +595,12 @@ def create_playtest_world(db_path: str = PLAYTEST_DB_PATH) -> None:
             secrets=["He saw a man in an ash-gray cloak crouched by the north wall two nights ago, and told no one because no one asks Sorrel"],
             current_mood="excited",
             danger_tier="harmless",
+            # The cheap end of the ladder: warm, free, and banned at the tavern
+            inventory_notable=[_garment(
+                "Mucker's Oilskin", "crude", "filthy",
+                description="Sorrel's spare. He'll hand it over for a kind word.",
+                visual_desc="a stable oilskin gone black with muck",
+            )],
         )
         session.add(sorrel)
 
@@ -568,6 +633,14 @@ def create_playtest_world(db_path: str = PLAYTEST_DB_PATH) -> None:
             current_mood="watchful",
             danger_tier="dangerous",
             combat_archetype="stalker",
+            # The hood is the interesting purchase: it locks the Lantern's door
+            # and makes every acquaintance's recognition contested.
+            inventory_notable=[_garment(
+                "Ashfall Hood", "common", "rough",
+                concealing=True,
+                description="Fangs work. Nobody who wears one wants to be counted.",
+                visual_desc="a soot-grey hood that swallows the face",
+            )],
         )
         session.add(vex)
 
@@ -736,3 +809,5 @@ def create_playtest_world(db_path: str = PLAYTEST_DB_PATH) -> None:
         print("  Locked travel   North road to Wolf's Hollow needs a gate pass from Brann.")
         print("  Quest flow      'Teeth on the North Road' is seeded NOT_STARTED with rewards; Brann offers it.")
         print("  Combat          Ctrl+K anywhere for the gray-box; Vex Marrow at the Hollow is the story fight.")
+        print("  Attire          Buy Vex's Ashfall Hood -> the Lantern's door refuses you; wear Brann's")
+        print("                  Watch Coat -> strangers treat you as the Watch, Brann does not.")

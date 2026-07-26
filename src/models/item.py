@@ -24,6 +24,18 @@ class Item(BaseModel):
     tier: str | None = Field(None, description="crude|common|fine|superior|master|legendary")
     effect_tag: str | None = Field(None, description="heal_light | heal_strong | surge")
 
+    # --- Appearance (optional; legacy items have neither) ---
+    visual_desc: str | None = Field(
+        None,
+        description="Short concrete visual phrase for image prompts, e.g. "
+                    "'a boiled-leather Watch coat with the brass lantern badge'",
+    )
+    attire: dict | None = Field(
+        None,
+        description="ARMOR ONLY: {'style': noble|fine|common|rough|filthy, "
+                    "'uniform_faction_id': str|null, 'concealing': bool}",
+    )
+
     class Config:
         """Pydantic config."""
         json_schema_extra = {

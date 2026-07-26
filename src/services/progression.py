@@ -795,7 +795,8 @@ def trait_bonus(p, skill: str) -> int:
     return 0
 
 
-def roll_skill_check(p, skill: str, difficulty: str, modifier: str = "none") -> dict[str, Any]:
+def roll_skill_check(p, skill: str, difficulty: str, modifier: str = "none", *,
+                     situation: dict | None = None) -> dict[str, Any]:
     """Roll d20 + level + trait bonus against the difficulty's DC.
 
     Returns {"outcome", "skill", "difficulty", "modifier", "_debug"} — the
@@ -803,6 +804,13 @@ def roll_skill_check(p, skill: str, difficulty: str, modifier: str = "none") -> 
     before it can reach the DM. Invalid words return
     {"error", "valid"} rather than a silent coercion — a silent coercion is a
     number the DM did not choose.
+
+    `situation` is the world's own word about this attempt, built by the
+    `roll_check` tool from `perception.situational_factor` +
+    `perception.combine_modifier` (this module must never import perception).
+    Only its "effective" key is read, and it replaces `modifier` for the roll;
+    `modifier` is still reported back unchanged, because it is the DM's word.
+    `situation=None` is byte-identical to the pre-attire behaviour.
     """
     skill = (skill or "").strip().lower()
     difficulty = (difficulty or "").strip().lower()
@@ -815,10 +823,14 @@ def roll_skill_check(p, skill: str, difficulty: str, modifier: str = "none") -> 
     if modifier not in MODIFIERS:
         return {"error": f"Unknown modifier {modifier!r}.", "valid": list(MODIFIERS)}
 
+    effective = (situation or {}).get("effective") or modifier
+    if effective not in MODIFIERS:
+        effective = modifier
+
     rolls = [_RNG.randint(1, 20)]
-    if modifier in ("advantage", "disadvantage"):
+    if effective in ("advantage", "disadvantage"):
         rolls.append(_RNG.randint(1, 20))
-    natural = max(rolls) if modifier == "advantage" else min(rolls) if modifier == "disadvantage" else rolls[0]
+    natural = max(rolls) if effective == "advantage" else min(rolls) if effective == "disadvantage" else rolls[0]
 
     level = player_level(p)
     bonus = trait_bonus(p, skill)
@@ -836,7 +848,7 @@ def roll_skill_check(p, skill: str, difficulty: str, modifier: str = "none") -> 
     else:
         outcome = "failure"
 
-    return {
+    result = {
         "outcome": outcome,
         "skill": skill,
         "difficulty": difficulty,
@@ -848,5 +860,10 @@ def roll_skill_check(p, skill: str, difficulty: str, modifier: str = "none") -> 
             "trait_bonus": bonus,
             "total": total,
             "dc": dc,
+            "effective_modifier": effective,
         },
     }
+    # Absent when nothing applied, so a legacy caller's return shape is untouched
+    if situation:
+        result["situation"] = situation
+    return result

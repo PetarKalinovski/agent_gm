@@ -76,6 +76,24 @@ World generation uses separate agents:
 - **Travel**: `move_player` blocks on `Connection.requirements` until the DM
   confirms them with `requirements_met=True`; hierarchy hops cannot bypass a
   destination whose every authored entry route is requirement-locked.
+- **Attire semantics** (`src/services/perception.py`): what the player WEARS
+  decides how strangers read them, separately from who they are. The equipped
+  armor's `attire` label set (`style` from a five-word menu, optional
+  `uniform_faction_id`, `concealing`) produces a code-owned perception profile
+  (`state.appearance.read_as`, a `Player reads as:` context line, a
+  character-panel row). Strangers react to the clothes — a faction uniform
+  makes them treat the wearer as that faction regardless of identity — while
+  NPCs with an `NPCRelationship` row know the player on sight; a concealed
+  face makes an acquaintance's recognition *contested*, resolved by a
+  DM-called `roll_check` (never rolled automatically) whose answer sticks for
+  the game-day. `Location.dress_code` (`min_style` / `banned_styles` incl.
+  `concealing` / `reason`) is enforced inside `travel.check_route`, so it
+  blocks canvas doors, `/api/travel` (blocked 409 carries `reason: "dress"`),
+  and `move_player` through one path, overridable only with
+  `requirements_met=True`. `roll_check` also layers ONE code-computed
+  situational factor (night/weather stealth, filthy-in-fine-company,
+  hooded-and-watched, wearing-their-colours) over the DM's modifier and
+  reports it back as a phrase, never a number.
 - **Progression** (`src/services/progression.py`): every number lives here —
   XP thresholds (levels 1-10), quest XP by `Quest.scale` label
   (errand/job/mission/saga), gear tier tables (crude→legendary: weapon damage,
@@ -185,6 +203,8 @@ No migration tool — schema evolution uses nullable columns with `DEFAULT NULL`
 - **VoiceGenerator** (`voice_generator.py`) - NPC dialogue TTS: local Qwen3-TTS voice cloning when a reference clip exists at `voices/refs/{npc_id}.wav`, else ElevenLabs using `NPC.voice_id` (auto-assigned from the `audio.voice_pool` by tag-matching NPC descriptions). Lines cached as `voices/{sha1(npc|text|tone)}.mp3`.
 
 Asset pipeline: `reference_search` finds web images → `image_generator` creates assets using reference + text description → `asset_manager` caches results to disk and DB.
+
+Appearance variants (`src/services/appearance.py`): the player's sprite set is keyed by deterministic signatures over equipped gear — `body_sig` (armor → idles/walks/dodge, `sprites/variants/{sig}/`) and `action_sig` (armor+weapon pair → attack strip); `base`/`base-unarmed` resolve to the flat legacy dir with zero migration. `state.appearance` carries the WANTED signatures (+ `read_as`); readiness lives on `GET /api/assets/appearance/{player_id}` and the scene fetch (`serving_*` = complete on disk). The sprite endpoint takes `?a=<sig>` (strict when present, lenient serving-signature resolution when absent); equip/unequip pre-warm generation and the client swaps textures atomically per axis only when a whole set exists — never a half-dressed frame.
 
 ### Scene collision & canvas liveliness
 

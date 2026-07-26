@@ -26,6 +26,7 @@ from src.models import (
     WorldClock,
     get_session,
 )
+from src.services import appearance
 from src.services import campaign as camp
 from src.services import cinematics as cine
 from src.services import progression
@@ -337,12 +338,13 @@ def test_ordinary_fight_carries_no_cinematic(world):
 # 5. One state payload, every key the HUD contracts for
 # ----------------------------------------------------------------------
 
-# Integration doc §2.2 — the frozen `state` event shape
+# Integration doc §2.2 — the frozen `state` event shape (+ `appearance`,
+# the merged attire/appearance block: wanted signatures + the social reading)
 _STATE_KEYS = {
     "location_id", "location", "day", "hour", "minute", "time_of_day",
     "health", "currency", "inventory", "quests", "tension",
     "level", "xp", "xp_into_level", "xp_for_level",
-    "equipment", "combat", "campaign", "weather",
+    "equipment", "combat", "appearance", "campaign", "weather",
 }
 _ITEM_KEYS = {"slot", "tier", "effect_tag", "equipped", "equippable", "price"}
 
@@ -373,6 +375,16 @@ def test_state_payload_superset(world):
     assert state["equipment"] == {"weapon": None, "armor": None, "trinket": None}
     assert state["campaign"] is None
     assert state["weather"] == "clear"
+
+    # A legacy DB yields the base appearance block: signatures a byte-old
+    # world already has art for, and the code-owned default reading
+    assert state["appearance"] == {
+        "body_sig": "base",
+        "weapon_sig": "unarmed",
+        "action_sig": "base-unarmed",
+        "version": appearance.APPEARANCE_VERSION,
+        "read_as": "an ordinary townsperson",
+    }
 
     combat = state["combat"]
     assert combat["max_hearts"] == 5 and combat["hearts"] == 5
@@ -544,3 +556,143 @@ def test_state_carries_equipped_gear_and_campaign(world):
     assert state["campaign"]["act"] == 1
     # Spoiler-free by construction: a sealed truth never reaches the client
     assert state["campaign"]["revealed_truths"] == []
+
+
+# ----------------------------------------------------------------------
+# 6. Visible equipment + attire: state, doors, travel, pre-warm, ledger
+# ----------------------------------------------------------------------
+
+_HOOD = {
+    "id": "ashfall_hood", "name": "Ashfall Hood", "type": "armor",
+    "slot": "armor", "tier": "common", "quantity": 1,
+    "visual_desc": "a soot-grey hood that swallows the face",
+    "attire": {"style": "rough", "uniform_faction_id": None, "concealing": True},
+}
+_SWORD = {
+    "id": "shortsword", "name": "Notched Shortsword", "type": "weapon",
+    "slot": "weapon", "tier": "common", "quantity": 1,
+    "visual_desc": "a notched iron shortsword",
+}
+_HOOD_READS_AS = ("someone who does not want to be seen — "
+                  "a soot-grey hood that swallows the face")
+_LANTERN_REASON = ("Maera keeps a warm room and a clean floor: no covered "
+                   "faces under her roof.")
+
+
+def test_state_carries_appearance_and_read_as(world):
+    """Gear moves BOTH halves of the merged appearance block: the sprite
+    signatures (what the renderer loads) and `read_as` (what strangers see).
+    One state payload, no second request."""
+    with get_session() as session:
+        p = session.get(Player, world["player"])
+        p.inventory = [dict(_HOOD), dict(_SWORD)]
+        session.commit()
+        progression.equip(session, p, "ashfall_hood")
+        progression.equip(session, p, "shortsword")
+        session.commit()
+        expected = appearance.appearance_payload(p)
+
+    state = server.build_player_state(world["player"])
+    block = state["appearance"]
+
+    assert block["body_sig"] == expected["body_sig"] != "base"
+    assert block["weapon_sig"] == expected["weapon_sig"] != "unarmed"
+    assert block["action_sig"] == f"{block['body_sig']}-{block['weapon_sig']}"
+    assert block["version"] == appearance.APPEARANCE_VERSION
+    assert block["read_as"] == _HOOD_READS_AS
+    json.dumps(state)
+
+
+def test_dress_locked_exit_and_travel_carry_the_reason(api):
+    """A dress code authored on the destination locks the canvas door (the
+    scene fetch renders `locked` with the house's own reason) and 409s
+    `/api/travel` with `reason == "dress"` — one choke point, two surfaces."""
+    from src.models.location import Connection
+
+    with get_session() as session:
+        tavern = Location(
+            name="The Drowned Lantern", type=LocationType.BUILDING,
+            dress_code={"min_style": None, "banned_styles": ["concealing"],
+                        "reason": _LANTERN_REASON},
+        )
+        session.add(tavern)
+        session.flush()
+        session.add(Connection(
+            from_location_id=api["square"], to_location_id=tavern.id,
+            travel_type="enter", travel_time_hours=0.1,
+            bidirectional=True, discovered=True,
+        ))
+        p = session.get(Player, api["player"])
+        p.inventory = [dict(_HOOD)]
+        session.commit()
+        progression.equip(session, p, "ashfall_hood")
+        session.commit()
+        tavern_id = tavern.id
+
+    scene = asyncio.run(server.get_location_assets(api["square"], api["player"]))
+    door = next(e for e in scene["exits"] if e["id"] == tavern_id)
+    assert door["locked"] is True
+    assert any(_LANTERN_REASON in str(r) for r in door["requirements"])
+
+    # The scene fetch also carries the appearance block: aim for the hood's
+    # signature, serve base until every one of its files is on disk
+    block = scene["appearance"]
+    assert block["body_sig"] != "base"
+    assert block["serving_body"] == "base" and block["body_ready"] is False
+    assert block["serving_action"] == "base-unarmed"
+
+    response = asyncio.run(server.canvas_travel(server.TravelRequest(
+        player_id=api["player"], destination_id=tavern_id)))
+    assert response.status_code == 409
+    payload = json.loads(bytes(response.body))
+    assert payload["blocked"] is True and payload["reason"] == "dress"
+    assert _LANTERN_REASON in payload["requirements"][0]
+    assert payload["chat_prompt"] == "I try to get through to The Drowned Lantern."
+
+    # The refusal moved nobody
+    with get_session() as session:
+        assert session.get(Player, api["player"]).current_location_id == api["square"]
+
+
+def test_equip_prewarms_both_axes_and_notes_the_reading(api, monkeypatch):
+    """POST /equip fires background generation for the player's new look
+    (dedup keys carry the signatures — one in-flight task per set) and the
+    ledger note tells the DM how strangers now read them."""
+    spawned: list[str] = []
+    monkeypatch.setattr(
+        AssetManager, "spawn_generation",
+        lambda self, key, factory: spawned.append(key) or True,
+    )
+
+    with get_session() as session:
+        p = session.get(Player, api["player"])
+        p.inventory = [dict(_HOOD)]
+        session.commit()
+
+    equipped = asyncio.run(server.equip_item(
+        api["player"], server.EquipRequest(item_id="ashfall_hood")))
+    assert equipped["slot"] == "armor"
+
+    block = equipped["state"]["appearance"]
+    assert block["read_as"] == _HOOD_READS_AS
+    assert spawned == [
+        f"body:{api['player']}:{block['body_sig']}",
+        f"action:{api['player']}:{block['action_sig']}",
+    ]
+
+    drained = pending_actions.drain(api["player"])
+    assert [d["kind"] for d in drained] == ["equip"]
+    assert drained[0]["summary"] == (
+        "They now wear Ashfall Hood. "
+        f"To strangers they now read as {_HOOD_READS_AS}."
+    )
+
+    # Taking it off notes the change back; base needs no generation at all
+    spawned.clear()
+    asyncio.run(server.unequip_item(api["player"], server.UnequipRequest(slot="armor")))
+    drained = pending_actions.drain(api["player"])
+    assert drained[0]["summary"] == (
+        "They put away their Ashfall Hood. "
+        "To strangers they now read as an ordinary townsperson."
+    )
+    assert spawned == []

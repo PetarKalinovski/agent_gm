@@ -42,7 +42,8 @@ _ITEM_CLAIM = re.compile(
 _ITEM_TOOLS = {"add_to_inventory", "remove_from_inventory", "transfer_item"}
 
 _ARRIVAL_CLAIM = re.compile(
-    r"\byou (?:arrive (?:at|in)|reach the|step into|pass through the gates? of)\b",
+    r"\byou (?:arrive (?:at|in)|reach the|step into|pass through the gates? of"
+    r"|are waved (?:through|in|inside)|are let (?:in|inside|through))\b",
     re.IGNORECASE,
 )
 

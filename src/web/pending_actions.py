@@ -66,12 +66,23 @@ LEVEL_UP_NOTE = (
 _SLOT_VERBS = {"weapon": "wield", "armor": "wear", "trinket": "carry"}
 
 
-def equip_note(name: str, slot: str = "weapon", *, automatic: bool = False) -> str:
-    """`They now wield Iron Sword.` / auto-equip variant for a fresh pickup."""
+def equip_note(name: str, slot: str = "weapon", *, automatic: bool = False,
+               reads_as: str | None = None) -> str:
+    """`They now wield Iron Sword.` / auto-equip variant for a fresh pickup.
+
+    reads_as: the player's NEW `read_as` string (see
+        `src/services/perception.py`), passed ONLY when equipping this piece
+        actually changed how strangers read them. Armor only; a swap between
+        two plain coats says nothing and adds nothing.
+    """
     verb = _SLOT_VERBS.get((slot or "").lower(), "carry")
     if automatic:
-        return f"They immediately {verb} the {name} they just got."
-    return f"They now {verb} {name}."
+        note = f"They immediately {verb} the {name} they just got."
+    else:
+        note = f"They now {verb} {name}."
+    if reads_as:
+        note += f" To strangers they now read as {reads_as}."
+    return note
 
 
 def unequip_note(name: str) -> str:

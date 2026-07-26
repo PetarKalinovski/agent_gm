@@ -10,10 +10,14 @@ from src.models import (
     LocationType,
     get_session,
 )
+from src.services.perception import normalize_dress_code
 from src.services.scene_objects import normalize_objects
 
 # `objects` is written by an LLM and normalised by code on the way in: unknown
 # kinds are dropped, coordinates clamped, and every stat/effect stripped.
+# `dress_code` goes through the same treatment in
+# `src/services/perception.normalize_dress_code`: unknown style words are
+# dropped and an empty gate becomes NULL.
 
 
 @tool
@@ -35,6 +39,7 @@ def add_location(
     atmosphere_tags: list[str] | None = None,
     discovered: bool = False,
     objects: list[dict] | None = None,
+    dress_code: dict | None = None,
 ) -> dict[str, Any]:
     """Add a new location to the world.
 
@@ -60,11 +65,19 @@ def add_location(
              "x": 0-100, "y": 0-100, "payload": {...}}.
             See the SCENE OBJECTS section of your instructions for the exact
             payload per kind. Invalid entries are dropped by the engine.
+        dress_code: What this place refuses at the door. Only for somewhere a
+            doorman would really turn someone away.
+            {"min_style": "filthy"|"rough"|"common"|"fine"|"noble" or null,
+             "banned_styles": [any of those five, plus "concealing"],
+             "reason": "<one sentence in the house's own voice>"}
+            See the DRESS CODES section of your instructions. Most locations
+            must not have one.
 
     Returns:
         Dictionary with the created location's details.
     """
     normalized_objects = normalize_objects(objects)
+    normalized_dress_code = normalize_dress_code(dress_code)
     with get_session() as session:
         location = Location(
             name=name,
@@ -84,6 +97,7 @@ def add_location(
             visited=False,
             discovered=discovered,
             objects=normalized_objects or None,
+            dress_code=normalized_dress_code,
         )
         session.add(location)
         session.commit()
@@ -113,6 +127,7 @@ def add_location(
             "parent_id": location.parent_id,
             "position": {"x": location.position_x, "y": location.position_y},
             "objects": len(normalized_objects),
+            "dress_code": normalized_dress_code,
         }
 
 
@@ -138,6 +153,7 @@ def update_location(
     visited: bool | None = None,
     parent_id: str | None = None,
     objects: list[dict] | None = None,
+    dress_code: dict | None = None,
 ) -> dict[str, Any]:
     """Update an existing location's details.
 
@@ -166,6 +182,12 @@ def update_location(
              "x": 0-100, "y": 0-100, "payload": {...}}.
             See the SCENE OBJECTS section of your instructions for the exact
             payload per kind. Invalid entries are dropped by the engine.
+        dress_code: Replaces what this place refuses at the door.
+            {"min_style": "filthy"|"rough"|"common"|"fine"|"noble" or null,
+             "banned_styles": [any of those five, plus "concealing"],
+             "reason": "<one sentence in the house's own voice>"}
+            See the DRESS CODES section of your instructions. A gate with
+            neither a min_style nor a banned style clears the policy.
 
     Returns:
         Dictionary with the updated location's details.
@@ -213,6 +235,8 @@ def update_location(
             location.parent_id = parent_id
         if objects is not None:
             location.objects = normalize_objects(objects) or None
+        if dress_code is not None:
+            location.dress_code = normalize_dress_code(dress_code)
 
         session.commit()
 
@@ -222,6 +246,7 @@ def update_location(
             "type": location.type.value,
             "position": {"x": location.position_x, "y": location.position_y},
             "objects": len(location.objects or []),
+            "dress_code": location.dress_code,
             "updated": True,
         }
 

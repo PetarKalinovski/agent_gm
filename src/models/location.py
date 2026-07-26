@@ -109,6 +109,14 @@ class Location(Base):
     # {"id","kind","label","x","y","payload","consumed"} — normalized 0-100 coords
     objects: Mapped[list | None] = mapped_column(JSON, nullable=True)
 
+    # What this place refuses at the door. NULL = no standards.
+    # {"min_style": "fine"|null, "banned_styles": ["filthy","concealing"],
+    #  "reason": "<one sentence in the house's voice>"}
+    # Normalized by src/services/perception.normalize_dress_code and enforced
+    # inside travel.check_route, so it blocks canvas doors, /api/travel and
+    # move_player through one path.
+    dress_code: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
     # Pre-generated ambient one-liners for this scene (no TTS, no DM)
     # [{"npc_id": str|None, "text": str}, ...]
     ambient_barks: Mapped[list | None] = mapped_column(JSON, nullable=True)

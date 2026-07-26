@@ -8,7 +8,10 @@ once:
   2. with no direct Connection, a destination whose every authored entry
      route is requirement-locked stays locked on ANY approach path — the
      gate-bypass guard (playtest: square -> town container -> gated hollow
-     walked around the north gate).
+     walked around the north gate);
+  3. the destination's own `dress_code`, evaluated against how the player
+     reads (`src/services/perception.py`) and only when a player row is
+     supplied — a route question with no player is a question about the map.
 
 Code enforces, the LLM narrates: the canvas walks the player through
 unlocked doors with no LLM round-trip, and hands locked ones to the DM.
@@ -19,6 +22,7 @@ from typing import Any
 from loguru import logger
 
 from src.models import Connection, Location, Player, get_session
+from src.services import perception
 
 
 # Travel time fallbacks, in hours, when no Connection models the route
@@ -26,18 +30,48 @@ HIERARCHY_HOP_HOURS = 0.1   # stepping into a child or back out to the parent
 DEFAULT_TRAVEL_HOURS = 0.5  # an unmodeled route between unrelated places
 
 
-def check_route(session, from_location_id: str | None, destination_id: str) -> dict[str, Any]:
+def _apply_dress_code(route: dict[str, Any], destination, player) -> dict[str, Any]:
+    """Rule 3: the destination's own standards.
+
+    Evaluated on the DESTINATION regardless of which route was taken — a dress
+    code is a door policy, not a road condition — and only when we know who is
+    asking. Precedence is deliberate: `route`/`gate` keep the `reason` (they
+    are the harder blockers to explain away), while both requirement strings
+    ride the existing channel, so a road that needs a key AND a hall that needs
+    a coat asks for both.
+    """
+    if player is None or not getattr(destination, "dress_code", None):
+        return route
+
+    verdict = perception.dress_verdict(
+        perception.perception_profile(player),
+        perception.normalize_dress_code(destination.dress_code),
+    )
+    if verdict["allowed"]:
+        return route
+
+    route["requirements"] = list(route["requirements"]) + [verdict["requirement"]]
+    route["reason"] = route["reason"] or "dress"
+    route["blocked"] = True
+    return route
+
+
+def check_route(session, from_location_id: str | None, destination_id: str,
+                player=None) -> dict[str, Any]:
     """Decide whether the player may walk from one location to another.
 
     Args:
         session: An open database session (the caller owns the transaction).
         from_location_id: Where the player is standing; None when unplaced.
         destination_id: Where they want to go.
+        player: The Player row, when the caller has one. Dress codes are only
+            evaluated when it is supplied — a route question with no player is
+            a question about the map, not about a person.
 
     Returns:
         {"travel_time_hours": float, "blocked": bool, "requirements": list,
-         "reason": "" | "route" | "gate"} — `reason` tells the caller which
-        rule fired so it can pick the right message for the DM.
+         "reason": "" | "route" | "gate" | "dress"} — `reason` tells the caller
+        which rule fired so it can pick the right message for the DM.
     """
     destination = session.get(Location, destination_id)
 
@@ -58,12 +92,12 @@ def check_route(session, from_location_id: str | None, destination_id: str) -> d
 
     if conn:
         requirements = list(conn.requirements or [])
-        return {
+        return _apply_dress_code({
             "travel_time_hours": conn.travel_time_hours,
             "blocked": bool(requirements),
             "requirements": requirements,
             "reason": "route" if requirements else "",
-        }
+        }, destination, player)
 
     # No modeled route: entering a child or stepping back out to the parent
     # is a doorway, everything else is an unmodeled walk
@@ -80,19 +114,19 @@ def check_route(session, from_location_id: str | None, destination_id: str) -> d
     ).all()
     gate_requirements = [r for c in entries for r in (c.requirements or [])]
     if entries and gate_requirements and all(c.requirements for c in entries):
-        return {
+        return _apply_dress_code({
             "travel_time_hours": travel_time,
             "blocked": True,
             "requirements": gate_requirements,
             "reason": "gate",
-        }
+        }, destination, player)
 
-    return {
+    return _apply_dress_code({
         "travel_time_hours": travel_time,
         "blocked": False,
         "requirements": [],
         "reason": "",
-    }
+    }, destination, player)
 
 
 def travel_now(player_id: str, destination_id: str) -> dict[str, Any]:
@@ -108,8 +142,8 @@ def travel_now(player_id: str, destination_id: str) -> dict[str, Any]:
     Returns:
         {"success": True, "from_id", "from_name", "destination_id",
          "destination_name", "minutes", "first_visit"} on success;
-        {"blocked": True, "requirements", "destination_name"} when the route
-        needs something the DM must adjudicate;
+        {"blocked": True, "requirements", "destination_name", "reason"} when
+        the route needs something the DM must adjudicate;
         {"error": "unreachable" | "not_found" | "no_player"} otherwise.
     """
     # Imported here: the DM tools import this module for check_route
@@ -131,7 +165,7 @@ def travel_now(player_id: str, destination_id: str) -> dict[str, Any]:
         origin_name = origin.name if origin else ""
         destination_name = destination.name
         first_visit = not destination.visited
-        route = check_route(session, origin_id, destination_id)
+        route = check_route(session, origin_id, destination_id, player)
 
     # Anti-teleport guard: the client is not trusted to name a destination
     # the current location does not actually connect to
@@ -148,6 +182,7 @@ def travel_now(player_id: str, destination_id: str) -> dict[str, Any]:
             "blocked": True,
             "requirements": route["requirements"],
             "destination_name": destination_name,
+            "reason": route.get("reason", ""),
         }
 
     result = move_player(player_id, destination_id)
@@ -157,6 +192,7 @@ def travel_now(player_id: str, destination_id: str) -> dict[str, Any]:
             "blocked": True,
             "requirements": result.get("requirements", []),
             "destination_name": destination_name,
+            "reason": "",
         }
     if not result.get("success"):
         return {"error": "not_found"}

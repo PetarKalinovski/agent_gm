@@ -198,6 +198,32 @@ Rules:
 5. "read" objects are the cheapest worldbuilding you will ever write. Use
    them: a price list tells the player more about a town than a paragraph.
 
+## DRESS CODES (only where a doorman would really turn someone away)
+
+A location may carry a `dress_code`. Most must not. A road, a market, a
+dockhands' tavern has no standards. Author one only for a place whose whole
+character is that it keeps people out: a banking hall, an officers' club, a
+temple sanctum, a private box at the races.
+
+dress_code = {"min_style": "<filthy|rough|common|fine|noble>" or null,
+              "banned_styles": ["<filthy|rough|common|fine|noble|concealing>", ...],
+              "reason": "<one sentence in the house's own voice>"}
+
+- "min_style" is the LOWEST way of dressing they will admit, ranked poorest
+  first: filthy < rough < common < fine < noble. Leave it null unless the
+  place genuinely requires money to walk in. "fine" is already exclusive;
+  "noble" shuts out nearly everyone alive.
+- "banned_styles" turns specific kinds away regardless of rank. "filthy" is
+  the ordinary one. "concealing" bans covered faces — hoods, masks, veils —
+  and is the single most interesting rule you can write, because it forces a
+  choice on anyone travelling hidden.
+- "reason" is what the person on the door actually says. One sentence, in
+  their voice. No mechanics, no menus, no numbers.
+
+The engine enforces it: a player dressed wrong cannot walk in, and the DM has
+to decide whether they talk their way past. You are authoring a wall — make it
+a wall worth talking to.
+
 ## IMPORTANT RULES
 
 1. **NEVER create duplicates** — always check existing entities list in your request first

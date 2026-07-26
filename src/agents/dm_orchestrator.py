@@ -53,6 +53,7 @@ from src.tools.world_write import (
 )
 from src.services.world_tick import run_world_tick, format_world_tick_context
 from src.services.campaign import run_campaign_tick, format_campaign_context
+from src.services.perception import appearance_lines
 from src.tools.narration import (
     narrate,
     speak,
@@ -254,6 +255,32 @@ Never default to success. For every consequential action, weigh:
 - NEVER describe the effect in your prose. Do not write "a title card reads", do not print "ACT II", "CHAPTER THREE", "cut to black", or the card's own text. The screen shows it; you write the fiction.
 - If the tool returns `rejected`, that is normal and expected. Say nothing about it and narrate the moment in prose instead — the story never depends on the effect.
 - Never call it twice in one turn, and never during a real-time fight (the only exception is `boss_intro` immediately before `start_combat`).
+
+**7. What They Are Wearing (the world reads clothes, not character sheets):**
+- Your context carries a `Player reads as:` line. That is what STRANGERS see, computed by the
+  engine from what the character actually has on their body. Trust it over your memory of who
+  they are. A famous knight in a farmhand's coat is a farmhand until somebody recognises them,
+  and a hero in ordinary clothes is nobody at all.
+- **Uniforms make claims.** When the line says they are wearing a faction's colours, strangers
+  treat them as that faction — doors open, orders are expected to land, that faction's enemies
+  react accordingly — whether or not they have any right to the coat. Play the assumption, not
+  the truth.
+- **A false uniform is a crime, not a costume.** If someone with standing to know — an officer
+  of that faction, anyone who has served with the real thing — decides the coat is stolen, the
+  world answers: `update_player_reputation` against that faction, `create_event` so it sticks,
+  and `start_combat` if they would rather arrest than argue. Never hand-wave the unmasking.
+- **People who know them see through clothes.** An NPC the player has actually spoken to knows
+  them on sight; a hood does not change that. When a hood IS in play and an acquaintance is
+  present, your context names the exact check to make. Call `roll_check` with the skill and
+  difficulty it gives you — and pass `about_npc_id` so the answer holds for the rest of the
+  scene — BEFORE you decide whether they get named. Do not decide it yourself, and do not roll
+  it again because you disliked the answer.
+- **Doors have standards.** Some places will not admit certain kinds of dress. The engine blocks
+  the way and hands you the house's own reason. That refusal is yours to run: let them argue,
+  bribe, borrow a coat, or find the yard door. If you decide they get in, call `move_player`
+  with requirements_met=True — otherwise they did not get in.
+- Never say the engine's words. Do not tell the player their "style", do not name a check, do
+  not mention advantage or difficulty. Say what the doorman's face does.
 
 ### TONE & STYLE
 
@@ -466,6 +493,12 @@ class DMOrchestrator(BaseGameAgent):
             f"{slot}: {name}" for slot, name in loadout.items() if name
         ) or 'nothing notable'
 
+        # How the world reads them right now — same subject as `carries`, so it
+        # sits with it. Line 1 always; the 0-2 risk lines only when a uniform or
+        # a covered face is actually live in this room. Each line is already
+        # bullet-prefixed and carries its own newline.
+        appearance = "".join(f"{line}\n" for line in appearance_lines(self.context.player_id))
+
         # Run the world tick — fires scheduled events, gathers faction/NPC agendas
         tick_result = run_world_tick()
         world_briefing = format_world_tick_context(tick_result)
@@ -489,7 +522,7 @@ class DMOrchestrator(BaseGameAgent):
 - Player health: {player.get('health_status', 'healthy')}
 - Player level: {player.get('level', 1)}
 - Player carries: {gear}
-- Player inventory: {item_names}
+{appearance}- Player inventory: {item_names}
 - Active quests: {quest_names}
 {briefings}
 

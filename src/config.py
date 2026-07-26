@@ -51,6 +51,19 @@ class CampaignConfig(BaseModel):
     deadline_clocks_max: int = 3
 
 
+class AppearanceConfig(BaseModel):
+    """Visible-equipment sprite variants.
+
+    The player's sprite set is keyed by an appearance signature derived from
+    equipped gear (`src/services/appearance.py`). `enabled: false` is the one
+    kill switch: everyone renders as `base` and no variant is ever generated.
+    """
+    enabled: bool = True                  # kill switch: everyone renders as `base`
+    max_variants_per_player: int = 8       # LRU cap on variant body directories
+    body_concurrency: int = 1              # simultaneous variant BODY sets, process-wide
+    action_concurrency: int = 2            # simultaneous variant ATTACK strips
+
+
 class DatabaseConfig(BaseModel):
     """Database configuration."""
     path: str = "data/game.db"
@@ -141,6 +154,7 @@ class Settings(BaseModel):
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)
     game: GameConfig = Field(default_factory=GameConfig)
     campaign: CampaignConfig = Field(default_factory=CampaignConfig)
+    appearance: AppearanceConfig = Field(default_factory=AppearanceConfig)
     api: ApiConfig = Field(default_factory=ApiConfig)
     display: DisplayConfig = Field(default_factory=DisplayConfig)
     image_generation: ImageGenerationConfig = Field(default_factory=ImageGenerationConfig)

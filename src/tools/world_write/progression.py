@@ -13,7 +13,8 @@ from typing import Any
 from loguru import logger
 from strands import tool
 
-from src.models import Item, NPC, Player, get_session
+from src.models import Item, NPC, Player, WorldClock, get_session
+from src.services import perception
 from src.services import progression as prog
 
 # Gear kinds a merchant may stock, plus the `Item.type` each maps to. A
@@ -31,6 +32,7 @@ def roll_check(
     difficulty: str,
     modifier: str = "none",
     reason: str = "",
+    about_npc_id: str = "",
 ) -> dict[str, Any]:
     """Resolve a risky, uncertain action with an engine roll. Use this BEFORE
     narrating whether it worked.
@@ -53,17 +55,45 @@ def roll_check(
             "disadvantage" if it clearly works against them (wounded, watched,
             no tools), otherwise "none".
         reason: One short phrase for the log, e.g. "slipping past the dock guard".
+        about_npc_id: Only for a recognition check your context asked for —
+            the NPC who might be placing the player. Passing it makes the
+            answer stick for the rest of the day, so you never have to ask
+            twice in one scene.
 
     Returns:
         Dictionary with the outcome label ("critical_success", "success",
         "partial", "failure" or "critical_failure") and how to narrate it.
     """
+    situation: dict[str, Any] | None = None
     with get_session() as session:
         player = session.get(Player, player_id)
         if not player:
             return {"error": "Player not found"}
 
-        result = prog.roll_skill_check(player, skill, difficulty, modifier)
+        # ONE code-computed factor at most, layered over the DM's own word.
+        # The tool combines (perception must never be imported by progression).
+        factor = perception.situational_factor(session, player, skill)
+        if factor:
+            situation = {
+                **factor,
+                "effective": perception.combine_modifier(modifier, factor["effect"]),
+            }
+
+        result = prog.roll_skill_check(player, skill, difficulty, modifier,
+                                       situation=situation)
+
+        if "error" not in result and about_npc_id:
+            if result["skill"] == perception.RECOGNITION_SKILL:
+                clock = session.query(WorldClock).first()
+                perception.remember_recognition(
+                    player_id, about_npc_id,
+                    recognized=result["outcome"] in perception.RECOGNISED_OUTCOMES,
+                    day=clock.day if clock else 1,
+                )
+            else:
+                logger.debug(
+                    f"roll_check ignored about_npc_id on a {result['skill']} check"
+                )
 
     if "error" in result:
         # Never silently coerce — a coerced word is a number the DM did not choose
@@ -77,11 +107,12 @@ def roll_check(
         f"roll_check {result['skill']}/{result['difficulty']} "
         f"({result['modifier']}) -> {outcome} "
         f"[roll {debug.get('natural')} + lvl {debug.get('level_bonus')} "
-        f"+ trait {debug.get('trait_bonus')} = {debug.get('total')} vs DC {debug.get('dc')}]"
+        f"+ trait {debug.get('trait_bonus')} = {debug.get('total')} vs DC {debug.get('dc')}"
+        f"{', effective ' + debug['effective_modifier'] if debug.get('effective_modifier') else ''}]"
         + (f" :: {reason}" if reason else "")
     )
 
-    return {
+    payload = {
         "success": True,
         "outcome": outcome,
         "skill": result["skill"],
@@ -89,6 +120,16 @@ def roll_check(
         "event": "check_result",
         "instruction": prog.OUTCOME_INSTRUCTIONS[outcome],
     }
+    if situation:
+        # A label and a phrase — never the word "advantage", never a number
+        payload["situation"] = {"factor": situation["factor"],
+                                "because": situation["because"]}
+        payload["instruction"] += (
+            f" The world was with them: {situation['because']} — let that show in how it goes."
+            if situation["effect"] == "advantage" else
+            f" The world was against them: {situation['because']} — let that show in how it goes."
+        )
+    return payload
 
 
 def _stock_error(message: str, valid: list[str]) -> dict[str, Any]:
@@ -122,6 +163,7 @@ def _prepare_entry(entry: Any) -> dict[str, Any]:
     count = max(1, min(MAX_STOCK_COUNT, count))
 
     description = str(entry.get("description") or "")
+    visual_desc = str(entry.get("visual_desc") or "").strip() or None
     # Same slug rule as progression.item_key, so an equipment pointer written
     # against this item resolves back to it.
     item_id = prog._slug(name) or "stock_item"
@@ -151,6 +193,10 @@ def _prepare_entry(entry: Any) -> dict[str, Any]:
             quantity=count,
             slot=kind,
             tier=prog.TIER_LABELS[tier_idx],
+            visual_desc=visual_desc,
+            # Armor-only, and a garbled style word clamps rather than refusing
+            # the whole stock line
+            attire=perception.normalize_attire(entry.get("attire"), slot=kind),
         )
         return {"item": item}
 
@@ -170,6 +216,7 @@ def _prepare_entry(entry: Any) -> dict[str, Any]:
         stackable=True,
         quantity=count,
         effect_tag=effect_tag,
+        visual_desc=visual_desc,
     )
     return {"item": item}
 
@@ -187,6 +234,19 @@ def stock_merchant(npc_id: str, entries: list[dict[str, Any]]) -> dict[str, Any]
     Prices, damage, and protection are set by the engine from the tier — do not
     invent numbers, and do not tell the player a price you have not read back
     from get_inventory.
+
+    Two optional keys per entry:
+      "visual_desc": one short concrete phrase for what the piece looks like
+        ("a boiled-leather coat with a brass lantern badge").
+      "attire": ARMOR ONLY. How the garment makes its wearer READ to strangers:
+        {"style": "noble"|"fine"|"common"|"rough"|"filthy",
+         "uniform_faction_id": "<faction id>" or null,
+         "concealing": true|false}
+        Set uniform_faction_id when the piece is a faction's recognisable
+        colours — strangers will then treat the wearer as that faction, with
+        everything that implies. Set concealing for hoods, masks and veils:
+        strangers cannot identify the wearer at all, and people who know them
+        have to work for it. The engine owns what each word does.
 
     Stock what the merchant would plausibly have. A village smith carries crude
     and common; only a capital armourer carries master. Legendary is never for

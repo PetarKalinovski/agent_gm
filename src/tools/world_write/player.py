@@ -10,6 +10,7 @@ from src.models import (
     Player,
     get_session,
 )
+from src.services import perception
 from src.services import progression as prog
 from src.services.travel import check_route
 
@@ -59,9 +60,10 @@ def move_player(player_id: str, destination_id: str, requirements_met: bool = Fa
             return {"error": "Destination not found"}
 
         # One shared route check with the canvas (src/services/travel.py):
-        # a direct connection's requirements, plus the gate-bypass guard
-        # that stops a hierarchy hop from walking around a locked gate
-        route = check_route(session, player.current_location_id, destination_id)
+        # a direct connection's requirements, the gate-bypass guard that stops
+        # a hierarchy hop from walking around a locked gate, and the
+        # destination's own dress code (which needs the player row)
+        route = check_route(session, player.current_location_id, destination_id, player)
         travel_time = route["travel_time_hours"]
         requirements = route["requirements"]
 
@@ -73,6 +75,15 @@ def move_player(player_id: str, destination_id: str, requirements_met: bool = Fa
                     "around it. Check the player's inventory/state; if satisfied, call "
                     "move_player again with requirements_met=True. Otherwise narrate "
                     "why they can't get through."
+                )
+            elif route["reason"] == "dress":
+                message = (
+                    f"{destination.name} will not take them dressed as they are: "
+                    f"{', '.join(str(r) for r in requirements)} "
+                    "You decide whether that stands. If they talk their way past, "
+                    "bribe the door, borrow a coat, or are simply known here, call "
+                    "move_player again with requirements_met=True. Otherwise narrate "
+                    "the refusal — and let it cost them something."
                 )
             else:
                 message = (
@@ -217,6 +228,8 @@ def add_to_inventory(
     slot: str | None = None,
     tier: str | None = None,
     effect_tag: str | None = None,
+    visual_desc: str | None = None,
+    attire: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Add an item to the player's inventory (found, gifted, looted, stolen).
 
@@ -236,6 +249,17 @@ def add_to_inventory(
             "legendary". You pick the word; the engine sets the numbers.
         effect_tag: If this is a potion or draught: "heal_light", "heal_strong"
             or "surge". The engine owns what it does and what it costs.
+        visual_desc: One short concrete phrase describing what this looks like
+            when worn or held ("a boiled-leather coat with a brass badge").
+        attire: ARMOR ONLY. How this garment makes its wearer READ to strangers:
+            {"style": "noble"|"fine"|"common"|"rough"|"filthy",
+             "uniform_faction_id": "<faction id>" or null,
+             "concealing": true|false}
+            Set uniform_faction_id when the piece is a faction's recognisable
+            colours — strangers will then treat the wearer as that faction,
+            with everything that implies. Set concealing for hoods, masks and
+            veils: strangers cannot identify the wearer at all, and people who
+            know them have to work for it. The engine owns what each word does.
 
     Returns:
         Dictionary with result.
@@ -253,6 +277,10 @@ def add_to_inventory(
                 entry["quantity"] = entry.get("quantity", 1) + quantity
                 break
         else:
+            # `attire` is armor-only. On a sword it is a flavour mistake, not a
+            # rules violation: drop it with a log line rather than spend a turn
+            # refusing (src/services/perception.normalize_attire).
+            mech = prog.mechanize_item({"slot": slot, "tier": tier, "type": item_type}) or {}
             item = Item(
                 id=item_id,
                 name=item_name,
@@ -264,6 +292,8 @@ def add_to_inventory(
                 slot=slot,
                 tier=tier,
                 effect_tag=effect_tag,
+                visual_desc=visual_desc,
+                attire=perception.normalize_attire(attire, slot=mech.get("slot")),
             )
             # Anything mechanical is priced by the table, not by the fiction
             price = prog.catalog_price(item.to_dict())

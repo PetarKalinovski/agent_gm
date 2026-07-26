@@ -16,6 +16,7 @@ from src.models import (
     Player,
     get_session,
 )
+from src.services import perception
 from src.services import progression as prog
 
 
@@ -74,6 +75,8 @@ def create_item_template(
     slot: str | None = None,
     tier: str | None = None,
     effect_tag: str | None = None,
+    visual_desc: str | None = None,
+    attire: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Create an item template that can be used throughout the game.
 
@@ -91,10 +94,24 @@ def create_item_template(
             "legendary". Only meaningful with slot.
         effect_tag: If this is a potion or draught: "heal_light", "heal_strong"
             or "surge". The engine owns what it does.
+        visual_desc: One short concrete phrase describing what this looks like
+            when worn or held ("a soot-grey hood that swallows the face").
+        attire: ARMOR ONLY. How this garment makes its wearer READ to strangers:
+            {"style": "noble"|"fine"|"common"|"rough"|"filthy",
+             "uniform_faction_id": "<faction id>" or null,
+             "concealing": true|false}
+            Set uniform_faction_id when the piece is a faction's recognisable
+            colours — strangers will then treat the wearer as that faction,
+            with everything that implies. Set concealing for hoods, masks and
+            veils: strangers cannot identify the wearer at all, and people who
+            know them have to work for it. The engine owns what each word does.
 
     Returns:
         Dictionary with the validated item template.
     """
+    # `attire` is armor-only; anywhere else it is dropped with a log line
+    mech = prog.mechanize_item({"slot": slot, "tier": tier, "type": item_type}) or {}
+
     # Create and validate using Pydantic model
     item = Item(
         id=item_id,
@@ -108,6 +125,8 @@ def create_item_template(
         slot=slot,
         tier=tier,
         effect_tag=effect_tag,
+        visual_desc=visual_desc,
+        attire=perception.normalize_attire(attire, slot=mech.get("slot")),
     )
 
     # Anything mechanical is priced by the table, whatever `value` said
@@ -289,7 +308,8 @@ def transfer_item(
         else:
             # Create new item in dest inventory — the mechanical fields travel
             # with it (a bought sword that arrives untiered is a bought stick),
-            # stamped with the catalog price.
+            # stamped with the catalog price. Appearance travels too: a bought
+            # hood that arrives with no `attire` stops concealing anything.
             new_item = Item(
                 id=source_item.id,
                 name=source_item.name,
@@ -302,6 +322,8 @@ def transfer_item(
                 slot=source_item.slot,
                 tier=source_item.tier,
                 effect_tag=source_item.effect_tag,
+                visual_desc=source_item.visual_desc,
+                attire=source_item.attire,
             )
             dest_inv.append(new_item)
 
@@ -430,7 +452,8 @@ def spawn_item_to_user(
     Args:
         user_id: The user's ID.
         item_data: Dictionary with item template data. May carry "slot"+"tier"
-            (gear) or "effect_tag" (a potion) — the engine then owns its price.
+            (gear) or "effect_tag" (a potion) — the engine then owns its price —
+            plus "visual_desc" and, on armor, "attire".
         quantity: How many to spawn.
         user_type: Type of user ("player" or "npc").
 
@@ -467,6 +490,11 @@ def spawn_item_to_user(
             slot=item_data.get("slot"),
             tier=item_data.get("tier"),
             effect_tag=item_data.get("effect_tag"),
+            visual_desc=item_data.get("visual_desc"),
+            attire=perception.normalize_attire(
+                item_data.get("attire"),
+                slot=(prog.mechanize_item(item_data) or {}).get("slot"),
+            ),
         )
         price = prog.catalog_price(new_item.to_dict())
         if price is not None:

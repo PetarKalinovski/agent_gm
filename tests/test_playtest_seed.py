@@ -8,6 +8,7 @@ from src.models import (
     Connection,
     DMState,
     Event,
+    Faction,
     Location,
     Player,
     Quest,
@@ -87,6 +88,65 @@ def test_locked_connection_and_quest(playtest_db):
         assert quest.rewards.get("items") and quest.rewards.get("reputation")
         brann = session.query(NPC).filter_by(name="Captain Brann Coldiron").one()
         assert quest.assigned_by_npc_id == brann.id
+
+
+def test_the_lantern_keeps_a_door_policy(playtest_db):
+    with get_session() as session:
+        tavern = session.query(Location).filter_by(name="The Drowned Lantern").one()
+        code = tavern.dress_code
+        assert code["banned_styles"] == ["concealing", "filthy"]
+        assert code["min_style"] is None
+        assert "Maera keeps a warm room" in code["reason"]
+
+        # Everywhere else stays open to anyone — a dress code is rare on purpose
+        others = session.query(Location).filter(Location.id != tavern.id).all()
+        assert all(loc.dress_code is None for loc in others)
+
+
+def test_three_garments_cover_the_attire_matrix(playtest_db):
+    """Uniform, concealing hood and filthy oilskin, one NPC each."""
+    with get_session() as session:
+        watch_id = session.query(Faction).filter_by(name="The Lantern Watch").one().id
+        shelves = {
+            npc.name: (npc.inventory_notable or [])
+            for npc in session.query(NPC).all()
+        }
+
+    coat = shelves["Captain Brann Coldiron"][0]
+    hood = shelves["Vex Marrow"][0]
+    oilskin = shelves["Sorrel Tack"][0]
+
+    for garment in (coat, hood, oilskin):
+        assert garment["slot"] == "armor" and garment["tier"] in ("crude", "common")
+        assert garment["visual_desc"]
+        assert set(garment["attire"]) == {"style", "uniform_faction_id", "concealing"}
+
+    assert coat["attire"] == {"style": "common", "uniform_faction_id": watch_id,
+                              "concealing": False}
+    assert hood["attire"]["concealing"] is True
+    assert hood["attire"]["uniform_faction_id"] is None
+    assert oilskin["attire"]["style"] == "filthy"
+
+
+def test_the_seeded_matrix_actually_reaches_the_door(playtest_db):
+    """Hood -> refused, oilskin -> refused, Watch coat -> welcome."""
+    from src.services import perception
+    from src.services import progression as prog
+
+    with get_session() as session:
+        tavern = session.query(Location).filter_by(name="The Drowned Lantern").one()
+        code = tavern.dress_code
+        shelves = {npc.name: (npc.inventory_notable or [])
+                   for npc in session.query(NPC).all()}
+
+    def _verdict(garment):
+        player = Player(name="Rook", level=10, inventory=[garment],
+                        equipment={"armor": prog.item_key(garment)})
+        return perception.dress_verdict(perception.perception_profile(player), code)
+
+    assert _verdict(shelves["Vex Marrow"][0])["token"] == "concealing"
+    assert _verdict(shelves["Sorrel Tack"][0])["token"] == "filthy"
+    assert _verdict(shelves["Captain Brann Coldiron"][0])["allowed"] is True
 
 
 def test_clock_and_scheduled_events(playtest_db):

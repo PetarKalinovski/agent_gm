@@ -10,6 +10,7 @@ import httpx
 from PIL import Image
 
 from src.config import load_settings
+from src.services import appearance
 
 if TYPE_CHECKING:
     from src.models.location import Location
@@ -294,6 +295,23 @@ Return a JSON array (no other text): [{"label": "<short name>", "box_2d": [ymin,
             if boxes is not None:
                 return boxes_to_footprint_polygons(boxes)
         return []
+
+    def sprite_rel(self, sig: str, filename: str) -> str:
+        """Relative path for `_save_image`: 'sprites/x.png' or
+        'sprites/variants/<sig>/x.png'.
+
+        `base` and `base-unarmed` resolve to the FLAT legacy sprites dir —
+        that is the entire migration story (appearance ruling A4).
+        """
+        if sig in (appearance.BASE_BODY_SIG, appearance.BASE_ACTION_SIG):
+            return f"sprites/{filename}"
+        if not appearance.is_valid_signature(sig):
+            raise ValueError(f"Invalid appearance signature {sig!r}")
+        return f"sprites/variants/{sig}/{filename}"
+
+    def sprite_path(self, sig: str, filename: str) -> Path:
+        """Absolute path of one frame in one signature's directory."""
+        return self.assets_dir / self.sprite_rel(sig, filename)
 
     def _save_image(self, image_data: bytes, relative_path: str) -> str:
         """Save image to assets directory. Returns absolute path."""
@@ -686,6 +704,88 @@ CRITICAL: Output ONE character only. NOT a sprite sheet, NOT multiple views side
         path = self._save_image(cutout, f"sprites/{character.id}_{direction}.png")
         return path
 
+    # Same wording as `_build_sprite_prompt`'s direction_map — a variant idle
+    # must be framed exactly like the base idle it is generated from.
+    _IDLE_DIRECTION_MAP = {
+        "front": "front-facing view, looking at viewer",
+        "back": "back view, facing away from viewer",
+        "left": "left side profile view",
+        "right": "right side profile view",
+    }
+
+    def _build_outfit_idle_prompt(
+        self,
+        character: "NPC | Player",
+        world_bible: "WorldBible",
+        direction: str,
+        outfit_desc: str,
+    ) -> str:
+        """Prompt for one outfit-variant idle (the only genuinely new prompt).
+
+        The garment rides in as TEXT here and as a REFERENCE IMAGE everywhere
+        downstream: walk/dodge/attack strips are generated from the variant
+        idle this produces, so their existing "matching the reference image
+        EXACTLY" clause is already the whole contract (ruling A8).
+        """
+        visual_style = world_bible.visual_style if world_bible else "fantasy RPG game art"
+        view_desc = self._IDLE_DIRECTION_MAP.get(direction, self._IDLE_DIRECTION_MAP["front"])
+
+        return f"""The attached image shows the character "{character.name}" from a 2D RPG. That is exactly
+who this is: same face, same hair, same skin tone, same build, same age, same
+art style.
+
+Draw the SAME character, now WEARING: {outfit_desc}
+
+The clothing is the ONLY thing that changes. Ignore any clothing described
+elsewhere — the garment above replaces what they are wearing in the reference.
+Do not redesign the face. Do not change their proportions or their height. Do
+not add a weapon, a prop, a backdrop, or a companion.
+
+Pose: standing idle, {view_desc}
+- Full body visible from head to feet
+- SAME scale and framing as the reference image: the character fills the same
+  share of the canvas, feet at the same height
+- Solid bright green background (#00FF00) for chroma key removal
+- ONLY ONE CHARACTER, ONE POSE. No sprite sheet, no alternate views, no
+  turnaround, no duplicates
+- No shadows on the ground, no text, no labels, clean edges for cutting out
+- Style: {visual_style}"""
+
+    async def generate_outfit_variant_idle(
+        self,
+        character: "NPC | Player",
+        world_bible: "WorldBible",
+        direction: str,
+        reference_image: bytes,
+        outfit_desc: str,
+        sig: str,
+    ) -> str:
+        """One variant idle, saved to sprites/variants/{sig}/{id}_{dir}.png.
+
+        Same cutout + `_cutout_failed` + one-retry logic as
+        `generate_character_sprite_with_reference` — a variant that ships with
+        its painted background is exactly as broken as a base one.
+        """
+        prompt = self._build_outfit_idle_prompt(character, world_bible, direction, outfit_desc)
+        logger.info(f"Generating {direction} outfit idle for {character.name} ({sig})")
+
+        image_data = await self._call_api(
+            prompt, aspect_ratio="1:1", image_size="1K", reference_image=reference_image
+        )
+        cutout = self._remove_background(image_data)
+        if self._cutout_failed(cutout):
+            logger.warning(
+                f"Cutout failed for {character.name} ({direction}, {sig}); regenerating once"
+            )
+            image_data = await self._call_api(
+                prompt, aspect_ratio="1:1", image_size="1K", reference_image=reference_image
+            )
+            retry = self._remove_background(image_data)
+            if not self._cutout_failed(retry):
+                cutout = retry
+
+        return self._save_image(cutout, self.sprite_rel(sig, f"{character.id}_{direction}.png"))
+
     # One Gemini call per direction produces the KEY poses as a filmstrip.
     # Frames generated together stay consistent (style, scale, proportions);
     # frames generated one-by-one visibly morph between poses. RIFE then
@@ -800,29 +900,60 @@ Frame 6 — RECOVERED: low ready stance facing right, knees bent, arms in guard.
 Every frame is a strict FULL SIDE PROFILE facing right.""",
     }
 
-    async def generate_action_cycle(
+    # What the strip says about the weapon. Three states, not two:
+    #   None  -> the LEGACY sentence (byte-identical default; the reference
+    #            image decides, which is what every existing character got)
+    #   ""    -> the caller KNOWS the character is empty-handed
+    #   text  -> the caller knows exactly which weapon is in the hand
+    _LEGACY_WEAPON_LINE = (
+        "If the character carries a weapon in the reference, they use that weapon;\n"
+        "otherwise they fight bare-handed."
+    )
+    _UNARMED_WEAPON_LINE = (
+        "The character fights BARE-HANDED. No weapon in any frame — fists, forearms and\n"
+        "elbows only."
+    )
+
+    @classmethod
+    def _weapon_line(cls, weapon_desc: str | None) -> str:
+        """The weapon clause of the action-cycle prompt.
+
+        A weapon that flickers between frames is the failure mode this line
+        exists to kill, so an armed strip names the weapon in every beat of
+        the arc rather than trusting the reference image.
+        """
+        if weapon_desc is None:
+            return cls._LEGACY_WEAPON_LINE
+        weapon_desc = " ".join(str(weapon_desc).split())
+        if not weapon_desc:
+            return cls._UNARMED_WEAPON_LINE
+        return (
+            f"The character is striking with {weapon_desc}. The weapon is DRAWN AND IN HAND in\n"
+            "every single frame — cocked back at the hip in frames 1-2, sweeping through the\n"
+            "arc in frames 3-4, settling back to guard in frames 5-6. Draw the same weapon at\n"
+            "the same size, shape and colour in every frame; it never disappears, never\n"
+            "changes into a different weapon, and is never sheathed."
+        )
+
+    def _build_action_cycle_prompt(
         self,
         character: "NPC | Player",
         world_bible: "WorldBible",
         action: str,
-        reference_image: bytes,
-    ) -> dict[str, str]:
-        """Generate a 6-frame combat action (attack/dodge) filmstrip.
+        weapon_desc: str | None = None,
+    ) -> str:
+        """Prompt for one 6-frame action filmstrip.
 
-        Same machinery as walks (one strip call, artifact-immune slicing,
-        validation, feet-centroid normalization) but NO interpolation and
-        neighbor-repair instead of phase-partner repair (an action is an arc,
-        not a loop — frame i+3 is a different pose, not a leg-swap).
-
-        Returns:
-            Dict mapping "{action}{n}" to saved file path.
+        With `weapon_desc=None` this is byte-identical to the pre-appearance
+        prompt — the default path must not move a single character.
         """
         if action not in self._ACTION_CHOREOGRAPHY:
             raise ValueError(f"Unknown action {action!r}")
         visual_style = world_bible.visual_style if world_bible else "fantasy RPG game art"
         n = self.ACTION_KEYFRAME_COUNT
+        weapon_line = self._weapon_line(weapon_desc)
 
-        prompt = f"""The attached image shows the character "{character.name}" standing idle, from a 2D RPG.
+        return f"""The attached image shows the character "{character.name}" standing idle, from a 2D RPG.
 Draw a sprite sheet: this EXACT character performing a {n}-frame {action} animation.
 
 Format: a single horizontal filmstrip of {n} frames. Divide the image into {n} equal
@@ -835,13 +966,42 @@ The motion must be dynamic and clearly readable, like classic action-game animat
 Every frame: the SAME character design — clothing, colors, face and proportions
 matching the reference image EXACTLY (do not redesign or simplify the outfit),
 identical art style ({visual_style}), identical scale, one shared ground line.
-If the character carries a weapon in the reference, they use that weapon;
-otherwise they fight bare-handed.
+{weapon_line}
 But every frame is a DIFFERENT pose from the choreography above — no two frames in
 the strip may repeat the same pose.
 The ENTIRE canvas must be one continuous solid white background from edge to edge —
 no black areas, no cards, no panels, no grid lines, no frame borders, no numbers,
 no text, no shadows."""
+
+    async def generate_action_cycle(
+        self,
+        character: "NPC | Player",
+        world_bible: "WorldBible",
+        action: str,
+        reference_image: bytes,
+        *,
+        weapon_desc: str | None = None,
+        sig: str = appearance.BASE_ACTION_SIG,
+    ) -> dict[str, str]:
+        """Generate a 6-frame combat action (attack/dodge) filmstrip.
+
+        Same machinery as walks (one strip call, artifact-immune slicing,
+        validation, feet-centroid normalization) but NO interpolation and
+        neighbor-repair instead of phase-partner repair (an action is an arc,
+        not a loop — frame i+3 is a different pose, not a leg-swap).
+
+        Args:
+            weapon_desc: None keeps the legacy "whatever the reference shows"
+                sentence; "" states the character is empty-handed; a phrase
+                names the weapon in every frame. Dodge always passes None
+                (a roll shows the outfit, never the weapon — ruling A3).
+            sig: appearance signature picking the output directory.
+
+        Returns:
+            Dict mapping "{action}{n}" to saved file path.
+        """
+        n = self.ACTION_KEYFRAME_COUNT
+        prompt = self._build_action_cycle_prompt(character, world_bible, action, weapon_desc)
 
         logger.info(f"Generating {n}-frame {action} cycle for {character.name}")
         strip_data = await self._call_api(
@@ -863,7 +1023,9 @@ no text, no shadows."""
             buf = io.BytesIO()
             frame_img.save(buf, format="PNG")
             key = f"{action}{i}"
-            paths[key] = self._save_image(buf.getvalue(), f"sprites/{character.id}_{key}.png")
+            paths[key] = self._save_image(
+                buf.getvalue(), self.sprite_rel(sig, f"{character.id}_{key}.png")
+            )
         return paths
 
     async def generate_walk_cycle(
@@ -871,7 +1033,8 @@ no text, no shadows."""
         character: "NPC | Player",
         world_bible: "WorldBible",
         direction: str,
-        reference_image: bytes
+        reference_image: bytes,
+        sig: str = appearance.BASE_BODY_SIG,
     ) -> dict[str, str]:
         """Generate a full walk cycle for one direction from a single API call.
 
@@ -935,14 +1098,18 @@ no text, no shadows."""
             buf = io.BytesIO()
             frame_img.save(buf, format="PNG")
             key = f"{direction}_walk{i}"
-            paths[key] = self._save_image(buf.getvalue(), f"sprites/{character.id}_{key}.png")
+            paths[key] = self._save_image(
+                buf.getvalue(), self.sprite_rel(sig, f"{character.id}_{key}.png")
+            )
         return paths
 
-    def upgrade_walk_cycle(self, character_id: str, direction: str) -> dict[str, str] | None:
+    def upgrade_walk_cycle(
+        self, character_id: str, direction: str, sig: str = appearance.BASE_BODY_SIG
+    ) -> dict[str, str] | None:
         """Upgrade a legacy key-only cycle (6 frames) to the full count by
         interpolation — no API call. Returns paths, or None if the legacy
         set isn't complete."""
-        sprites_dir = self.assets_dir / "sprites"
+        sprites_dir = self.sprite_path(sig, "")
         key_paths = [
             sprites_dir / f"{character_id}_{direction}_walk{i}.png"
             for i in range(1, self.WALK_KEYFRAME_COUNT + 1)
@@ -1112,7 +1279,13 @@ no text, no shadows."""
             frames.append(canvas)
         return frames
 
-    def mirror_walk_cycle(self, character_id: str, source_direction: str, target_direction: str) -> dict[str, str]:
+    def mirror_walk_cycle(
+        self,
+        character_id: str,
+        source_direction: str,
+        target_direction: str,
+        sig: str = appearance.BASE_BODY_SIG,
+    ) -> dict[str, str]:
         """Create walk frames for target_direction by mirroring source frames.
 
         Left/right cycles are mirror images — one API call covers both, and
@@ -1121,7 +1294,8 @@ no text, no shadows."""
         from PIL import ImageOps
 
         paths: dict[str, str] = {}
-        sprites_dir = self.assets_dir / "sprites"
+        sprites_dir = self.sprite_path(sig, "")
+        sprites_dir.mkdir(parents=True, exist_ok=True)
         for i in range(1, self.WALK_FRAME_COUNT + 1):
             src = sprites_dir / f"{character_id}_{source_direction}_walk{i}.png"
             if not src.exists():

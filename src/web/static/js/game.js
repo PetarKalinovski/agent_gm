@@ -109,6 +109,18 @@ class GameRenderer {
         this.weatherTintTarget = { r: 1, g: 1, b: 1 };
         this._weatherFadeTarget = 0;
 
+        // Visible equipment: the engine names the sprite set the player's
+        // gear entitles them to (state.appearance signatures); the renderer
+        // swaps to it only when its whole set is on disk — never a naked
+        // frame, never a half-dressed one. Signatures ride every player
+        // sprite URL as `?a=` (strict server-side, a real cache-buster).
+        this.appearance = {
+            wantedBody: 'base', wantedAction: 'base-unarmed',
+            loadedBody: null, loadedAction: null,
+            poll: null, pollTries: 0,
+        };
+        this._pendingSwap = null;   // swap deferred while an action animates
+
         // Initialize
         this.init();
     }
@@ -340,6 +352,8 @@ class GameRenderer {
         window.removeEventListener('resize', this._onResize);
         window.removeEventListener('forge-voice-start', this._onVoiceStart);
         window.removeEventListener('forge-voice-end', this._onVoiceEnd);
+        this._stopAppearancePoll();
+        this._pendingSwap = null;
         this._pendingCombat = null;
         if (this._visionEndTimer) { clearTimeout(this._visionEndTimer); this._visionEndTimer = null; }
         if (this.cine) this._endCinematic(true);
@@ -389,6 +403,8 @@ class GameRenderer {
         this.doorArmed = null;
         this.doorDwell = 0;
         this.doorCooldown = GameRenderer.DOOR_COOLDOWN_MS;  // no instant bounce-back
+        this._stopAppearancePoll();     // the scene fetch restates the wanted look
+        this._pendingSwap = null;
         // Keep the player, but maybe hide them or move them to center
         if (this.player) {
             this.player.normalizedX = 50;
@@ -422,14 +438,30 @@ class GameRenderer {
             this._buildObjects(data.objects || []);
             this._loadBarks(locationId);   // fire and forget
 
-            // Load player sprite
-            await this.loadPlayer(data.player);
+            // Visible equipment: what to aim for (wanted signatures) and
+            // what is guaranteed on disk RIGHT NOW (serving signatures)
+            const ap = data.appearance || {};
+            this.appearance.wantedBody = ap.body_sig || 'base';
+            this.appearance.wantedAction = ap.action_sig || 'base-unarmed';
+            const servingBody = ap.serving_body || 'base';
+            const servingAction = ap.serving_action || 'base-unarmed';
+
+            // Load player sprite (the serving set — never a placeholder the
+            // initial load could have avoided)
+            await this.loadPlayer(data.player, servingBody, servingAction);
 
             // Load NPC sprites
             await this.loadNPCs(data.npcs);
 
             // Center camera on player initially
             this.centerCameraOnPlayer();
+
+            // Mid-generation reload: watch for the wanted set to finish
+            if (this.appearance.loadedBody !== this.appearance.wantedBody ||
+                this.appearance.loadedAction !== this.appearance.wantedAction) {
+                this.appearance.pollTries = 0;
+                this._startAppearancePoll();
+            }
 
             console.log(`Loaded location: ${data.location_name}`);
 
@@ -528,7 +560,7 @@ class GameRenderer {
         shadow.y = (groundY !== null ? groundY : sprite.y) + 2;
     }
 
-    async loadPlayer(playerData) {
+    async loadPlayer(playerData, bodySig = 'base', actionSig = 'base-unarmed') {
         if (!this.playerLayer) return;
         if (this.player && this.player.sprite) {
             this.entityLayer.removeChild(this.player.sprite);
@@ -566,7 +598,7 @@ class GameRenderer {
         this.updatePlayerPosition();
 
         // Load textures one by one (safer than bundle mapping)
-        await this.preloadAllSprites();
+        await this.preloadAllSprites(bodySig, actionSig);
 
         // Remove tint and force initial frame
         s.tint = 0xffffff;
@@ -841,6 +873,8 @@ class GameRenderer {
         this._updateObjects();
         this._updateBarks(deltaTime);
         if (this.combat) this._updateCombat(deltaTime);
+        // A texture swap deferred past an attack/dodge lands the frame after
+        if (this._pendingSwap && !this.playerAction) this._applyPendingSwap();
         this._updateJuice(deltaTime);
         this.applyAnimationFrame();
         this.updateCamera();
@@ -1175,7 +1209,10 @@ class GameRenderer {
         }
 
         try {
-            const url = `/api/assets/sprite/player/${this.playerId}/${direction}`;
+            // ?a= pins the frame to the set on screen — a lazy single-
+            // direction load can never pull from a different outfit
+            const b = `?a=${encodeURIComponent(this.appearance.loadedBody || 'base')}`;
+            const url = `/api/assets/sprite/player/${this.playerId}/${direction}${b}`;
             const texture = await PIXI.Assets.load(url);
             this.player.sprites[direction] = texture;
             this.player.sprite.texture = texture;
@@ -1185,10 +1222,11 @@ class GameRenderer {
     }
 
     async preloadWalkSprites(direction) {
+        const b = `?a=${encodeURIComponent(this.appearance.loadedBody || 'base')}`;
         // Preload idle sprite for direction if not cached
         if (!this.player.sprites[direction]) {
             try {
-                const idleUrl = `/api/assets/sprite/player/${this.playerId}/${direction}`;
+                const idleUrl = `/api/assets/sprite/player/${this.playerId}/${direction}${b}`;
                 const idleTexture = await PIXI.Assets.load(idleUrl);
                 this.player.sprites[direction] = idleTexture;
             } catch (error) {
@@ -1204,7 +1242,7 @@ class GameRenderer {
         for (let frame = 1; frame <= this.walkFrameCount; frame++) {
             if (!this.player.walkSprites[direction][frame]) {
                 try {
-                    const url = `/api/assets/sprite/player/${this.playerId}/${direction}_walk${frame}`;
+                    const url = `/api/assets/sprite/player/${this.playerId}/${direction}_walk${frame}${b}`;
                     const texture = await PIXI.Assets.load(url);
                     this.player.walkSprites[direction][frame] = texture;
                     console.log(`Loaded walk sprite: ${direction}_walk${frame}`);
@@ -1217,11 +1255,15 @@ class GameRenderer {
         }
     }
 
-    async preloadAllSprites() {
+    async preloadAllSprites(bodySig = 'base', actionSig = 'base-unarmed') {
         const directions = ['front', 'back', 'left', 'right'];
         const frames = Array.from({ length: this.walkFrameCount }, (_, i) => i + 1);
         // Add .png to the base if you like, or just in the loop
         const playerUrlBase = `/api/assets/sprite/player/${this.playerId}`;
+        // Signature per axis: dodge is BODY (a roll shows the outfit),
+        // attack is the ACTION pair (armor + weapon)
+        const b = `?a=${encodeURIComponent(bodySig)}`;
+        const a = `?a=${encodeURIComponent(actionSig)}`;
 
         const loadJobs = [];
 
@@ -1232,7 +1274,7 @@ class GameRenderer {
         for (const action of ['attack', 'dodge']) {
             for (let f = 1; f <= 6; f++) {
                 loadJobs.push(
-                    PIXI.Assets.load(`${playerUrlBase}/${action}${f}.png`).then(tex => {
+                    PIXI.Assets.load(`${playerUrlBase}/${action}${f}.png${action === 'attack' ? a : b}`).then(tex => {
                         this.player.actionSprites[action][f] = tex;
                     }).catch(() => {
                         this.player.actionSprites[action][f] = null;
@@ -1245,7 +1287,7 @@ class GameRenderer {
             // LOAD IDLE (Append .png) — sprite may still be generating (404):
             // fall back to placeholder, the pending-poll reload picks it up later
             loadJobs.push(
-                PIXI.Assets.load(`${playerUrlBase}/${dir}.png`).then(tex => {
+                PIXI.Assets.load(`${playerUrlBase}/${dir}.png${b}`).then(tex => {
                     this.player.sprites[dir] = tex;
                 }).catch(() => {
                     this.player.sprites[dir] = null;
@@ -1256,7 +1298,7 @@ class GameRenderer {
             this.player.walkSprites[dir] = {};
             frames.forEach(f => {
                 loadJobs.push(
-                    PIXI.Assets.load(`${playerUrlBase}/${dir}_walk${f}.png`).then(tex => {
+                    PIXI.Assets.load(`${playerUrlBase}/${dir}_walk${f}.png${b}`).then(tex => {
                         this.player.walkSprites[dir][f] = tex;
                     }).catch(e => {
                         this.player.walkSprites[dir][f] = this.player.sprites[dir];
@@ -1266,6 +1308,199 @@ class GameRenderer {
         });
 
         await Promise.all(loadJobs);
+        this.appearance.loadedBody = bodySig;
+        this.appearance.loadedAction = actionSig;
+    }
+
+    // ================= Visible equipment (appearance swaps) =================
+    // state.appearance names the WANTED signatures; /api/assets/appearance
+    // reports when their art is completely on disk; the swap is atomic per
+    // axis and deferred while an attack/dodge animation is mid-flight.
+
+    static APPEARANCE_POLL_MS = 5000;
+    static APPEARANCE_POLL_MAX = 48;    // ~4 min — comfortably past a 7-call set
+
+    /** The engine's wanted look (from every state event). Does NOT touch
+     *  textures — it only decides whether to start watching for a new set. */
+    setAppearance(block) {
+        if (!block || !this.player) return;
+        const body = block.body_sig || 'base';
+        const action = block.action_sig || 'base-unarmed';
+        if (body === this.appearance.wantedBody &&
+            action === this.appearance.wantedAction) return;
+        this.appearance.wantedBody = body;
+        this.appearance.wantedAction = action;
+        this.appearance.pollTries = 0;
+        this._startAppearancePoll();
+    }
+
+    _startAppearancePoll() {
+        this._stopAppearancePoll();
+        if (!this.playerId) return;
+        this.appearance.poll = setInterval(
+            () => this._pollAppearance(), GameRenderer.APPEARANCE_POLL_MS);
+        this._pollAppearance();   // first check now, not in 5 s
+    }
+
+    _stopAppearancePoll() {
+        if (this.appearance && this.appearance.poll) {
+            clearInterval(this.appearance.poll);
+            this.appearance.poll = null;
+        }
+    }
+
+    async _pollAppearance() {
+        const ap = this.appearance;
+        if (!this.playerId || !this.player) { this._stopAppearancePoll(); return; }
+        if (++ap.pollTries > GameRenderer.APPEARANCE_POLL_MAX) {
+            this._stopAppearancePoll();
+            return;
+        }
+        let data;
+        try {
+            const res = await fetch(`/api/assets/appearance/${this.playerId}`);
+            if (!res.ok) return;
+            data = await res.json();
+        } catch (e) { return; }   // transient — the interval retries
+        if (!this.appearance.poll) return;   // stopped while the fetch flew
+
+        // The server is the authority on what is wanted (gear may have moved
+        // again since the state event that started this poll)
+        ap.wantedBody = data.body_sig || 'base';
+        ap.wantedAction = data.action_sig || 'base-unarmed';
+
+        if (data.body_ready && ap.loadedBody !== ap.wantedBody) {
+            await this._swapBody(ap.wantedBody);
+        }
+        if (data.action_ready && ap.loadedAction !== ap.wantedAction) {
+            await this._swapAction(ap.wantedAction);
+        }
+
+        const done = ap.loadedBody === ap.wantedBody &&
+                     ap.loadedAction === ap.wantedAction && !this._pendingSwap;
+        if (done || (data.failed && !data.generating)) {
+            // Done — or generation failed: keep the current look, stop asking
+            this._stopAppearancePoll();
+        }
+    }
+
+    /** Every URL one signature's textures were loaded under. */
+    _appearanceUrls(axis, sig) {
+        if (!sig || !this.playerId) return [];
+        const base = `/api/assets/sprite/player/${this.playerId}`;
+        const q = `?a=${encodeURIComponent(sig)}`;
+        const urls = [];
+        if (axis === 'body') {
+            for (const dir of ['front', 'back', 'left', 'right']) {
+                urls.push(`${base}/${dir}.png${q}`);
+                for (let f = 1; f <= this.walkFrameCount; f++) {
+                    urls.push(`${base}/${dir}_walk${f}.png${q}`);
+                }
+            }
+            for (let f = 1; f <= 6; f++) urls.push(`${base}/dodge${f}.png${q}`);
+        } else {
+            for (let f = 1; f <= 6; f++) urls.push(`${base}/attack${f}.png${q}`);
+        }
+        return urls;
+    }
+
+    /** Unload retired texture URLs — bounded memory across many swaps. */
+    _unloadUrls(urls) {
+        try {
+            const known = (urls || []).filter(u => PIXI.Assets.cache.has(u));
+            if (known.length) {
+                const out = PIXI.Assets.unload(known);
+                if (out && out.catch) out.catch(() => {});
+            }
+        } catch (e) { /* stale cache entries are a leak, not a crash */ }
+    }
+
+    /** Atomic body swap: idles + walks + dodge all resolve before ANY texture
+     *  is assigned. One failed frame discards the whole batch — the player
+     *  stays dressed as they were and the poll retries. */
+    async _swapBody(sig) {
+        if (!this.player || !this.playerId || this.appearance.loadedBody === sig) return false;
+        const base = `/api/assets/sprite/player/${this.playerId}`;
+        const q = `?a=${encodeURIComponent(sig)}`;
+        const idles = {}, walks = {}, dodge = {};
+        const jobs = [];
+        for (const dir of ['front', 'back', 'left', 'right']) {
+            walks[dir] = {};
+            jobs.push(PIXI.Assets.load(`${base}/${dir}.png${q}`).then(t => { idles[dir] = t; }));
+            for (let f = 1; f <= this.walkFrameCount; f++) {
+                jobs.push(PIXI.Assets.load(`${base}/${dir}_walk${f}.png${q}`)
+                    .then(t => { walks[dir][f] = t; }));
+            }
+        }
+        for (let f = 1; f <= 6; f++) {
+            jobs.push(PIXI.Assets.load(`${base}/dodge${f}.png${q}`).then(t => { dodge[f] = t; }));
+        }
+        try {
+            await Promise.all(jobs);
+        } catch (e) {
+            this._unloadUrls(this._appearanceUrls('body', sig));
+            return false;
+        }
+        const apply = () => {
+            if (!this.player) return;
+            const old = this.appearance.loadedBody;
+            this.player.sprites = idles;
+            this.player.walkSprites = walks;
+            if (!this.player.actionSprites) this.player.actionSprites = { attack: {}, dodge: {} };
+            this.player.actionSprites.dodge = dodge;
+            this.appearance.loadedBody = sig;
+            this.applyAnimationFrame();
+            if (old && old !== sig) this._unloadUrls(this._appearanceUrls('body', old));
+            console.log(`Appearance: body set swapped to ${sig}`);
+        };
+        if (this.playerAction) {   // never mid-swing — defer one action's length
+            this._pendingSwap = Object.assign(this._pendingSwap || {}, { body: apply });
+            return false;
+        }
+        apply();
+        return true;
+    }
+
+    /** Same shape for the 6 attack frames (the armor+weapon pair). */
+    async _swapAction(sig) {
+        if (!this.player || !this.playerId || this.appearance.loadedAction === sig) return false;
+        const base = `/api/assets/sprite/player/${this.playerId}`;
+        const q = `?a=${encodeURIComponent(sig)}`;
+        const attack = {};
+        const jobs = [];
+        for (let f = 1; f <= 6; f++) {
+            jobs.push(PIXI.Assets.load(`${base}/attack${f}.png${q}`).then(t => { attack[f] = t; }));
+        }
+        try {
+            await Promise.all(jobs);
+        } catch (e) {
+            this._unloadUrls(this._appearanceUrls('action', sig));
+            return false;
+        }
+        const apply = () => {
+            if (!this.player) return;
+            const old = this.appearance.loadedAction;
+            if (!this.player.actionSprites) this.player.actionSprites = { attack: {}, dodge: {} };
+            this.player.actionSprites.attack = attack;
+            this.appearance.loadedAction = sig;
+            if (old && old !== sig) this._unloadUrls(this._appearanceUrls('action', old));
+            console.log(`Appearance: attack set swapped to ${sig}`);
+        };
+        if (this.playerAction) {
+            this._pendingSwap = Object.assign(this._pendingSwap || {}, { action: apply });
+            return false;
+        }
+        apply();
+        return true;
+    }
+
+    /** The deferred swap lands on the first frame after the action ends. */
+    _applyPendingSwap() {
+        const pending = this._pendingSwap;
+        this._pendingSwap = null;
+        if (!pending) return;
+        if (pending.body) pending.body();
+        if (pending.action) pending.action();
     }
 
     startTransform(sprite, npcData) {

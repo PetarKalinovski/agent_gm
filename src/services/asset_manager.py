@@ -2,13 +2,16 @@
 
 import logging
 import asyncio
+import shutil
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
+from src.config import load_settings
 from src.models import get_session
 from src.models.location import Location
 from src.models.npc import NPC
 from src.models.player import Player
 from src.models.world_bible import WorldBible
+from src.services import appearance
 from src.services.image_generator import ImageGenerator
 from src.services.reference_search import ReferenceImageSearch
 from src.services.scene_objects import public_objects
@@ -38,6 +41,16 @@ class AssetManager:
         self._pending_tasks: dict[str, "asyncio.Task"] = {}
         # Recent generation failures: asset key -> monotonic timestamp
         self._failures: dict[str, float] = {}
+        # Completed sprite sets: (axis, character_id, signature). Completeness
+        # is monotonic — frames only ever appear — so a True is never
+        # re-checked; only LRU eviction drops an entry.
+        self._complete: set[tuple[str, str, str]] = set()
+        cfg = load_settings().appearance
+        # One variant BODY set at a time by default: seven image calls fired
+        # five times over because someone is playing with the character panel
+        # is exactly the bill nobody wants.
+        self._body_gate = asyncio.Semaphore(max(1, cfg.body_concurrency))
+        self._action_gate = asyncio.Semaphore(max(1, cfg.action_concurrency))
 
     # ------------------------------------------------------------------
     # Background generation plumbing
@@ -139,6 +152,277 @@ class AssetManager:
             "background_path": path,
             "walkable_bounds": walkable_bounds
         }
+
+    # ------------------------------------------------------------------
+    # Appearance: signature-scoped sprite sets (visible equipment)
+    # ------------------------------------------------------------------
+
+    DIRECTIONS = ("front", "back", "left", "right")
+
+    def sprite_dir(self, sig: str) -> Path:
+        """Directory holding one signature's frames.
+
+        'base' and 'base-unarmed' resolve to the FLAT legacy sprites dir — that
+        is the entire migration story (appearance ruling A4).
+
+        Raises:
+            ValueError: for a signature that is not a safe directory name.
+                `?a=` is client-supplied; callers turn this into a 404.
+        """
+        if sig in (appearance.BASE_BODY_SIG, appearance.BASE_ACTION_SIG):
+            return self.assets_dir / "sprites"
+        if not appearance.is_valid_signature(sig):
+            raise ValueError(f"Invalid appearance signature {sig!r}")
+        return self.assets_dir / "sprites" / "variants" / sig
+
+    @staticmethod
+    def _frame_ready(path: Path) -> bool:
+        """A frame counts only when it exists AND has bytes (a truncated write
+        from a killed process must read as missing, not as done)."""
+        try:
+            return path.exists() and path.stat().st_size > 0
+        except OSError:
+            return False
+
+    def body_frame_names(self, character_id: str) -> list[str]:
+        """The 58 filenames one BODY signature holds: 4 idles, 4x12 walk
+        frames, 6 dodge frames (a roll shows the outfit — ruling A3)."""
+        names: list[str] = []
+        for direction in self.DIRECTIONS:
+            names.append(f"{character_id}_{direction}.png")
+            names.extend(
+                f"{character_id}_{direction}_walk{frame}.png"
+                for frame in range(1, ImageGenerator.WALK_FRAME_COUNT + 1)
+            )
+        names.extend(
+            f"{character_id}_dodge{frame}.png"
+            for frame in range(1, ImageGenerator.ACTION_KEYFRAME_COUNT + 1)
+        )
+        return names
+
+    def action_frame_names(self, character_id: str) -> list[str]:
+        """The 6 filenames one ACTION signature holds."""
+        return [
+            f"{character_id}_attack{frame}.png"
+            for frame in range(1, ImageGenerator.ACTION_KEYFRAME_COUNT + 1)
+        ]
+
+    def _set_complete(self, axis: str, character_id: str, sig: str, names: list[str]) -> bool:
+        key = (axis, character_id, sig)
+        if key in self._complete:
+            return True
+        if not appearance.is_valid_signature(sig):
+            return False
+        directory = self.sprite_dir(sig)
+        if not all(self._frame_ready(directory / name) for name in names):
+            return False
+        self._complete.add(key)
+        return True
+
+    def body_set_complete(self, character_id: str, sig: str) -> bool:
+        """True when every one of the 58 body frames for `sig` is on disk."""
+        return self._set_complete("body", character_id, sig, self.body_frame_names(character_id))
+
+    def action_set_complete(self, character_id: str, sig: str) -> bool:
+        """True when all 6 attack frames for `sig` are on disk."""
+        return self._set_complete("action", character_id, sig, self.action_frame_names(character_id))
+
+    def body_set_paths(self, character_id: str, sig: str) -> dict[str, str]:
+        """{"front": path, "front_walk1": path, "dodge1": path, ...}."""
+        directory = self.sprite_dir(sig)
+        paths: dict[str, str] = {}
+        for direction in self.DIRECTIONS:
+            paths[direction] = str(directory / f"{character_id}_{direction}.png")
+            for frame in range(1, ImageGenerator.WALK_FRAME_COUNT + 1):
+                paths[f"{direction}_walk{frame}"] = str(
+                    directory / f"{character_id}_{direction}_walk{frame}.png"
+                )
+        for frame in range(1, ImageGenerator.ACTION_KEYFRAME_COUNT + 1):
+            paths[f"dodge{frame}"] = str(directory / f"{character_id}_dodge{frame}.png")
+        return paths
+
+    def action_set_paths(self, character_id: str, sig: str) -> dict[str, str]:
+        """{"attack1": path, ... "attack6": path}."""
+        directory = self.sprite_dir(sig)
+        return {
+            f"attack{frame}": str(directory / f"{character_id}_attack{frame}.png")
+            for frame in range(1, ImageGenerator.ACTION_KEYFRAME_COUNT + 1)
+        }
+
+    def serving_body_sig(self, character_id: str, wanted: str) -> str:
+        """`wanted` if its 58 files are all there, else 'base'.
+
+        'base' is returned WITHOUT a completeness check: the flat path is the
+        legacy self-healing one — an individual missing file 404s and spawns
+        exactly as it does today.
+        """
+        if not wanted or wanted == appearance.BASE_BODY_SIG:
+            return appearance.BASE_BODY_SIG
+        return wanted if self.body_set_complete(character_id, wanted) else appearance.BASE_BODY_SIG
+
+    def serving_action_sig(self, character_id: str, wanted: str) -> str:
+        """`wanted` if its 6 attack frames are there, else 'base-unarmed'."""
+        if not wanted or wanted == appearance.BASE_ACTION_SIG:
+            return appearance.BASE_ACTION_SIG
+        return (
+            wanted if self.action_set_complete(character_id, wanted)
+            else appearance.BASE_ACTION_SIG
+        )
+
+    @staticmethod
+    def body_key(character_id: str, sig: str) -> str:
+        """`spawn_generation` dedup key — one in-flight task per (char, sig)."""
+        return f"body:{character_id}:{sig}"
+
+    @staticmethod
+    def action_key(character_id: str, sig: str) -> str:
+        return f"action:{character_id}:{sig}"
+
+    def wanted_appearance(self, player_id: str) -> dict[str, Any]:
+        """`appearance_payload` for a player id — ONE indexed read.
+
+        Only the LENIENT sprite path needs this (a request with no `?a=`),
+        which the client uses during the initial load of a scene. Steady-state
+        rendering passes `?a=` and never touches the database.
+        """
+        with get_session() as db:
+            p = db.query(Player).filter(Player.id == player_id).first()
+            return appearance.appearance_payload(p) if p else appearance.base_payload()
+
+    def wanted_body_sig_from_db(self, player_id: str) -> str:
+        return self.wanted_appearance(player_id)["body_sig"]
+
+    def wanted_action_sig_from_db(self, player_id: str) -> str:
+        return self.wanted_appearance(player_id)["action_sig"]
+
+    def _spawn(self, key: str, coro_factory) -> bool:
+        """`spawn_generation` that tolerates having no event loop.
+
+        Every appearance entry point is fire-and-forget; a synchronous caller
+        outside the server (a CLI, a test) must not blow up because there is
+        nothing to attach a task to.
+        """
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            logger.debug(f"No running event loop — skipped background task {key}")
+            return False
+        return self.spawn_generation(key, coro_factory)
+
+    def spawn_missing_appearance(self, player_id: str, body_sig: str, action_sig: str) -> bool:
+        """Start generation for whatever the player's look is still missing.
+
+        Idempotent by construction: `spawn_generation` deduplicates on the key,
+        which now carries the signature, so a reconnecting client restarts a
+        task a server restart dropped without ever doubling one up.
+        """
+        started = False
+        if body_sig != appearance.BASE_BODY_SIG and not self.body_set_complete(player_id, body_sig):
+            started |= self._spawn(
+                self.body_key(player_id, body_sig),
+                lambda: self.ensure_body_set(player_id, body_sig),
+            )
+        if action_sig != appearance.BASE_ACTION_SIG and not self.action_set_complete(player_id, action_sig):
+            started |= self._spawn(
+                self.action_key(player_id, action_sig),
+                lambda: self.ensure_action_set(player_id, action_sig),
+            )
+        return started
+
+    def _appearance_block(
+        self, player_id: str, payload: dict[str, Any], spawn: bool = True
+    ) -> dict[str, Any]:
+        """The readiness payload — the ONLY place readiness touches disk."""
+        body = payload.get("body_sig") or appearance.BASE_BODY_SIG
+        action = payload.get("action_sig") or appearance.BASE_ACTION_SIG
+        if spawn:
+            self.spawn_missing_appearance(player_id, body, action)
+        body_key = self.body_key(player_id, body)
+        action_key = self.action_key(player_id, action)
+        return {
+            "player_id": player_id,
+            "body_sig": body,
+            "weapon_sig": payload.get("weapon_sig") or appearance.BASE_WEAPON_SIG,
+            "action_sig": action,
+            "version": payload.get("version", appearance.APPEARANCE_VERSION),
+            "body_ready": (
+                body == appearance.BASE_BODY_SIG or self.body_set_complete(player_id, body)
+            ),
+            "action_ready": (
+                action == appearance.BASE_ACTION_SIG or self.action_set_complete(player_id, action)
+            ),
+            "serving_body": self.serving_body_sig(player_id, body),
+            "serving_action": self.serving_action_sig(player_id, action),
+            "generating": self.is_generating(body_key) or self.is_generating(action_key),
+            "failed": self._recently_failed(body_key) or self._recently_failed(action_key),
+        }
+
+    def appearance_status(self, player_id: str, spawn: bool = True) -> dict[str, Any]:
+        """Readiness for both axes in one answer (`GET /api/assets/appearance`).
+
+        Also spawns anything missing, so a client that reconnects mid-generation
+        restarts a task the server restart dropped.
+        """
+        return self._appearance_block(player_id, self.wanted_appearance(player_id), spawn=spawn)
+
+    def _drop_complete_memo(self, character_id: str, sig: str) -> None:
+        for axis in ("body", "action"):
+            self._complete.discard((axis, character_id, sig))
+
+    def _evict_variant_dir(self, directory: Path, character_id: str) -> None:
+        """Remove one character's frames from a variant directory.
+
+        Directories are signature-keyed, not player-keyed (two players in the
+        same coat share one), so eviction removes this character's files and
+        only drops the directory once nothing is left in it.
+        """
+        for frame in directory.glob(f"{character_id}_*.png"):
+            try:
+                frame.unlink()
+            except OSError as e:  # pragma: no cover - best effort
+                logger.warning(f"Could not evict {frame}: {e}")
+        try:
+            if not any(directory.iterdir()):
+                shutil.rmtree(directory, ignore_errors=True)
+        except OSError:  # pragma: no cover - directory already gone
+            pass
+        self._drop_complete_memo(character_id, directory.name)
+        logger.info(f"Evicted appearance variant {directory.name} for {character_id}")
+
+    def _evict_lru_variants(self, player_id: str, keep: set[str]) -> None:
+        """Delete this player's least-recently-used variant directories down to
+        the cap. Never evicts `base` (it is not under variants/ at all), never
+        evicts anything in `keep` (the currently-wanted and currently-serving
+        signatures), and reserves a slot for a `keep` signature not yet built.
+        Drops the matching completeness memo entries."""
+        cap = max(1, int(load_settings().appearance.max_variants_per_player))
+        root = self.assets_dir / "sprites" / "variants"
+        if not root.is_dir():
+            return
+        keep = {sig for sig in (keep or set()) if sig and sig != appearance.BASE_BODY_SIG}
+
+        owned: list[tuple[float, Path]] = []
+        for entry in root.iterdir():
+            if not entry.is_dir():
+                continue
+            frames = list(entry.glob(f"{player_id}_*.png"))
+            if not frames:
+                continue
+            owned.append((max(f.stat().st_mtime for f in frames), entry))
+        owned.sort(key=lambda row: row[0])  # least recently used first
+
+        present = {entry.name for _mtime, entry in owned}
+        reserved = sum(1 for sig in keep if sig not in present)
+        allowed = max(1, cap - reserved)
+
+        remaining = len(owned)
+        for _mtime, entry in owned:
+            if remaining <= allowed:
+                break
+            if entry.name in keep:
+                continue
+            self._evict_variant_dir(entry, player_id)
+            remaining -= 1
 
     def _check_all_sprites_exist(self, character_id: str, include_walk: bool = True) -> bool:
         """Check if all sprites exist for a character."""
@@ -266,28 +550,9 @@ class AssetManager:
 
         return paths
 
-    def _check_action_sprites_exist(self, character_id: str, actions: tuple[str, ...]) -> bool:
-        for action in actions:
-            for i in range(1, ImageGenerator.ACTION_KEYFRAME_COUNT + 1):
-                if not (self.assets_dir / "sprites" / f"{character_id}_{action}{i}.png").exists():
-                    return False
-        return True
-
-    async def ensure_action_sprites(
-        self, character_id: str, character_type: str = "npc"
-    ) -> dict[str, str]:
-        """Ensure combat action frames exist (attack for everyone, dodge for
-        players). Generated lazily — first requested when a fight starts —
-        using the character's own sprite as the style reference.
-        """
-        actions = ("attack", "dodge") if character_type == "player" else ("attack",)
-        if self._check_action_sprites_exist(character_id, actions):
-            return {
-                f"{a}{i}": str(self.assets_dir / "sprites" / f"{character_id}_{a}{i}.png")
-                for a in actions
-                for i in range(1, ImageGenerator.ACTION_KEYFRAME_COUNT + 1)
-            }
-
+    def _load_character(self, character_id: str, character_type: str):
+        """(character, world_bible), both detached — never hold a session
+        across a generation call."""
         with get_session() as db:
             if character_type == "player":
                 character = db.query(Player).filter(Player.id == character_id).first()
@@ -299,25 +564,270 @@ class AssetManager:
             db.expunge(character)
             if world_bible is not None:
                 db.expunge(world_bible)
+        return character, world_bible
 
-        # Side-view actions match best against the right-facing idle; fall
-        # back to the front sprite (NPCs only have front)
-        ref_path = self.assets_dir / "sprites" / f"{character_id}_right.png"
-        if not ref_path.exists():
-            ref_path = self.assets_dir / "sprites" / f"{character_id}_front.png"
-        if not ref_path.exists():
-            raise ValueError(f"No idle sprite yet for {character_id} — actions need a reference")
-        reference = ref_path.read_bytes()
+    def _load_appearance_context(self, player_id: str) -> dict[str, Any]:
+        """Everything a variant generation needs, in one short session:
+        the detached player row, the world bible, the WANTED signatures and
+        the two gear phrases that go into prompts."""
+        with get_session() as db:
+            p = db.query(Player).filter(Player.id == player_id).first()
+            if not p:
+                raise ValueError(f"player {player_id} not found")
+            world_bible = self._get_world_bible(db)
+            context = {
+                "character": p,
+                "world_bible": world_bible,
+                "appearance": appearance.appearance_payload(p),
+                "outfit_desc": appearance.outfit_phrase(p),
+                "weapon_desc": appearance.weapon_phrase(p),
+            }
+            db.expunge(p)
+            if world_bible is not None:
+                db.expunge(world_bible)
+        return context
 
-        paths: dict[str, str] = {}
-        for action in actions:
-            if self._check_action_sprites_exist(character_id, (action,)):
-                continue
-            paths.update(
-                await self.image_gen.generate_action_cycle(
-                    character, world_bible, action, reference
-                )
+    def _action_reference(self, character_id: str, body_sig: str) -> bytes:
+        """Reference image for an action strip.
+
+        Side-view actions match best against the right-facing idle of the SAME
+        body signature (so the armour is right); the ladder falls back to that
+        body's front idle, then the base right, then the base front — NPCs only
+        ever have a front.
+        """
+        candidates: list[Path] = []
+        if body_sig and body_sig != appearance.BASE_BODY_SIG:
+            variant = self.sprite_dir(body_sig)
+            candidates += [variant / f"{character_id}_right.png",
+                           variant / f"{character_id}_front.png"]
+        flat = self.sprite_dir(appearance.BASE_BODY_SIG)
+        candidates += [flat / f"{character_id}_right.png",
+                       flat / f"{character_id}_front.png"]
+        for path in candidates:
+            if self._frame_ready(path):
+                return path.read_bytes()
+        raise ValueError(f"No idle sprite yet for {character_id} — actions need a reference")
+
+    async def ensure_attack_sprites(
+        self,
+        character_id: str,
+        character_type: str = "npc",
+        sig: str = appearance.BASE_ACTION_SIG,
+    ) -> dict[str, str]:
+        """Ensure the 6 attack frames for one action signature exist.
+
+        Players AND NPCs — NPCs are always `base-unarmed` in v1, so `?a=` is
+        ignored for them. A player on a non-base signature routes through
+        `ensure_action_set`, which knows which weapon is in the hand.
+        """
+        if character_type == "player" and sig != appearance.BASE_ACTION_SIG:
+            return await self.ensure_action_set(character_id, sig)
+        if self.action_set_complete(character_id, sig):
+            return self.action_set_paths(character_id, sig)
+
+        character, world_bible = self._load_character(character_id, character_type)
+        reference = self._action_reference(character_id, appearance.split_action_sig(sig)[0])
+        # Base is the legacy signature: no weapon_desc, so the prompt is
+        # byte-identical to the pre-appearance one (ruling A4).
+        return await self.image_gen.generate_action_cycle(
+            character, world_bible, "attack", reference, sig=sig
+        )
+
+    async def _ensure_dodge_strip(
+        self,
+        character_id: str,
+        sig: str,
+        character=None,
+        world_bible=None,
+        reference: bytes | None = None,
+    ) -> dict[str, str]:
+        """The 6 dodge frames for one BODY signature (ruling A3: a roll shows
+        the outfit, never the weapon — `weapon_desc` is never passed)."""
+        directory = self.sprite_dir(sig)
+        existing = {
+            f"dodge{frame}": str(directory / f"{character_id}_dodge{frame}.png")
+            for frame in range(1, ImageGenerator.ACTION_KEYFRAME_COUNT + 1)
+        }
+        if all(self._frame_ready(Path(p)) for p in existing.values()):
+            return existing
+
+        if character is None:
+            character, world_bible = self._load_character(character_id, "player")
+        if reference is None:
+            reference = self._action_reference(character_id, sig)
+        return await self.image_gen.generate_action_cycle(
+            character, world_bible, "dodge", reference, sig=sig
+        )
+
+    async def ensure_action_sprites(
+        self, character_id: str, character_type: str = "npc"
+    ) -> dict[str, str]:
+        """Combat action frames at the BASE signature (attack for everyone,
+        dodge for players).
+
+        DEPRECATED compatibility shim: `src/web/server.py` still calls this for
+        an `attack*`/`dodge*` 404. The appearance router replaces it with
+        `ensure_attack_sprites` (action axis) and `ensure_body_set` (body axis,
+        which owns dodge). Behaviour here is exactly what it was before the
+        appearance pipeline landed.
+        """
+        paths = await self.ensure_attack_sprites(character_id, character_type)
+        if character_type == "player":
+            paths.update(await self._ensure_dodge_strip(character_id, appearance.BASE_BODY_SIG))
+        return paths
+
+    async def ensure_action_set(self, player_id: str, sig: str) -> dict[str, str]:
+        """Generate the 6-frame attack strip for one action signature. 1 call.
+
+        Reference = the RIGHT idle of the pair's body signature (so the armour
+        is right); the weapon phrase comes from the equipped weapon's
+        `visual_desc` (so the sword is right). Behind `_action_gate`.
+        """
+        if not appearance.is_valid_signature(sig):
+            raise ValueError(f"Invalid appearance signature {sig!r}")
+        if self.action_set_complete(player_id, sig):
+            return self.action_set_paths(player_id, sig)
+
+        context = self._load_appearance_context(player_id)
+        wanted = context["appearance"]["action_sig"]
+        if wanted != sig:
+            # The gear moved on while this was queued. Painting today's weapon
+            # into yesterday's directory would poison that cache forever.
+            raise ValueError(f"Stale action signature {sig!r} for {player_id} (now {wanted!r})")
+
+        body_sig, _weapon_sig = appearance.split_action_sig(sig)
+        reference = self._action_reference(player_id, body_sig)
+        # "" means the pipeline KNOWS they are empty-handed; base keeps the
+        # legacy "whatever the reference shows" sentence (A4).
+        weapon_desc = context["weapon_desc"] or ""
+
+        async with self._action_gate:
+            if self.action_set_complete(player_id, sig):
+                return self.action_set_paths(player_id, sig)
+            paths = await self.image_gen.generate_action_cycle(
+                context["character"], context["world_bible"], "attack", reference,
+                weapon_desc=weapon_desc, sig=sig,
             )
+        self.action_set_complete(player_id, sig)  # warm the memo
+        return paths
+
+    async def ensure_body_set(self, player_id: str, sig: str) -> dict[str, str]:
+        """Generate the 58-file body set for one signature. 7 API calls.
+
+        `sig == 'base'` delegates to today's `ensure_all_sprites_generated`
+        plus the base dodge strip — one code path, no special-casing
+        downstream. Variants are disk-only: `Player.sprite_base_path` keeps
+        pointing at the BASE front idle, which is the identity anchor every
+        variant is generated from (ruling A9).
+        """
+        if not appearance.is_valid_signature(sig):
+            raise ValueError(f"Invalid appearance signature {sig!r}")
+
+        # 0. A variant has nothing to be consistent WITH until the base exists.
+        #    The base set is NOT gated — a first-run player never queues behind
+        #    somebody's cosmetic variant.
+        paths = await self.ensure_all_sprites_generated(player_id, "player", include_walk=True)
+        if sig == appearance.BASE_BODY_SIG:
+            paths.update(await self._ensure_dodge_strip(player_id, sig))
+            return paths
+
+        async with self._body_gate:
+            return await self._generate_variant_body(player_id, sig)
+
+    async def _generate_variant_body(self, player_id: str, sig: str) -> dict[str, str]:
+        """Steps 1-7 of `ensure_body_set`, inside the concurrency gate.
+
+        Every step reuses a frame that is already on disk, so a half-written
+        directory from a killed process is re-derived, not re-billed.
+        """
+        from PIL import Image, ImageOps
+
+        if self.body_set_complete(player_id, sig):
+            return self.body_set_paths(player_id, sig)
+
+        context = self._load_appearance_context(player_id)
+        wanted = context["appearance"]["body_sig"]
+        if wanted != sig:
+            raise ValueError(f"Stale body signature {sig!r} for {player_id} (now {wanted!r})")
+        outfit_desc = context["outfit_desc"]
+        if not outfit_desc:
+            raise ValueError(f"No outfit to draw for {player_id} — {sig!r} is not a variant")
+
+        character = context["character"]
+        world_bible = context["world_bible"]
+        directory = self.sprite_dir(sig)
+
+        # 1. Make room (never evicts base, the wanted sig, or what we serve now)
+        self._evict_lru_variants(player_id, keep={sig, self.serving_body_sig(player_id, sig)})
+
+        async def _idle(direction: str, reference: bytes) -> str:
+            dest = directory / f"{player_id}_{direction}.png"
+            if self._frame_ready(dest):
+                return str(dest)
+            return await self.image_gen.generate_outfit_variant_idle(
+                character, world_bible, direction, reference, outfit_desc, sig
+            )
+
+        # 2. Variant front idle <- BASE front idle (the identity anchor)
+        base_front = self.sprite_dir(appearance.BASE_BODY_SIG) / f"{player_id}_front.png"
+        if not self._frame_ready(base_front):
+            raise ValueError(f"No base front idle for {player_id} — a variant needs an anchor")
+        paths: dict[str, str] = {"front": await _idle("front", base_front.read_bytes())}
+
+        # 3. Back and right <- the VARIANT front idle. Chaining through the
+        #    variant is the only way the garment propagates around the
+        #    character; the base front would hand back the old outfit.
+        variant_front = Path(paths["front"]).read_bytes()
+        back, right = await asyncio.gather(
+            _idle("back", variant_front), _idle("right", variant_front)
+        )
+        paths["back"], paths["right"] = back, right
+
+        # 4. Left idle = mirror of right (matches the mirrored left walk)
+        left = directory / f"{player_id}_left.png"
+        if not self._frame_ready(left):
+            ImageOps.mirror(Image.open(paths["right"]).convert("RGBA")).save(left)
+        paths["left"] = str(left)
+
+        # 5. Walk strips front/back/right <- the matching VARIANT idles
+        def _cycle_complete(direction: str) -> bool:
+            return all(
+                self._frame_ready(directory / f"{player_id}_{direction}_walk{frame}.png")
+                for frame in range(1, ImageGenerator.WALK_FRAME_COUNT + 1)
+            )
+
+        async def _cycle(direction: str) -> dict[str, str]:
+            if _cycle_complete(direction):
+                return {
+                    f"{direction}_walk{frame}": str(
+                        directory / f"{player_id}_{direction}_walk{frame}.png"
+                    )
+                    for frame in range(1, ImageGenerator.WALK_FRAME_COUNT + 1)
+                }
+            return await self.image_gen.generate_walk_cycle(
+                character, world_bible, direction,
+                Path(paths[direction]).read_bytes(), sig=sig,
+            )
+
+        for cycle_paths in await asyncio.gather(*(_cycle(d) for d in ("front", "back", "right"))):
+            paths.update(cycle_paths)
+
+        # 6. Left walk = mirror of right walk
+        if _cycle_complete("left"):
+            paths.update({
+                f"left_walk{frame}": str(directory / f"{player_id}_left_walk{frame}.png")
+                for frame in range(1, ImageGenerator.WALK_FRAME_COUNT + 1)
+            })
+        else:
+            paths.update(self.image_gen.mirror_walk_cycle(player_id, "right", "left", sig=sig))
+
+        # 7. Dodge strip <- the variant right idle (body axis, ruling A3)
+        paths.update(await self._ensure_dodge_strip(
+            player_id, sig, character, world_bible, Path(paths["right"]).read_bytes()
+        ))
+
+        self.body_set_complete(player_id, sig)  # warm the memo
+        logger.info(f"Appearance variant {sig} complete for {player_id}")
         return paths
 
     async def get_npc_sprite(self, npc_id: str, direction: str = "front") -> str:
@@ -464,6 +974,9 @@ class AssetManager:
                 "walkable_bounds": location.walkable_bounds,
                 "obstacles": location.obstacles or [],
                 "objects": public_objects(location.objects),
+                # Which sprite set their gear entitles them to (pure dict math
+                # over the row we already loaded — no extra query)
+                "appearance": appearance.appearance_payload(player),
                 "player": {
                     "id": player_id,
                     "name": player.name,
@@ -508,17 +1021,28 @@ class AssetManager:
             if self.spawn_generation(f"bg:{location_id}", lambda: self.get_location_background(location_id)):
                 pending = True
 
-        # Player sprite (full set generated in background if anything missing)
+        # Player sprite: signature-aware. The scene is served the SERVING set
+        # (guaranteed complete on disk), while the WANTED one generates in the
+        # background — `pending` already drives the client's scene re-poll, so
+        # a player who reloads mid-generation gets the variant when it lands.
+        wanted = scene["appearance"]
+        body_sig = wanted["body_sig"]
+        serving_body = self.serving_body_sig(player_id, body_sig)
         direction = scene["player"]["direction"]
-        player_sprite = self.assets_dir / "sprites" / f"{player_id}_{direction}.png"
+        player_sprite = self.sprite_dir(serving_body) / f"{player_id}_{direction}.png"
         if player_sprite.exists():
             scene["player"]["sprite_path"] = str(player_sprite)
-        if not self._check_all_sprites_exist(player_id, include_walk=True):
-            if self.spawn_generation(
-                f"sprites:{player_id}",
-                lambda: self.ensure_all_sprites_generated(player_id, "player", include_walk=True),
-            ):
-                pending = True
+        if body_sig == appearance.BASE_BODY_SIG:
+            # Base stays on the legacy check: a world with idles and walks but
+            # no dodge strip must not start paying for one on every scene load
+            body_incomplete = not self._check_all_sprites_exist(player_id, include_walk=True)
+        else:
+            body_incomplete = not self.body_set_complete(player_id, body_sig)
+        if body_incomplete and self.spawn_generation(
+            self.body_key(player_id, body_sig),
+            lambda: self.ensure_body_set(player_id, body_sig),
+        ):
+            pending = True
 
         # NPC front sprites
         for npc in scene["npcs"]:
@@ -542,6 +1066,10 @@ class AssetManager:
             "objects": scene["objects"],
             "player": scene["player"],
             "npcs": scene["npcs"],
+            # What to load right now (`serving_*`, guaranteed on disk) and what
+            # to aim for (`body_sig`/`action_sig`) — saves a round-trip on
+            # scene load. Same shape as GET /api/assets/appearance/{player_id}.
+            "appearance": self._appearance_block(player_id, wanted, spawn=False),
             "pending": pending,
         }
 
@@ -617,7 +1145,9 @@ class AssetManager:
         Args:
             asset_type: Optional. One of 'locations', 'sprites', 'portraits', or None for all.
         """
-        import shutil
+        # Completeness is memoized on the assumption that frames only ever
+        # appear — wiping the tree is the one moment that stops being true.
+        self._complete.clear()
 
         if asset_type:
             target_dir = self.assets_dir / asset_type

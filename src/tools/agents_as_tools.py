@@ -324,6 +324,7 @@ def prompt_npc_agent(player_id: str, npc_id: str, player_input: str, is_first_in
     # Import inside function to avoid circular imports
     from src.repositories.unit_of_work import unit_of_work
     from src.agents.npc_agent import NPCAgent
+    from src.services import perception
     from src.tools.world_read.player import get_player
 
     # Validate NPC exists before creating agent (fixes "nothing to say" bug)
@@ -333,6 +334,23 @@ def prompt_npc_agent(player_id: str, npc_id: str, player_input: str, is_first_in
             return {"text_response": npc_result.error, "error": npc_result.error_code}
 
         npc_data = uow.npcs.to_dict(npc_result.data)
+
+        # Who this NPC is actually looking at — clothes vs identity, decided in
+        # code. It rides the SYSTEM prompt (see below), not the narrative blob,
+        # so a long DM briefing cannot dilute it.
+        recognition_block = ""
+        try:
+            from src.models import Player as _Player
+            player_row = uow.session.get(_Player, player_id)
+            if player_row is not None:
+                recognition_block = perception.npc_recognition_block(
+                    uow.session, player_row, npc_result.data
+                )
+        except Exception:
+            import logging
+            logging.getLogger(__name__).debug(
+                f"Recognition block unavailable for {npc_id}", exc_info=True
+            )
 
         # Get relationship data
         rel_result = uow.npcs.get_with_relationship(npc_id, player_id)
@@ -367,8 +385,11 @@ def prompt_npc_agent(player_id: str, npc_id: str, player_input: str, is_first_in
     conversation_ended = False
     try:
         agent = NPCAgent(player_id, npc_id)
-        # Scene context goes into the system prompt so NPC always knows where it is
-        agent._scene_context = world_snapshot
+        # Scene context goes into the system prompt so NPC always knows where it
+        # is — and, appended, who the engine says is standing in front of it
+        agent._scene_context = (
+            f"{world_snapshot}\n\n{recognition_block}" if recognition_block else world_snapshot
+        )
 
         if is_first_interaction:
             # First interaction - start a new conversation with greeting

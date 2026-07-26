@@ -38,6 +38,19 @@ campaign:
   deadline_clocks_min: 2
   deadline_clocks_max: 3
 
+# Visible equipment — the player's sprite set is keyed by an appearance
+# signature derived from equipped gear (armor -> idles/walks/dodge,
+# weapon -> attack cycle). `enabled: false` renders everyone as `base`
+# and never generates a variant.
+appearance:
+  enabled: true
+  # Least-recently-used variant body directories past this count are deleted
+  max_variants_per_player: 8
+  # Simultaneous variant BODY sets, process-wide (7 image calls each)
+  body_concurrency: 1
+  # Simultaneous variant ATTACK strips (1 image call each)
+  action_concurrency: 2
+
 # API configuration (keys should be in environment variables)
 api:
   # Environment variable names for API keys

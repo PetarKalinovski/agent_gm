@@ -151,6 +151,29 @@ def test_note_templates():
     )
 
 
+def test_equip_note_carries_the_new_reading_when_it_changed():
+    assert equip_note("Ashfall Hood", "armor",
+                      reads_as="someone who does not want to be seen") == (
+        "They now wear Ashfall Hood. To strangers they now read as someone who "
+        "does not want to be seen."
+    )
+    assert equip_note("Ashfall Hood", "armor", automatic=True,
+                      reads_as="someone who does not want to be seen") == (
+        "They immediately wear the Ashfall Hood they just got. To strangers they "
+        "now read as someone who does not want to be seen."
+    )
+
+
+def test_equip_note_without_a_reading_is_byte_identical():
+    """A swap between two plain coats says nothing and must add nothing."""
+    for automatic in (False, True):
+        plain = equip_note("Harbor Mail", "armor", automatic=automatic)
+        assert equip_note("Harbor Mail", "armor", automatic=automatic,
+                          reads_as=None) == plain
+        assert equip_note("Harbor Mail", "armor", automatic=automatic,
+                          reads_as="") == plain
+
+
 def test_mixed_block_orders_by_record_order():
     pid = "p-mixed"
     _move(pid, "Market Square", "Dock Row", minutes=6, first_visit=True)

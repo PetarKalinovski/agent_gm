@@ -37,7 +37,9 @@ from src.services.voice_generator import VoiceGenerator, compute_audio_id
 from src.services.world_tick import snapshot_clock, enforce_minimum_time_cost
 from src.services.world_simulation import maybe_advance_world
 from src.services.tension import snapshot_turn_tension, enforce_tension
+from src.services import appearance as appearance_mod
 from src.services import barks as barks_service
+from src.services import perception
 from src.services import progression
 from src.services.campaign import (
     campaign_public_view,
@@ -199,6 +201,13 @@ INDOOR_LOCATION_TYPES = frozenset({"interior", "room", "building"})
 # What a state payload carries for a world with no player row at all
 _NO_PLAYER_PROGRESS = {"level": 1, "xp": 0, "xp_into_level": 0, "xp_for_level": 0}
 _NO_PLAYER_EQUIPMENT = {slot: None for slot in progression.SLOTS}
+_NO_PLAYER_APPEARANCE = {
+    "body_sig": appearance_mod.BASE_BODY_SIG,
+    "weapon_sig": appearance_mod.BASE_WEAPON_SIG,
+    "action_sig": appearance_mod.BASE_ACTION_SIG,
+    "version": appearance_mod.APPEARANCE_VERSION,
+    "read_as": perception.STYLE_READ_AS[perception.DEFAULT_STYLE],
+}
 
 # The mechanical keys a legacy bare-string inventory entry reads as
 _PLAIN_ITEM_MECHANICS = {
@@ -245,6 +254,18 @@ def build_player_state(player_id: str) -> dict[str, Any]:
         progress = progression.xp_progress(p) if p else dict(_NO_PLAYER_PROGRESS)
         equipment = progression.equipment_summary(p) if p else dict(_NO_PLAYER_EQUIPMENT)
         combat = progression.combat_stats(p) if p else None
+        # Appearance = the WANTED sprite signatures (pure dict math — appearance
+        # ruling A6: readiness never rides the state event) merged with the
+        # social reading strangers get (perception profile; one Faction read
+        # only when a uniform is actually worn).
+        appearance = dict(_NO_PLAYER_APPEARANCE)
+        if p:
+            appearance = appearance_mod.appearance_payload(p)
+            try:
+                appearance["read_as"] = perception.profile_for(db, p)["read_as"]
+            except Exception as e:
+                logger.debug(f"Appearance reading unavailable: {e}")
+                appearance["read_as"] = _NO_PLAYER_APPEARANCE["read_as"]
 
     try:
         quests = [
@@ -301,6 +322,7 @@ def build_player_state(player_id: str) -> dict[str, Any]:
         "xp_for_level": progress["xp_for_level"],
         "equipment": equipment,
         "combat": combat,
+        "appearance": appearance,
         "campaign": campaign,
         "weather": weather,
     }
@@ -1014,12 +1036,16 @@ async def get_location_assets(location_id: str, player_id: str):
             seen_exit_ids = set()
             with get_session() as db:
                 loc = db.query(Location).filter(Location.id == location_id).first()
+                # A dress code is a door policy: the player row rides into
+                # check_route so a dress-locked destination renders locked
+                # with the house's own reason in `requirements`
+                player_row = db.query(Player).filter(Player.id == player_id).first()
                 doors = compute_exit_doors(loc, destinations)
                 for d in destinations:
                     if not isinstance(d, dict) or not d.get("id") or d["id"] in seen_exit_ids:
                         continue
                     seen_exit_ids.add(d["id"])
-                    route = check_route(db, location_id, d["id"])
+                    route = check_route(db, location_id, d["id"], player_row)
                     exits.append({
                         "id": d["id"],
                         "name": d.get("name"),
@@ -1043,6 +1069,10 @@ async def get_location_assets(location_id: str, player_id: str):
             "obstacles": assets.get("obstacles", []),
             "objects": assets.get("objects", []),
             "exits": exits,
+            # What to load right now (`serving_*`, guaranteed on disk) and
+            # what to aim for (`body_sig`/`action_sig`) — same shape as
+            # GET /api/assets/appearance/{player_id}, saves a round-trip
+            "appearance": assets.get("appearance"),
             "pending": assets.get("pending", False),
             "player": {
                 "id": assets["player"]["id"],
@@ -1073,11 +1103,25 @@ async def get_location_assets(location_id: str, player_id: str):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+# Which sprite set a frame belongs to: attack frames ride the ACTION axis
+# (the armor+weapon pair); everything else — idles, walks, dodge — is BODY
+# (appearance ruling A3: a roll shows the outfit, never the weapon).
+_ACTION_FRAME_RE = re.compile(r"^attack\d+$")
+_COMBAT_FRAME_RE = re.compile(r"^(attack|dodge)\d+$")
+
+
 @app.get("/api/assets/sprite/{character_type}/{character_id}/{direction}")
-async def get_sprite(character_type: str, character_id: str, direction: str):
+async def get_sprite(character_type: str, character_id: str, direction: str,
+                     a: str | None = None):
     """Serve a character sprite from cache.
 
-    On a miss the full sprite set is generated in a deduplicated background
+    `?a=<signature>` is STRICT (appearance ruling A7): exactly that
+    signature's file is served, or a 404 spawns its generation — which makes
+    `?a=` a real cache-buster. Without it the endpoint is LENIENT: it
+    resolves the player's SERVING signature (the wanted one if its whole set
+    is on disk, else base). NPCs are always base in v1 — `a` is ignored.
+
+    On a miss the right axis' set generates in a deduplicated background
     task and 404 is returned — the client shows a placeholder and retries.
     Never blocks the request on image generation, and never returns JSON
     with HTTP 200 where an <img> expects a PNG.
@@ -1087,31 +1131,81 @@ async def get_sprite(character_type: str, character_id: str, direction: str):
         direction = direction.split(".")[0]
 
     asset_manager = get_asset_manager()
+    is_player = character_type == "player"
+    axis = "action" if _ACTION_FRAME_RE.match(direction) else "body"
     try:
-        sprite_path = asset_manager.assets_dir / "sprites" / f"{character_id}_{direction}.png"
+        if not is_player:
+            # NPCs have no equipment model yet (appearance spec §13)
+            sig = appearance_mod.BASE_ACTION_SIG if axis == "action" \
+                else appearance_mod.BASE_BODY_SIG
+        elif a is not None:
+            if not appearance_mod.is_valid_signature(a):
+                return JSONResponse({"error": "bad signature"}, status_code=404)
+            sig = a
+        else:
+            # LENIENT: one indexed Player read, scene-load only — steady-state
+            # rendering always passes `?a=` and never touches the database
+            try:
+                wanted = asset_manager.wanted_appearance(character_id)
+            except Exception as e:
+                logger.debug(f"Lenient sprite resolution fell back to base: {e}")
+                wanted = appearance_mod.base_payload()
+            sig = (
+                asset_manager.serving_action_sig(character_id, wanted["action_sig"])
+                if axis == "action"
+                else asset_manager.serving_body_sig(character_id, wanted["body_sig"])
+            )
+
+        sprite_path = asset_manager.sprite_dir(sig) / f"{character_id}_{direction}.png"
         if sprite_path.exists() and sprite_path.stat().st_size > 0:
             return FileResponse(str(sprite_path), media_type="image/png")
 
-        # Combat action frames (attack1..6 / dodge1..6) generate as their own
-        # lazy set — requesting them must never trigger a full-set regen
-        if re.match(r"^(attack|dodge)\d+$", direction):
+        # Miss: spawn the owning set. The dedup key carries the signature —
+        # one in-flight task per (character, signature, axis).
+        if is_player and axis == "action":
             asset_manager.spawn_generation(
-                f"actions:{character_id}",
-                lambda: asset_manager.ensure_action_sprites(character_id, character_type),
+                asset_manager.action_key(character_id, sig),
+                lambda: asset_manager.ensure_attack_sprites(character_id, "player", sig=sig),
             )
-            return JSONResponse({"status": "generating"}, status_code=404)
-
-        # Miss: kick off (deduplicated) generation of the full sprite set
-        include_walk = character_type == "player"
-        asset_manager.spawn_generation(
-            f"sprites:{character_id}",
-            lambda: asset_manager.ensure_all_sprites_generated(
-                character_id, character_type, include_walk=include_walk
-            ),
-        )
-        return JSONResponse({"status": "generating"}, status_code=404)
+        elif is_player:
+            # Body axis owns idles, walks AND dodge (ruling A3) — a dodge 404
+            # on a legacy world spawns body:{id}:base, which fills the gap
+            asset_manager.spawn_generation(
+                asset_manager.body_key(character_id, sig),
+                lambda: asset_manager.ensure_body_set(character_id, sig),
+            )
+        elif _COMBAT_FRAME_RE.match(direction):
+            # NPC combat frames stay their own lazy set (attack only in v1)
+            asset_manager.spawn_generation(
+                asset_manager.action_key(character_id, sig),
+                lambda: asset_manager.ensure_attack_sprites(character_id, character_type),
+            )
+        else:
+            # NPC full-set miss — same key get_location_assets_fast uses
+            asset_manager.spawn_generation(
+                f"sprites:{character_id}",
+                lambda: asset_manager.ensure_all_sprites_generated(character_id, character_type),
+            )
+        return JSONResponse({"status": "generating", "sig": sig}, status_code=404)
     except Exception as e:
         logger.error(f"Error getting sprite: {e}", exc_info=True)
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/api/assets/appearance/{player_id}")
+async def get_appearance_status(player_id: str):
+    """Readiness of the player's wanted sprite sets — both axes, one answer.
+
+    Polled by the client only between a gear change and the texture swap
+    (5 s cadence, capped). Requesting it also re-spawns any missing set, so a
+    client that reconnects mid-generation restarts a task a server restart
+    dropped. Idempotent by construction.
+    """
+    init_db(get_active_db_path())
+    try:
+        return get_asset_manager().appearance_status(player_id)
+    except Exception as e:
+        logger.error(f"Appearance status failed: {e}", exc_info=True)
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
@@ -1214,6 +1308,22 @@ class UseConsumableRequest(BaseModel):
     in_combat: bool = False
 
 
+def _prewarm_appearance(player_id: str) -> None:
+    """Start background generation for the player's new look.
+
+    Adds no latency: two deduplicated `spawn_generation` calls that return
+    immediately. Every other path (DM auto-equip, quest rewards, campaign
+    ops) self-heals through the sprite 404 trigger — this is a head start,
+    not a requirement.
+    """
+    try:
+        manager = get_asset_manager()
+        wanted = manager.wanted_appearance(player_id)
+        manager.spawn_missing_appearance(player_id, wanted["body_sig"], wanted["action_sig"])
+    except Exception as e:
+        logger.debug(f"Appearance pre-warm skipped for {player_id}: {e}")
+
+
 @app.post("/api/player/{player_id}/equip")
 async def equip_item(player_id: str, request: EquipRequest):
     """Wear/wield an inventory item. The item stays in the bag — equipment is
@@ -1223,15 +1333,23 @@ async def equip_item(player_id: str, request: EquipRequest):
         player = db.query(Player).filter(Player.id == player_id).first()
         if not player:
             return JSONResponse({"error": "Player not found", "reason": "missing"}, status_code=404)
+        read_before = perception.profile_for(db, player)["read_as"]
         result = progression.equip(db, player, request.item_id)
         if "error" in result:
             return JSONResponse(result, status_code=400)
+        read_after = perception.profile_for(db, player)["read_as"]
         db.commit()
 
     pending_actions.record_action(
         player_id, "equip",
-        pending_actions.equip_note(result["item_name"], result["slot"]),
+        pending_actions.equip_note(
+            result["item_name"], result["slot"],
+            # The social consequence rides the note ONLY when the piece
+            # actually changed how strangers read them
+            reads_as=read_after if read_after != read_before else None,
+        ),
     )
+    _prewarm_appearance(player_id)
     return {**result, "state": build_player_state(player_id)}
 
 
@@ -1243,15 +1361,19 @@ async def unequip_item(player_id: str, request: UnequipRequest):
         player = db.query(Player).filter(Player.id == player_id).first()
         if not player:
             return JSONResponse({"error": "Player not found", "reason": "missing"}, status_code=404)
+        read_before = perception.profile_for(db, player)["read_as"]
         result = progression.unequip(db, player, request.slot)
         if "error" in result:
             return JSONResponse(result, status_code=400)
+        read_after = perception.profile_for(db, player)["read_as"]
         db.commit()
 
     if result.get("item_name"):
-        pending_actions.record_action(
-            player_id, "equip", pending_actions.unequip_note(result["item_name"]),
-        )
+        note = pending_actions.unequip_note(result["item_name"])
+        if read_after != read_before:
+            note += f" To strangers they now read as {read_after}."
+        pending_actions.record_action(player_id, "equip", note)
+    _prewarm_appearance(player_id)
     return {**result, "state": build_player_state(player_id)}
 
 
@@ -1684,6 +1806,7 @@ class LocationUpdate(BaseModel):
     discovered: bool | None = None
     obstacles: list | None = None  # collision polygons, normalized 0-100
     objects: list | None = None    # canvas interactables (normalized on write)
+    dress_code: dict | None = None  # door policy (normalized on write; {} clears)
     reference_search_query: str | None = None
 
 
@@ -2165,6 +2288,7 @@ async def get_location_detail(location_id: str):
             "visited": loc.visited,
             "discovered": loc.discovered,
             "objects": loc.objects or [],
+            "dress_code": loc.dress_code,
             "reference_search_query": loc.reference_search_query,
         }
 
@@ -2208,6 +2332,9 @@ async def update_location(location_id: str, update: LocationUpdate):
             # Never trust authored objects: the normalizer strips effects,
             # numbers and unknown kinds before anything reaches a scene
             loc.objects = normalize_objects(update.objects) or None
+        if update.dress_code is not None:
+            # Clamped to the fixed menu; an empty gate stores as NULL
+            loc.dress_code = perception.normalize_dress_code(update.dress_code)
         if update.reference_search_query is not None:
             old_query = loc.reference_search_query
             loc.reference_search_query = update.reference_search_query if update.reference_search_query != "" else None

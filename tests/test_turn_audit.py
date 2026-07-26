@@ -87,6 +87,29 @@ def test_default_signature_unchanged():
 
 
 # ---------------------------------------------------------------------------
+# arrival_without_move — the phrases a refused door produces
+# ---------------------------------------------------------------------------
+
+def test_talked_past_the_door_still_needs_the_move():
+    for text in ("The doorman reads your coat, then your face, and you are waved through.",
+                 "Maera tips her chin at the back stair and you are let in."):
+        assert "arrival_without_move" in _checks(audit_turn(text, [], STATE, STATE)), text
+
+
+def test_waved_in_is_suppressed_by_a_real_move():
+    text = "You are waved inside before the words are out of your mouth."
+    warnings = audit_turn(text, _tools("move_player"), STATE, STATE)
+    assert "arrival_without_move" not in _checks(warnings)
+
+
+def test_ordinary_waving_prose_stays_clean():
+    for text in ("You are waved at from across the square.",
+                 "A dockhand waves you off and goes back to his rope.",
+                 "You are let down gently, and the rope goes slack."):
+        assert "arrival_without_move" not in _checks(audit_turn(text, [], STATE, STATE)), text
+
+
+# ---------------------------------------------------------------------------
 # risky_action_without_check
 # ---------------------------------------------------------------------------
 
