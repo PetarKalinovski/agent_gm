@@ -3392,17 +3392,21 @@
                                         }
                                         // The speech event is the AUTHORITATIVE line (it is
                                         // what the TTS speaks) — render it in the chat so the
-                                        // text the player reads always matches the voice
-                                        clearThinking(messageEl);
-                                        const line = document.createElement('div');
-                                        line.className = 'speech-line';
-                                        line.innerHTML =
-                                            (payload.npc_id ? `<img src="/api/assets/portrait/${payload.npc_id}" onerror="this.style.display='none'" alt="">` : '') +
-                                            `<span><b>${escapeHtml(payload.npc_name || '???')}</b>` +
-                                            (payload.action ? ` <em>${escapeHtml(payload.action)}</em>` : '') +
-                                            `<br>&ldquo;${escapeHtml(payload.text)}&rdquo;</span>`;
-                                        messageEl.insertBefore(line, contentEl);
-                                        queueChatRender();
+                                        // text the player reads always matches the voice.
+                                        // A synthesized event was lifted out of prose the
+                                        // player already read: voice + bubble only.
+                                        if (!payload.synthesized) {
+                                            clearThinking(messageEl);
+                                            const line = document.createElement('div');
+                                            line.className = 'speech-line';
+                                            line.innerHTML =
+                                                (payload.npc_id ? `<img src="/api/assets/portrait/${payload.npc_id}" onerror="this.style.display='none'" alt="">` : '') +
+                                                `<span><b>${escapeHtml(payload.npc_name || '???')}</b>` +
+                                                (payload.action ? ` <em>${escapeHtml(payload.action)}</em>` : '') +
+                                                `<br>&ldquo;${escapeHtml(payload.text)}&rdquo;</span>`;
+                                            messageEl.insertBefore(line, contentEl);
+                                            queueChatRender();
+                                        }
                                     } else if (payload.type === 'quest_activated') {
                                         showToast(`&#10022; New Quest: ${escapeHtml(payload.title || '')}`, 'quest');
                                     } else if (payload.type === 'quest_completed') {

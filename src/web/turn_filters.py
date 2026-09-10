@@ -27,6 +27,43 @@ def _normalize(text: str) -> str:
     return " ".join(text.translate(_PUNCT_TABLE).lower().split())
 
 
+def speech_events_for_unspoken(
+    text: str,
+    spoken: list[str],
+    npc_name: str,
+    *,
+    synthesized: bool = False,
+    limit: int = 6,
+) -> list[dict]:
+    """Speech events for the quoted lines in `text` that nobody delivered.
+
+    "Code enforces, LLM narrates": the prompts ask for every spoken line to
+    go through a speech tool, but models write action beats with quotes.
+    Each such line becomes a real `speech` event (voice, portrait, bubble)
+    attributed to `npc_name`. `spoken` are lines already delivered, so a
+    quote that repeats one is skipped. `synthesized=True` tells the client
+    the prose already shows the words — voice and bubble only, no second
+    chat line.
+    """
+    from src.web.turn_audit import unspoken_quotes
+
+    spoken_norm = [_normalize(s) for s in spoken if s]
+    spoken_norm = [s for s in spoken_norm if len(s) >= 8]
+    events: list[dict] = []
+    for quote in unspoken_quotes(text or ""):
+        q = _normalize(quote)
+        if any(q in s or s in q for s in spoken_norm):
+            continue
+        event = {"event": "speech", "npc": npc_name, "text": quote,
+                 "tone": "normal", "action": None}
+        if synthesized:
+            event["synthesized"] = True
+        events.append(event)
+        if len(events) >= limit:
+            break
+    return events
+
+
 class DialogueDeduper:
     """Strips DM re-quotes of lines already delivered as speech events."""
 

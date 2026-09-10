@@ -240,13 +240,16 @@ class ToolUsageTracker:
             # NPC dialogue (from the speak tool) — the server layer enriches
             # this with npc_id + a TTS audio_id before it reaches the client
             elif event == "speech":
-                self._notifications.append({
+                note = {
                     "type": "speech",
                     "npc_name": output_data.get("npc"),
                     "text": output_data.get("text"),
                     "tone": output_data.get("tone", "normal"),
                     "action": output_data.get("action"),
-                })
+                }
+                if output_data.get("synthesized"):
+                    note["synthesized"] = True
+                self._notifications.append(note)
 
             # Scene description (from describe_location) — music/atmosphere cues
             elif event == "scene":
@@ -312,6 +315,13 @@ class ToolUsageTracker:
                         "unlocked": progression.get("unlocked") or [],
                         "stats": progression.get("stats") or {},
                     })
+
+            # A tool result may carry a LIST of events too — a sub-agent's
+            # dialogue that was written as prose is voiced this way. Each
+            # rides exactly the same path as a standalone result.
+            for item in output_data.get("events") or []:
+                if isinstance(item, dict) and item.get("event"):
+                    self._parse_tool_output_for_events(json.dumps(item, default=str))
         except (json.JSONDecodeError, TypeError, ValueError, SyntaxError):
             pass  # Not parseable as dict, ignore
 

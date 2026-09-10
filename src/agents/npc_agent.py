@@ -167,7 +167,8 @@ class NPCAgent(BaseGameAgent):
         self,
         npc: dict[str, Any] | None = None,
         relationship: dict[str, Any] | None = None,
-        context: str = ""
+        context: str = "",
+        player_input: str = "",
     ) -> str:
         """Start a conversation with the NPC.
 
@@ -175,6 +176,10 @@ class NPCAgent(BaseGameAgent):
             npc: Optional pre-fetched NPC data.
             relationship: Optional pre-fetched relationship data.
             context: Narrative context from the DM about the current situation.
+            player_input: What the player actually said or did on approach.
+                Playtesting found the first exchange answered with a generic
+                greeting because the words never reached the NPC — the DM
+                then answered the question itself, in prose, unvoiced.
 
         Returns:
             The NPC's greeting.
@@ -200,6 +205,17 @@ class NPCAgent(BaseGameAgent):
         # Build context section
         situation_context = f"Current situation: {context}" if context else "The player approaches you normally."
 
+        if player_input and player_input.strip():
+            opening = (
+                f'The player approaches you and says: "{player_input.strip()}"\n\n'
+                "Answer what they ACTUALLY said — this is the opening of a real "
+                "conversation, not a generic greeting."
+            )
+        else:
+            opening = (
+                "Generate an appropriate response based on your character, "
+                "relationship, and the current situation."
+            )
         greeting_prompt = f"""
 
 {situation_context}
@@ -207,8 +223,8 @@ class NPCAgent(BaseGameAgent):
 Your disposition toward them: {disposition}
 Your trust level: {trust}/100
 
-Generate an appropriate response based on your character, relationship, and the current situation.
-Use the speak tool to deliver your greeting."""
+{opening}
+Use the speak tool for EVERY line you say out loud — a line written as prose is silent."""
 
         # Call the agent - Strands handles conversation history automatically
         response = self.agent(greeting_prompt)

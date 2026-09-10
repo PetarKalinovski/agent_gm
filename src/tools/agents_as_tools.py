@@ -3,6 +3,7 @@
 These tools allow the DM to delegate to specialized sub-agents.
 """
 
+from typing import Any
 import os
 import tempfile
 
@@ -393,7 +394,10 @@ def prompt_npc_agent(player_id: str, npc_id: str, player_input: str, is_first_in
 
         if is_first_interaction:
             # First interaction - start a new conversation with greeting
-            response = agent.start_conversation(npc=npc_data, relationship=relationship_dict, context=narrative_context)
+            response = agent.start_conversation(
+                npc=npc_data, relationship=relationship_dict,
+                context=narrative_context, player_input=player_input,
+            )
             conversation_ended = "[END_CONVERSATION]" in str(response)
             response = str(response).replace("[END_CONVERSATION]", "").strip()
         else:
@@ -425,11 +429,39 @@ def prompt_npc_agent(player_id: str, npc_id: str, player_input: str, is_first_in
         conversation_ended=conversation_ended,
     )
 
-    return {
+    result: dict[str, Any] = {
         "text_response": str(response),
         "conversation_ended": conversation_ended,
         "note": "This dialogue was ALREADY shown to the player. Do not repeat or paraphrase it — react to it or move the scene forward.",
     }
+    # Lines the NPC wrote as prose instead of speaking are voiced anyway —
+    # the tracker fans `events` out as real speech events (voice, portrait,
+    # bubble, chat line). Code enforces what the prompt asks for.
+    from src.web.turn_filters import speech_events_for_unspoken
+    events = speech_events_for_unspoken(
+        str(response), _spoken_lines(agent), npc_data.get("name") or "???"
+    )
+    if events:
+        result["events"] = events
+    return result
+
+
+def _spoken_lines(agent: "NPCAgent") -> list[str]:
+    """Every line this NPC delivered through `speak` in its session."""
+    try:
+        messages = agent.agent.messages
+    except Exception:
+        return []
+    lines: list[str] = []
+    for message in messages or []:
+        content = message.get("content") if isinstance(message, dict) else None
+        for block in content or []:
+            tool_use = block.get("toolUse") if isinstance(block, dict) else None
+            if tool_use and tool_use.get("name") == "speak":
+                text = (tool_use.get("input") or {}).get("text")
+                if text:
+                    lines.append(str(text))
+    return lines
 
 
 @tool

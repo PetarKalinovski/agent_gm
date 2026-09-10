@@ -57,7 +57,7 @@ from src.services.scene_exits import compute_exit_doors
 from src.services.scene_objects import normalize_objects, resolve_interaction
 from src.services.travel import check_route, travel_now
 from src.web import pending_actions
-from src.web.turn_filters import DialogueDeduper
+from src.web.turn_filters import DialogueDeduper, speech_events_for_unspoken
 from src.web.turn_audit import audit_turn, format_audit_feedback
 
 # Last turn's audit warnings per player — injected into the next turn's
@@ -766,6 +766,16 @@ async def play_sse(request: GameRequest):
             for chunk in _drain_story_events(request.player_id):
                 yield chunk
 
+            # Lines the DM wrote as prose for the NPC in front of the player
+            # are voiced anyway (voice + bubble; the prose already shows the
+            # words, so the client adds no second chat line). The audit below
+            # still flags the habit so the DM learns to use speak.
+            try:
+                for notification in _synthesized_speech(request, turn_text, deduper):
+                    yield f"data: {json.dumps(notification, ensure_ascii=False, default=str)}\n\n"
+            except Exception as e:
+                logger.warning(f"Synthesized speech failed: {e}")
+
             # Fiction/database consistency audit — logged and attached to
             # the complete event (self-playtests read it as a scoreboard)
             audit_warnings = []
@@ -916,6 +926,50 @@ def get_music_generator() -> MusicGenerator:
     if world_name not in _music_generators:
         _music_generators[world_name] = MusicGenerator(world_name)
     return _music_generators[world_name]
+
+
+def _synthesized_speech(request, turn_text: str, deduper: DialogueDeduper) -> list[dict[str, Any]]:
+    """Speech events for quoted NPC lines the DM wrote inline this turn.
+
+    The speaker is the NPC the player addressed (canvas click), else the
+    only NPC present; with nobody to attribute to, nothing is voiced.
+    """
+    speaker = (getattr(request, "npc_name", None) or "").strip()
+    with get_session() as db:
+        if not speaker and getattr(request, "npc_id", None):
+            npc = db.get(NPC, request.npc_id)
+            speaker = npc.name if npc else ""
+        if not speaker:
+            player = db.get(Player, request.player_id)
+            if player and player.current_location_id:
+                present = [
+                    n for n in db.query(NPC).filter(
+                        NPC.current_location_id == player.current_location_id
+                    ).all()
+                    if str(getattr(n, "status", "alive") or "alive").lower().endswith("alive")
+                ]
+                if len(present) == 1:
+                    speaker = present[0].name
+    if not speaker:
+        return []
+
+    out: list[dict[str, Any]] = []
+    for event in speech_events_for_unspoken(turn_text, deduper.spoken, speaker, synthesized=True):
+        notification = {
+            "type": "speech",
+            "npc_name": event["npc"],
+            "text": event["text"],
+            "tone": "normal",
+            "action": None,
+            "synthesized": True,
+        }
+        try:
+            _enrich_speech_event(notification)
+        except Exception as e:
+            logger.warning(f"Speech TTS enrichment failed: {e}")
+        logger.info(f"Synthesized speech for {speaker}: {event['text'][:60]!r}")
+        out.append(notification)
+    return out
 
 
 def _enrich_speech_event(notification: dict[str, Any]) -> None:

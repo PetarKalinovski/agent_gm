@@ -118,6 +118,57 @@ _LABEL_QUOTE = re.compile(
     r"[\"“](?P<quote>[^\"”“\n]{8,400})[\"”]"
 )
 
+# Quotes with no said-tag at all — the action-beat style LLMs default to
+# ("She wipes her hands on her apron. \"I run this place...\""). Playtesting
+# found a whole conversation delivered this way: not one line was voiced,
+# and the attribution-based checks above saw nothing. Any quote of four or
+# more words left in the narration after the deduper is a line the player
+# never heard — unless it is the player's own reported words, or writing.
+_ANY_QUOTE = re.compile(r"[\"“](?P<quote>[^\"”“\n]{8,600})[\"”]")
+_PLAYER_VERBS = (
+    r"(?:say|ask|tell|reply|answer|call|offer|add|manage|murmur|mutter|whisper"
+    r"|shout|lie|insist|admit|promise|counter|snap|growl|breathe|repeat"
+    r"|announce|declare|try|venture|press|blurt|hiss)"
+)
+_PLAYER_WORDS_BEFORE = re.compile(
+    rf"\byou\b[^\"“\n]{{0,25}}\b{_PLAYER_VERBS}\w*\s*[,:]?\s*$", re.IGNORECASE
+)
+_PLAYER_WORDS_AFTER = re.compile(
+    rf"^[,.]?\s*you\s+{_PLAYER_VERBS}\b", re.IGNORECASE
+)
+_WRITTEN_TEXT_BEFORE = re.compile(
+    r"(?:\b(?:reads?|inscri(?:bed|ption)|carved|written|scrawled|painted|etched"
+    r"|titled|labell?ed|stamped|printed|lettered|engraved|spells? out|words?"
+    r"|hand)\s*[,:]?\s*$"
+    # "The sign says ..." — an inanimate text-bearer with a speech verb
+    r"|\b(?:" + "|".join(sorted(_INANIMATE_SPEAKERS)) + r")\b[^\"“\n]{0,20}"
+    r"\b(?:says|said|reads?|proclaims?|declares?|warns?|announces?|states?)\s*[,:]?\s*$)",
+    re.IGNORECASE,
+)
+
+
+def unspoken_quotes(text: str) -> list[str]:
+    """Quoted lines in DM narration that never went through a speech tool.
+
+    Runs on the post-deduper text, so re-quotes of real speech are already
+    gone. The player's own reported words and written text are excluded;
+    everything else four words or longer is a line somebody said out loud
+    and the player never heard.
+    """
+    found: list[str] = []
+    for m in _ANY_QUOTE.finditer(text or ""):
+        quote = m.group("quote").strip()
+        if len(quote.split()) < 4:
+            continue
+        before = text[max(0, m.start() - 60):m.start()]
+        after = text[m.end():m.end() + 30]
+        if _PLAYER_WORDS_BEFORE.search(before) or _PLAYER_WORDS_AFTER.search(after):
+            continue
+        if _WRITTEN_TEXT_BEFORE.search(before):
+            continue
+        found.append(quote)
+    return found
+
 # Risky actions the DM resolved in the player's favour without asking the
 # engine. Fires only on RESOLUTION phrases (the attempt succeeded), never on
 # attempts — the whole point of roll_check is that the dice decide.
@@ -223,6 +274,9 @@ def _find_fabricated_dialogue(text: str) -> list[str]:
         consider(m.group("speaker_a") or m.group("speaker_b"), m.group("quote"))
     for m in _LABEL_QUOTE.finditer(text):
         consider(m.group("speaker"), m.group("quote"))
+
+    if not speakers and unspoken_quotes(text):
+        speakers.append("someone present (an unattributed quote)")
 
     seen: set[str] = set()
     unique = []
