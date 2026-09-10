@@ -4,6 +4,7 @@ import base64
 import io
 import logging
 import os
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 import httpx
@@ -312,6 +313,18 @@ Return a JSON array (no other text): [{"label": "<short name>", "box_2d": [ymin,
     def sprite_path(self, sig: str, filename: str) -> Path:
         """Absolute path of one frame in one signature's directory."""
         return self.assets_dir / self.sprite_rel(sig, filename)
+
+    def _save_debug_strip(self, kind: str, character_id: str, strip_data: bytes) -> None:
+        """Keep the raw filmstrip beside the sliced frames. A bad cycle can
+        only be diagnosed from what the model actually drew — the frames
+        alone hide whether the slicer, the cutout, or the drawing failed."""
+        try:
+            debug_dir = self.assets_dir / "debug" / "strips"
+            debug_dir.mkdir(parents=True, exist_ok=True)
+            stamp = time.strftime("%Y%m%d-%H%M%S")
+            (debug_dir / f"{character_id}_{kind}_{stamp}.png").write_bytes(strip_data)
+        except OSError as e:
+            logger.debug(f"Could not save debug strip: {e}")
 
     def _save_image(self, image_data: bytes, relative_path: str) -> str:
         """Save image to assets directory. Returns absolute path."""
@@ -1007,6 +1020,7 @@ no text, no shadows."""
         strip_data = await self._call_api(
             prompt, aspect_ratio="21:9", image_size="2K", reference_image=reference_image
         )
+        self._save_debug_strip(action, character.id, strip_data)
         cells = self._slice_walk_strip(strip_data, n)
         try:
             frames = self._normalize_walk_frames(cells, reference_image, partner_repair=False)
@@ -1015,6 +1029,7 @@ no text, no shadows."""
             strip_data = await self._call_api(
                 prompt, aspect_ratio="21:9", image_size="2K", reference_image=reference_image
             )
+            self._save_debug_strip(action, character.id, strip_data)
             cells = self._slice_walk_strip(strip_data, n)
             frames = self._normalize_walk_frames(cells, reference_image, partner_repair=False)
 
@@ -1076,6 +1091,7 @@ no text, no shadows."""
         strip_data = await self._call_api(
             prompt, aspect_ratio="21:9", image_size="2K", reference_image=reference_image
         )
+        self._save_debug_strip(f"walk_{direction}", character.id, strip_data)
         cells = self._slice_walk_strip(strip_data, n)
         try:
             frames = self._normalize_walk_frames(cells, reference_image)
@@ -1086,8 +1102,13 @@ no text, no shadows."""
             strip_data = await self._call_api(
                 prompt, aspect_ratio="21:9", image_size="2K", reference_image=reference_image
             )
+            self._save_debug_strip(f"walk_{direction}", character.id, strip_data)
             cells = self._slice_walk_strip(strip_data, n)
             frames = self._normalize_walk_frames(cells, reference_image)
+        logger.info(
+            f"Walk cycle ({direction}) for {character.name}: motion "
+            f"{self._motion_score(frames):.2f} (0 = every key identical)"
+        )
 
         # In-between the keys locally: n keys -> 2n frames (free, seconds)
         from src.services.frame_interpolator import interpolate_cycle
@@ -1129,29 +1150,273 @@ no text, no shadows."""
             paths[key] = str(dest)
         return paths
 
+    # Poses land roughly — not exactly — on the n-column grid, and wide
+    # lunges run straight into their neighbours (a trailing boot under the
+    # next pose's coat). A fixed slice cuts such poses in half (seen live: an
+    # attack strip shipped frame 4 as half a character), and there is often
+    # no white gap to find. So poses are segmented as connected blobs of
+    # ink: touching poses are split at the thinnest column between them,
+    # detached weapon tips are attached to the nearest pose, and every
+    # foreign pixel inside a pose's crop is painted out. The grid is only
+    # the last resort.
+    _SLICE_LINE_WIDTH = 0.015       # a vertical rule is thinner than this × width
+    _SLICE_LINE_FULL = 0.9          # a row/column this occupied is decoration
+    _SLICE_LINE_EDGE = 0.5          # ...if occupancy just outside it drops below this
+    _SLICE_LINE_FRINGE = 0.6        # ...and so are its anti-aliased neighbours
+    _SLICE_LINE_GROW = 0.012        # ...but a fringe is never wider than this × size
+    _SLICE_BIG_BLOB = 0.20          # a blob this × the largest is a pose, not debris
+    _SLICE_ATTACH = 0.6             # debris within this × cell width joins a pose
+    _SLICE_CUT_THROUGH = 0.15       # a split through ink this × the peak is a cut body
+
+    @classmethod
+    def _grow_bands(cls, seeds, occupancy, limit: int):
+        """Extend every seeded run of rows/columns outward by at most
+        `limit` while the occupancy stays above the fringe floor — the soft
+        edge of a drawn line is lighter than its core but still darker than
+        paper."""
+        out = seeds.copy()
+        n = len(out)
+        i = 0
+        while i < n:
+            if not seeds[i]:
+                i += 1
+                continue
+            j = i
+            while j < n and seeds[j]:
+                j += 1
+            lo, hi = i, j
+            while lo > 0 and i - lo < limit and occupancy[lo - 1] > cls._SLICE_LINE_FRINGE:
+                lo -= 1
+            while hi < n and hi - j < limit and occupancy[hi] > cls._SLICE_LINE_FRINGE:
+                hi += 1
+            out[lo:hi] = True
+            i = j
+        return out
+
+    @classmethod
+    def _band_runs(cls, flags) -> list[tuple[int, int]]:
+        runs: list[tuple[int, int]] = []
+        start = None
+        for i, on in enumerate(flags):
+            if on and start is None:
+                start = i
+            elif not on and start is not None:
+                runs.append((start, i))
+                start = None
+        if start is not None:
+            runs.append((start, len(flags)))
+        return runs
+
+    def _erase_lines(self, rgb, mask) -> None:
+        """Paint drawn lines and cards out of the strip, in place.
+
+        A full-width row band is a ground line (thin) or a letterbox card
+        (thick); a thin full-height column band is a grid rule. A card is
+        erased whole. A line is erased only where the paper on both sides
+        of it is empty — where it crosses a pose it is left alone rather
+        than carving a white hairline through the character.
+        """
+        import numpy as np
+
+        h, w = mask.shape
+        row_limit = max(3, int(h * self._SLICE_LINE_GROW))
+        col_limit = 3  # a rule's anti-aliasing is a pixel or two wide
+
+        row_occ = mask.mean(axis=1)
+        row_seed = row_occ > self._SLICE_LINE_FULL
+        for y0, y1 in self._band_runs(row_seed):
+            if y1 - y0 > row_limit * 2:            # a card: no fringe, erase whole
+                rgb[y0:y1, :, :] = 255
+                mask[y0:y1, :] = False
+                row_seed[y0:y1] = False
+        for y0, y1 in self._band_runs(self._grow_bands(row_seed, row_occ, row_limit)):
+            # Six wide poses can fill most of a row too — but a line has a
+            # sharp edge: the rows just outside its fringe are nearly empty.
+            outside = max(
+                row_occ[y0 - 1] if y0 > 0 else 0.0,
+                row_occ[y1] if y1 < h else 0.0,
+            )
+            if outside > self._SLICE_LINE_EDGE:
+                continue
+            above = mask[y0 - 1] if y0 > 0 else np.zeros(w, dtype=bool)
+            below = mask[y1] if y1 < h else np.zeros(w, dtype=bool)
+            clear = ~above & ~below
+            rgb[y0:y1, clear, :] = 255
+            mask[y0:y1, clear] = False
+
+        col_occ = mask.mean(axis=0)
+        col_seed = col_occ > self._SLICE_LINE_FULL
+        max_line = max(1, int(w * self._SLICE_LINE_WIDTH))
+        for x0, x1 in self._band_runs(col_seed):
+            if x1 - x0 > max_line:                 # a side card: erase whole
+                rgb[:, x0:x1, :] = 255
+                mask[:, x0:x1] = False
+                col_seed[x0:x1] = False
+        for x0, x1 in self._band_runs(self._grow_bands(col_seed, col_occ, col_limit)):
+            left = mask[:, x0 - 1] if x0 > 0 else np.zeros(h, dtype=bool)
+            right = mask[:, x1] if x1 < w else np.zeros(h, dtype=bool)
+            clear = ~left & ~right
+            rgb[clear, x0:x1, :] = 255
+            mask[clear, x0:x1] = False
+
     def _slice_walk_strip(self, strip_data: bytes, n: int) -> list["Image.Image"]:
         """Slice a filmstrip into n cells, immune to Gemini's decorations.
 
-        The model spaces poses evenly but unpredictably adds grid lines,
-        ground lines, or letterbox cards. Mask = not-near-white, then clear
-        any row/column masked across (almost) its full span — that kills
-        lines and borders while keeping the character, which never spans a
-        full cell. Cells are inset 2% so neighboring-cell slivers don't leak.
+        Mask = not-near-white. Drawn lines and cards are erased first
+        (`_erase_lines`), then the poses are found as blobs of ink
+        (`_cells_from_blobs`); only a strip that does not read as n poses
+        falls back to the fixed grid (`_cells_from_grid`), which flags any
+        cell whose pose touches a wall as `clipped` so validation drops it.
         """
         import numpy as np
 
         img = Image.open(io.BytesIO(strip_data)).convert("RGB")
+        rgb = np.array(img)
+        mask = np.asarray(img.convert("L")) <= 240
+        self._erase_lines(rgb, mask)
+        img = Image.fromarray(rgb, "RGB")
+
+        cells = self._cells_from_blobs(img, mask, n)
+        if cells is not None:
+            return cells
+        return self._cells_from_grid(img, mask, n)
+
+    def _cells_from_blobs(
+        self, img: "Image.Image", mask, n: int
+    ) -> list["Image.Image"] | None:
+        """Segment n poses as connected blobs of ink.
+
+        Big blobs are poses (or several poses touching); small blobs are
+        debris or detached parts. Touching poses are split at the thinnest
+        column between them, over-segmented strips are merged at the
+        narrowest gap, and each pose's crop has every pixel that is not its
+        own painted white. Returns None when the strip does not resolve to
+        exactly n poses.
+        """
+        import numpy as np
+        from scipy import ndimage
+
+        w, h = img.size
+        labels, count = ndimage.label(mask, structure=np.ones((3, 3), dtype=bool))
+        if count == 0:
+            return None
+        sizes = ndimage.sum(mask, labels, range(1, count + 1))
+        slices = ndimage.find_objects(labels)
+        big_thr = float(sizes.max()) * self._SLICE_BIG_BLOB
+        big, small = [], []
+        for lab, (sl, size) in enumerate(zip(slices, sizes), start=1):
+            entry = (lab, sl[1].start, sl[1].stop, int(size))
+            (big if size >= big_thr else small).append(entry)
+        if not big:
+            return None
+
+        # A group is a set of labels restricted to a column range
+        groups = [
+            {"labels": {lab}, "x0": x0, "x1": x1, "cut": False}
+            for lab, x0, x1, _ in sorted(big, key=lambda b: b[1])
+        ]
+        profile = mask.sum(axis=0)
+
+        def group_mask(g):
+            m = np.isin(labels, list(g["labels"]))
+            m[:, :g["x0"]] = False
+            m[:, g["x1"]:] = False
+            return m
+
+        # Too few blobs: poses touch. Split the widest at its valley.
+        guard = 0
+        while len(groups) < n and guard < n:
+            guard += 1
+            g = max(groups, key=lambda g: g["x1"] - g["x0"])
+            gm = group_mask(g)
+            prof = gm.sum(axis=0)
+            x0, x1 = g["x0"], g["x1"]
+            lo = x0 + (x1 - x0) // 4
+            hi = x1 - (x1 - x0) // 4
+            if hi - lo < 4:
+                return None
+            cut = lo + int(np.argmin(prof[lo:hi]))
+            through = prof[cut] > prof[x0:x1].max() * self._SLICE_CUT_THROUGH
+            left = {"labels": set(g["labels"]), "x0": x0, "x1": cut, "cut": through}
+            right = {"labels": set(g["labels"]), "x0": cut, "x1": x1, "cut": through}
+            groups[groups.index(g)] = left
+            groups.insert(groups.index(left) + 1, right)
+
+        # Too many blobs: a partial seventh pose at the edge is dropped
+        # when it is light; a pose that broke in two (a white stripe, a
+        # stray erase) is rejoined with its closest neighbour.
+        while len(groups) > n:
+            masses = [int(group_mask(g).sum()) for g in groups]
+            median = float(np.median(masses))
+            lightest = min(range(len(groups)), key=lambda i: masses[i])
+            if masses[lightest] < median * 0.5:
+                del groups[lightest]
+                continue
+            gaps = [
+                (groups[i + 1]["x0"] - groups[i]["x1"], i)
+                for i in range(len(groups) - 1)
+            ]
+            _, i = min(gaps)
+            a, b = groups[i], groups[i + 1]
+            groups[i:i + 2] = [{
+                "labels": a["labels"] | b["labels"],
+                "x0": a["x0"], "x1": b["x1"], "cut": a["cut"] or b["cut"],
+            }]
+        if len(groups) != n:
+            return None
+
+        # Debris near a pose is a detached part of it (a weapon tip, a
+        # flicked cloak edge); debris far from every pose is a mark.
+        reach = (w / n) * self._SLICE_ATTACH
+        centers = [(g["x0"] + g["x1"]) / 2 for g in groups]
+        for lab, x0, x1, _ in small:
+            cx = (x0 + x1) / 2
+            i = min(range(n), key=lambda i: abs(centers[i] - cx))
+            if abs(centers[i] - cx) <= reach:
+                groups[i]["labels"].add(lab)
+                groups[i]["x0"] = min(groups[i]["x0"], x0)
+                groups[i]["x1"] = max(groups[i]["x1"], x1)
+
+        pad = 6
+        rgb = np.array(img)
+        cells: list[Image.Image] = []
+        for g in groups:
+            gm = group_mask(g)
+            ys, xs = np.nonzero(gm)
+            if len(xs) == 0:
+                return None
+            box = (
+                max(0, int(xs.min()) - pad), max(0, int(ys.min()) - pad),
+                min(w, int(xs.max()) + pad + 1), min(h, int(ys.max()) + pad + 1),
+            )
+            keep = ndimage.binary_dilation(
+                gm[box[1]:box[3], box[0]:box[2]], iterations=2
+            )
+            patch = rgb[box[1]:box[3], box[0]:box[2]].copy()
+            patch[~keep] = 255
+            cell = Image.fromarray(patch, "RGB")
+            cell.info["clipped"] = bool(g["cut"])
+            cells.append(cell)
+        return cells
+
+    def _cells_from_grid(self, img: "Image.Image", mask, n: int) -> list["Image.Image"]:
+        """The fixed n-column grid (legacy slicing). Cells are inset 2% so
+        neighboring-cell slivers don't leak; a pose touching a cell wall is
+        flagged `clipped` — half of it lives next door."""
+        import numpy as np
+
         w, h = img.size
         cell_w = w // n
         inset = max(2, cell_w // 50)
+        min_px = max(4, int(h * 0.01))
         cells: list[Image.Image] = []
         for i in range(n):
-            cell = img.crop((i * cell_w + inset, 0, (i + 1) * cell_w - inset, h))
-            arr = np.asarray(cell.convert("L"))
-            mask = arr <= 240
-            mask[mask.mean(axis=1) > 0.8, :] = False
-            mask[:, mask.mean(axis=0) > 0.8] = False
-            ys, xs = np.nonzero(mask)
+            x0, x1 = i * cell_w + inset, (i + 1) * cell_w - inset
+            cell = img.crop((x0, 0, x1, h))
+            cmask = mask[:, x0:x1].copy()
+            cmask[cmask.mean(axis=1) > 0.8, :] = False
+            cmask[:, cmask.mean(axis=0) > 0.8] = False
+            ys, xs = np.nonzero(cmask)
             if len(xs) == 0:
                 raise ValueError(f"Walk strip cell {i + 1} came back empty")
             pad = 6
@@ -1159,7 +1424,13 @@ no text, no shadows."""
                 max(0, int(xs.min()) - pad), max(0, int(ys.min()) - pad),
                 min(cell.width, int(xs.max()) + pad), min(cell.height, int(ys.max()) + pad),
             )
-            cells.append(cell.crop(box))
+            edge = max(2, cell.width // 100)
+            out = cell.crop(box)
+            out.info["clipped"] = bool(
+                (cmask[:, :edge].sum(axis=0) >= min_px).any()
+                or (cmask[:, -edge:].sum(axis=0) >= min_px).any()
+            )
+            cells.append(out)
         return cells
 
     # A frame is broken when its solid-pixel mass or dimensions collapse
@@ -1168,7 +1439,33 @@ no text, no shadows."""
     _FRAME_MIN_HEIGHT = 0.75   # × median char height
     _FRAME_MIN_WIDTH = 0.45    # × median char width
     _FRAME_MAX_WIDTH = 2.2     # × median char width
-    _FRAME_MIN_MASS = 0.40     # × median opaque-pixel count
+    _FRAME_MIN_MASS = 0.55     # × median opaque-pixel count (a half
+                               # character measured 0.45 and slipped through)
+    _COMPONENT_KEEP = 0.025    # alpha islands lighter than this × the main
+                               # body are debris: grid-line stubs, ground-line
+                               # fragments, rembg crumbs — never the character
+
+    @classmethod
+    def _keep_main_components(cls, cut: "Image.Image") -> "Image.Image":
+        """Drop small disconnected alpha islands from a background-removed
+        frame. Seen live: white stubs of a ground line drifting beside the
+        feet, a floating sliver of the neighbouring pose. The anti-aliased
+        rim around kept islands is preserved by a small dilation."""
+        import numpy as np
+        from scipy import ndimage
+
+        rgba = np.array(cut.convert("RGBA"))
+        alpha = rgba[..., 3]
+        solid = alpha > 128
+        labels, count = ndimage.label(solid)
+        if count <= 1:
+            return cut
+        sizes = ndimage.sum(solid, labels, range(1, count + 1))
+        keep = np.zeros(count + 1, dtype=bool)
+        keep[1:] = sizes >= float(sizes.max()) * cls._COMPONENT_KEEP
+        keep_mask = ndimage.binary_dilation(keep[labels], iterations=3)
+        rgba[..., 3] = np.where(keep_mask, alpha, 0)
+        return Image.fromarray(rgba, "RGBA")
 
     @staticmethod
     def _frame_stats(frame: "Image.Image") -> tuple[int, int, int, float]:
@@ -1221,10 +1518,13 @@ no text, no shadows."""
         idle_baseline_frac = idle_bbox[3] / idle.height
 
         transparent: list[Image.Image] = []
+        clipped: list[bool] = []
         for cell in cells:
+            clipped.append(bool(cell.info.get("clipped", False)))
             buf = io.BytesIO()
             cell.save(buf, format="PNG")
             cut = Image.open(io.BytesIO(self._remove_background(buf.getvalue()))).convert("RGBA")
+            cut = self._keep_main_components(cut)
             bbox = cut.getchannel("A").getbbox()
             transparent.append(cut.crop(bbox) if bbox else cut)
 
@@ -1242,7 +1542,7 @@ no text, no shadows."""
                 or mass < med_mass * self._FRAME_MIN_MASS
             )
 
-        broken = [i for i, s in enumerate(stats) if is_broken(s)]
+        broken = [i for i, s in enumerate(stats) if is_broken(s) or clipped[i]]
         if len(broken) > len(transparent) // 2:
             raise ValueError(
                 f"{len(broken)}/{len(transparent)} frames broken (ghost/sliver/merge)"
@@ -1278,6 +1578,26 @@ no text, no shadows."""
             canvas.paste(f, (x, baseline_y - f.height), f)
             frames.append(canvas)
         return frames
+
+    @staticmethod
+    def _motion_score(frames: list["Image.Image"]) -> float:
+        """1 - mean silhouette overlap between opposite-phase keys. A walk
+        that actually walks scores ~0.3+; a strip of six identical standing
+        poses scores ~0. Logged so weak strips can be found in the logs."""
+        import numpy as np
+
+        n = len(frames)
+        if n < 2:
+            return 0.0
+        masks = [np.asarray(f.getchannel("A")) > 128 for f in frames]
+        scores = []
+        for i in range(n // 2):
+            a, b = masks[i], masks[(i + n // 2) % n]
+            if a.shape != b.shape:
+                continue
+            union = (a | b).sum()
+            scores.append(1.0 - ((a & b).sum() / union if union else 1.0))
+        return float(sum(scores) / len(scores)) if scores else 0.0
 
     def mirror_walk_cycle(
         self,
@@ -1370,10 +1690,13 @@ no text, no shadows."""
         for direction, path in direction_results:
             paths[direction] = path
 
+        # Left is ALWAYS re-derived from right. A left idle generated by an
+        # older pipeline is a separate drawing — playtesting found a player
+        # whose left-facing idle was a different person (hat, coat, lantern)
+        # from the other three views. Re-mirroring is free and idempotent.
         left_path = sprites_dir / f"{character.id}_left.png"
-        if not left_path.exists():
-            from PIL import ImageOps
-            ImageOps.mirror(Image.open(paths["right"]).convert("RGBA")).save(left_path)
+        from PIL import ImageOps
+        ImageOps.mirror(Image.open(paths["right"]).convert("RGBA")).save(left_path)
         paths["left"] = str(left_path)
 
         # 3. Generate walk cycles — one filmstrip call per direction (frames
@@ -1407,15 +1730,9 @@ no text, no shadows."""
             for cycle_paths in cycle_results:
                 paths.update(cycle_paths)
 
-            # Left cycle: mirror of right — free, guaranteed symmetric, and
-            # matches the mirrored left idle
-            if _cycle_complete("left"):
-                paths.update({
-                    f"left_walk{f}": str(sprites_dir / f"{character.id}_left_walk{f}.png")
-                    for f in range(1, self.WALK_FRAME_COUNT + 1)
-                })
-            else:
-                paths.update(self.mirror_walk_cycle(character.id, "right", "left"))
+            # Left cycle: always the mirror of right — free, guaranteed
+            # symmetric, and matches the (re-mirrored) left idle above
+            paths.update(self.mirror_walk_cycle(character.id, "right", "left"))
 
         logger.info(f"Prepared {len(paths)} sprites for {character.name}")
         return paths
