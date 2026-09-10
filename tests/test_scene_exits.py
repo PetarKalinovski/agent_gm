@@ -105,3 +105,65 @@ def test_missing_bounds_and_position_still_place_doors():
 
     assert doors["somewhere"]["slot"] == "east"
     assert 0.0 <= doors["somewhere"]["x"] <= 100.0
+
+
+# ---------------------------------------------------------------------------
+# Doors stand in open floor
+# ---------------------------------------------------------------------------
+
+def _open_dest(id_="d1", **kw):
+    row = {"id": id_, "name": "Out", "travel_type": "walk", "position": {"x": 90, "y": 50}}
+    row.update(kw)
+    return row
+
+
+def test_door_slides_off_an_obstacle():
+    """The live case: the east slot (90,50 after the margin) sits between a
+    bar footprint and a barrel stack. The door slides along the east wall to
+    the nearest clear spot instead of the notch."""
+    loc = SimpleNamespace(
+        position_x=50, position_y=50,
+        walkable_bounds={"x_min": 10, "x_max": 90, "y_min": 20, "y_max": 80},
+        obstacles=[
+            [[71, 48], [86, 48], [86, 54], [71, 54]],
+            [[84, 54], [95, 54], [95, 60], [84, 60]],
+        ],
+    )
+    doors = compute_exit_doors(loc, [_open_dest()])
+    door = doors["d1"]
+    assert door["slot"] == "east"
+    assert door["x"] == 88.0                # still on the east wall
+    assert door["y"] != 50.0                # moved off the notch
+    assert door["y"] <= 42.0 or door["y"] >= 66.0  # clear of both footprints
+    assert 22.0 <= door["y"] <= 78.0        # inside the walkable band
+
+
+def test_door_stays_put_on_open_floor():
+    loc = SimpleNamespace(
+        position_x=50, position_y=50,
+        walkable_bounds={"x_min": 10, "x_max": 90, "y_min": 20, "y_max": 80},
+        obstacles=[[[20, 20], [30, 20], [30, 30], [20, 30]]],
+    )
+    door = compute_exit_doors(loc, [_open_dest()])["d1"]
+    assert (door["x"], door["y"]) == (88.0, 50.0)
+
+
+def test_door_placement_is_deterministic_with_obstacles():
+    loc = SimpleNamespace(
+        position_x=50, position_y=50,
+        walkable_bounds={"x_min": 10, "x_max": 90, "y_min": 20, "y_max": 80},
+        obstacles=[[[80, 40], [95, 40], [95, 60], [80, 60]]],
+    )
+    a = compute_exit_doors(loc, [_open_dest()])
+    b = compute_exit_doors(loc, [_open_dest()])
+    assert a == b
+
+
+def test_garbage_obstacles_are_ignored():
+    loc = SimpleNamespace(
+        position_x=50, position_y=50,
+        walkable_bounds={"x_min": 10, "x_max": 90, "y_min": 20, "y_max": 80},
+        obstacles=["nope", [[1]], [[None, None], [2, 2], [3, 3]], 42],
+    )
+    door = compute_exit_doors(loc, [_open_dest()])["d1"]
+    assert (door["x"], door["y"]) == (88.0, 50.0)

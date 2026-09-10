@@ -27,6 +27,176 @@ def _normalize(text: str) -> str:
     return " ".join(text.translate(_PUNCT_TABLE).lower().split())
 
 
+class CodeFenceFilter:
+    """Holds Markdown code fences back from the player.
+
+    Narration never legitimately contains a ``` fence; when one appears it
+    is the DM writing a tool call as text (seen live: a complete
+    prompt_npc_agent call, JSON and all, printed into the chat). Everything
+    between the fences is captured in `fences` for the rescue path and
+    never released. Text outside fences streams through untouched, except
+    that a trailing backtick or two is held until the next token settles
+    whether a fence is opening.
+    """
+
+    FENCE = "```"
+
+    def __init__(self) -> None:
+        self._buf = ""
+        self._in_fence = False
+        self.fences: list[str] = []
+
+    def feed(self, text: str) -> str:
+        self._buf += text or ""
+        out = ""
+        while True:
+            if self._in_fence:
+                end = self._buf.find(self.FENCE)
+                if end == -1:
+                    return out
+                self.fences.append(self._buf[:end])
+                self._buf = self._buf[end + len(self.FENCE):]
+                self._in_fence = False
+                continue
+            start = self._buf.find(self.FENCE)
+            if start == -1:
+                hold = 0
+                for k in (2, 1):
+                    if self._buf.endswith("`" * k):
+                        hold = k
+                        break
+                cut = len(self._buf) - hold
+                out += self._buf[:cut]
+                self._buf = self._buf[cut:]
+                return out
+            out += self._buf[:start]
+            self._buf = self._buf[start + len(self.FENCE):]
+            self._in_fence = True
+
+    def flush(self) -> str:
+        if self._in_fence:
+            if self._buf.strip():
+                self.fences.append(self._buf)
+            self._buf = ""
+            self._in_fence = False
+            return ""
+        out = self._buf
+        self._buf = ""
+        return out
+
+
+# Lines that are a tool result echoed as prose, not narration. Seen live:
+# "[]" and '[{"type": "text", "text": "\n[]\n"}]' printed into the chat
+# between an NPC's lines — the DM model repeating a content block verbatim.
+_JUNK_LINE = re.compile(
+    r"""^\s*(?:
+        \[\s*\]                                   # []
+        |\{\s*\}                                  # {}
+        |\[\s*\{\s*"type"\s*:\s*"text".*\}\s*\]   # [{"type": "text", ...}]
+        |\{\s*"type"\s*:\s*"text".*\}            # {"type": "text", ...}
+        |\{\s*"(?:success|status|result|error)"\s*:.*\}   # {"success": true, ...}
+    )\s*$""",
+    re.VERBOSE,
+)
+
+
+def _strip_json_blobs(line: str, dropped: list[str]) -> str:
+    """Remove every JSON object/array embedded in a line of prose.
+
+    Seen live: the DM wrote "Quest Updated: Teeth on the North Road
+    activated{"id": "...", "rewards": {...}}" — a tool result pasted mid-
+    sentence. Brackets are matched with a small stack that respects JSON
+    strings; a candidate is removed only if it actually parses, so prose
+    like "[illegible]" or "{the whole square}" is untouched.
+    """
+    import json
+
+    out = []
+    i = 0
+    n = len(line)
+    while i < n:
+        ch = line[i]
+        if ch not in "{[":
+            out.append(ch)
+            i += 1
+            continue
+        depth = 0
+        in_str = False
+        escape = False
+        j = i
+        while j < n:
+            c = line[j]
+            if in_str:
+                if escape:
+                    escape = False
+                elif c == "\\":
+                    escape = True
+                elif c == '"':
+                    in_str = False
+            elif c == '"':
+                in_str = True
+            elif c in "{[":
+                depth += 1
+            elif c in "}]":
+                depth -= 1
+                if depth == 0:
+                    break
+            j += 1
+        candidate = line[i:j + 1] if j < n and depth == 0 else None
+        parsed = None
+        if candidate and len(candidate) >= 2:
+            try:
+                parsed = json.loads(candidate)
+            except (json.JSONDecodeError, ValueError):
+                parsed = None
+        # An empty [] or {} mid-sentence is prose ("a list: [] of nothing");
+        # a real tool echo carries keys or strings
+        if isinstance(parsed, (dict, list)) and (len(candidate) >= 8 or '"' in candidate):
+            dropped.append(candidate)
+            i = j + 1
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+class JunkLineFilter:
+    """Drops tool-result echoes from the token stream: whole junk lines
+    (`_JUNK_LINE`) and JSON objects pasted into prose.
+
+    Works at line granularity: text is released up to the last newline,
+    each complete line is cleaned, and the trailing partial line is held
+    until it completes (or `flush`).
+    """
+
+    def __init__(self) -> None:
+        self._buf = ""
+        self.dropped: list[str] = []
+
+    def _clean(self, line: str) -> str | None:
+        if _JUNK_LINE.match(line):
+            self.dropped.append(line)
+            return None
+        return _strip_json_blobs(line, self.dropped) if ("{" in line or "[" in line) else line
+
+    def feed(self, text: str) -> str:
+        self._buf += text or ""
+        if "\n" not in self._buf:
+            return ""
+        head, _, self._buf = self._buf.rpartition("\n")
+        pieces = []
+        for line in head.split("\n"):
+            cleaned = self._clean(line)
+            if cleaned is not None:
+                pieces.append(cleaned + "\n")
+        return "".join(pieces)
+
+    def flush(self) -> str:
+        line, self._buf = self._buf, ""
+        cleaned = self._clean(line)
+        return cleaned if cleaned is not None else ""
+
+
 def speech_events_for_unspoken(
     text: str,
     spoken: list[str],

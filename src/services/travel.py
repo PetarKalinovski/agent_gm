@@ -202,6 +202,8 @@ def travel_now(player_id: str, destination_id: str) -> dict[str, Any]:
     if clock.get("error"):
         logger.warning(f"Canvas travel could not advance the clock: {clock['error']}")
 
+    arrival = place_at_arrival_door(player_id, destination_id, origin_id)
+
     return {
         "success": True,
         "from_id": origin_id,
@@ -210,4 +212,47 @@ def travel_now(player_id: str, destination_id: str) -> dict[str, Any]:
         "destination_name": destination_name,
         "minutes": round(hours * 60),
         "first_visit": first_visit,
+        "arrival": arrival,
     }
+
+
+# How far inside the room from the door the traveller is stood
+ARRIVAL_INSET = 7.0
+
+
+def place_at_arrival_door(player_id: str, destination_id: str, origin_id: str | None) -> dict | None:
+    """Stand the player just inside the destination's door back to where
+    they came from. Walking east out of the tavern lands you at the square's
+    west door, not at the far east wall where your old x/y happened to be.
+    Returns the position written, or None when no door leads back (the
+    player keeps their coordinates — the scene still loads)."""
+    from src.services.scene_exits import compute_exit_doors
+    from src.tools.world_read.locations import get_available_destinations
+
+    if not origin_id:
+        return None
+    try:
+        destinations = [
+            d for d in (get_available_destinations(destination_id) or [])
+            if isinstance(d, dict)
+        ]
+        with get_session() as session:
+            destination = session.get(Location, destination_id)
+            player = session.get(Player, player_id)
+            if not destination or not player:
+                return None
+            door = compute_exit_doors(destination, destinations).get(origin_id)
+            if not door:
+                return None
+            # Step ARRIVAL_INSET units from the door toward the room's centre
+            dx, dy = 50.0 - door["x"], 50.0 - door["y"]
+            length = (dx * dx + dy * dy) ** 0.5 or 1.0
+            x = door["x"] + dx / length * ARRIVAL_INSET
+            y = door["y"] + dy / length * ARRIVAL_INSET
+            player.position_x = round(max(0.0, min(100.0, x)), 2)
+            player.position_y = round(max(0.0, min(100.0, y)), 2)
+            session.commit()
+            return {"x": player.position_x, "y": player.position_y, "slot": door.get("slot")}
+    except Exception as e:  # never let placement break a real move
+        logger.warning(f"Arrival placement failed: {e}")
+        return None

@@ -44,11 +44,94 @@ Finish with a 1-2 sentence summary of what changed (this is only logged, the
 player never sees it directly)."""
 
 
+def _walk_npc_ids(value: Any, found: set[str]) -> None:
+    """Collect every "npc_id" (and list under "npc_ids") nested in JSON."""
+    if isinstance(value, dict):
+        npc_id = value.get("npc_id")
+        if isinstance(npc_id, str) and npc_id:
+            found.add(npc_id)
+        for item in value.get("npc_ids") or []:
+            if isinstance(item, str) and item:
+                found.add(item)
+        for child in value.values():
+            _walk_npc_ids(child, found)
+    elif isinstance(value, list):
+        for child in value:
+            _walk_npc_ids(child, found)
+
+
+def staged_npc_ids(session) -> set[str]:
+    """NPCs the campaign has cast or written into a beat that has not been
+    delivered yet. The simulator must not move them: they are staged for a
+    scene the engine will fire on its own clock."""
+    from src.models.campaign import Campaign, StoryBeat
+
+    staged: set[str] = set()
+    campaigns = session.query(Campaign).filter(
+        Campaign.status.in_(("pending", "active"))
+    ).all()
+    for campaign in campaigns:
+        for npc_id in (campaign.villain_npc_id, campaign.successor_npc_id):
+            if npc_id:
+                staged.add(npc_id)
+        for npc_id in campaign.ally_npc_ids or []:
+            if isinstance(npc_id, str) and npc_id:
+                staged.add(npc_id)
+        beats = session.query(StoryBeat).filter(
+            StoryBeat.campaign_id == campaign.id,
+            StoryBeat.status.in_(("pending", "armed", "fired")),
+        ).all()
+        for beat in beats:
+            for blob in (beat.trigger_data, beat.met_condition,
+                         beat.consequence_met, beat.consequence_missed):
+                _walk_npc_ids(blob, staged)
+    return staged
+
+
+def sim_move_npc(npc_id: str, destination_id: str) -> dict[str, Any]:
+    """Move an NPC to a new location, within the simulator's staging rules.
+
+    Refused in code (the prompt asks, the code decides): a move INTO a
+    location where a player is standing — walking the antagonist up to the
+    player is the DM's scene, not the simulator's — and any move of an NPC
+    the campaign has staged for a beat that has not fired yet. Playtesting
+    found the bandit meant for Wolf's Hollow drinking in the player's
+    tavern on day one.
+
+    Args:
+        npc_id: The NPC's ID.
+        destination_id: The destination location ID.
+
+    Returns:
+        Dictionary with result, or an "error" explaining the refusal.
+    """
+    from src.models import Player
+    from src.tools.world_write import move_npc
+
+    with get_session() as session:
+        player_locations = {
+            p.current_location_id for p in session.query(Player).all()
+            if p.current_location_id
+        }
+        if destination_id in player_locations:
+            return {
+                "error": "refused: a player is standing there. The simulator never "
+                         "walks an NPC up to the player — leave that meeting to the DM.",
+            }
+        if npc_id in staged_npc_ids(session):
+            return {
+                "error": "refused: this NPC is staged by the campaign for a scene that "
+                         "has not happened yet. Pick a different NPC or skip the move.",
+            }
+    return move_npc(npc_id, destination_id)
+
+
 def _get_sim_tools() -> list:
+    from strands import tool
+
     from src.tools.world_read import get_world_state_summary, get_recent_events, get_all_npcs
     from src.tools.world_write import (
         create_event,
-        move_npc,
         schedule_world_event,
         update_faction,
         update_dm_state,
@@ -59,7 +142,7 @@ def _get_sim_tools() -> list:
         get_recent_events,
         get_all_npcs,
         create_event,
-        move_npc,
+        tool(name="move_npc")(sim_move_npc),
         schedule_world_event,
         update_faction,
         update_dm_state,
@@ -106,6 +189,13 @@ def maybe_advance_world(run_agent=None) -> dict[str, Any]:
         dm_state.last_world_turn_day = clock.day
         session.commit()
         day = clock.day
+
+        if last is None:
+            # The opening day is authored — the seed, the campaign's first
+            # act, the NPCs where the author put them. Simulating it on the
+            # player's first turn reshuffled that staging before it was
+            # played. The world starts moving on its own from day two.
+            return {"advanced": False, "reason": "the opening day is authored, not simulated"}
 
     logger.info(f"World turn: advancing the world for Day {day}")
     try:

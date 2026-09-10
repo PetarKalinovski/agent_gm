@@ -57,12 +57,16 @@ from src.services.scene_exits import compute_exit_doors
 from src.services.scene_objects import normalize_objects, resolve_interaction
 from src.services.travel import check_route, travel_now
 from src.web import pending_actions
-from src.web.turn_filters import DialogueDeduper, speech_events_for_unspoken
+from src.web.turn_filters import CodeFenceFilter, DialogueDeduper, JunkLineFilter, speech_events_for_unspoken
+from src.web.tool_rescue import rescue_tool_calls, resolve_npc
 from src.web.turn_audit import audit_turn, format_audit_feedback
 
 # Last turn's audit warnings per player — injected into the next turn's
 # context so the DM repairs (or stops making) unbacked claims
 _pending_audit_feedback: dict[str, list] = {}
+# What the ENGINE did on the DM's behalf last turn (tool calls it wrote as
+# text and the rescue path executed) — the DM must not redo or re-narrate it
+_pending_engine_notes: dict[str, list[str]] = {}
 
 load_dotenv()
 
@@ -600,6 +604,11 @@ async def play_sse(request: GameRequest):
 
             # Strips DM re-quotes of lines already delivered as speech events
             deduper = DialogueDeduper()
+            # Holds code fences back from the player (a tool call typed as
+            # text); their contents are executed by the rescue path below
+            fence = CodeFenceFilter()
+            # Drops tool-result echoes ("[]", content-block JSON) line by line
+            junk = JunkLineFilter()
             turn_text_parts: list[str] = []
             last_state_json: str | None = None
 
@@ -631,6 +640,12 @@ async def play_sse(request: GameRequest):
             prior_warnings = _pending_audit_feedback.pop(request.player_id, None)
             if prior_warnings:
                 context += format_audit_feedback(prior_warnings)
+            engine_notes = _pending_engine_notes.pop(request.player_id, None)
+            if engine_notes:
+                context += (
+                    "\n\n[ENGINE NOTE — already happened, do not redo or repeat]\n- "
+                    + "\n- ".join(engine_notes)
+                )
 
             # A campaign beat that fired inside _build_context already moved
             # NPCs, flipped quests and wrote events in code. Its exemption
@@ -705,7 +720,7 @@ async def play_sse(request: GameRequest):
                 if isinstance(response, dict) and "data" in response:
                     token_data = response["data"]
                     if token_data:
-                        released = deduper.feed(token_data)
+                        released = deduper.feed(junk.feed(fence.feed(token_data)))
                         if released:
                             turn_text_parts.append(released)
                             token_event = {"type": "token", "data": released}
@@ -723,11 +738,50 @@ async def play_sse(request: GameRequest):
 
             logger.info(f"Stream finished with {event_count} events")
 
-            # Release any text still held by the dedup buffer
+            # Release any text still held by the filters (fence first — a
+            # held backtick or an unterminated fence — then the deduper)
+            held = junk.feed(fence.flush()) + junk.flush()
+            if held:
+                released = deduper.feed(held)
+                if released:
+                    turn_text_parts.append(released)
+                    yield f"data: {json.dumps({'type': 'token', 'data': released})}\n\n"
             tail = deduper.flush()
             if tail.strip():
                 turn_text_parts.append(tail)
                 yield f"data: {json.dumps({'type': 'token', 'data': tail})}\n\n"
+
+            # Tool calls the DM typed instead of making: execute the dialogue
+            # ones now, stream their speech, and tell the DM next turn
+            rescued = []
+            if fence.fences:
+                try:
+                    rescued = await asyncio.to_thread(
+                        rescue_tool_calls, fence.fences, request.player_id, request.npc_id
+                    )
+                except Exception as e:
+                    logger.warning(f"Tool rescue failed: {e}")
+            for index, record in enumerate(rescued):
+                pill = {
+                    "id": f"rescue-{index}", "name": record["tool"], "status": "success",
+                    "is_subagent": record["tool"] == "prompt_npc_agent",
+                    "output": record.get("output") or "",
+                }
+                yield f"data: {json.dumps({'type': 'tool_update', 'tool': pill}, ensure_ascii=False)}\n\n"
+                for event in record.get("events") or []:
+                    notification = {
+                        "type": "speech", "npc_name": event.get("npc"),
+                        "text": event.get("text"), "tone": event.get("tone") or "normal",
+                        "action": event.get("action"),
+                    }
+                    try:
+                        _enrich_speech_event(notification)
+                    except Exception as e:
+                        logger.warning(f"Speech TTS enrichment failed: {e}")
+                    deduper.register_speech(notification.get("text"))
+                    yield f"data: {json.dumps(notification, ensure_ascii=False, default=str)}\n\n"
+                _pending_engine_notes.setdefault(request.player_id, []).append(record["note"])
+                logger.warning(f"Tool rescue: executed {record['tool']} the DM wrote as text")
 
             # If the DM forgot to advance time this turn, apply a minimum cost
             # so the world clock (and scheduled events) can't freeze.
@@ -784,6 +838,25 @@ async def play_sse(request: GameRequest):
                     turn_text, tool_tracker.snapshot(), state_before, state_after,
                     code_actions=code_actions, campaign=campaign_audit,
                 )
+                if junk.dropped:
+                    audit_warnings.append({
+                        "check": "tool_result_in_prose",
+                        "detail": (
+                            "The response pasted raw tool output into the narration "
+                            f"({len(junk.dropped)} fragment(s) such as {junk.dropped[0][:60]!r}). "
+                            "The engine removed them. Tool results are for YOU to read; the "
+                            "player only ever sees prose."
+                        ),
+                    })
+                if fence.fences:
+                    audit_warnings.append({
+                        "check": "tool_call_in_prose",
+                        "detail": (
+                            "The response contained a fenced code block — a tool call written "
+                            "as text. The player never sees code; the engine hid it and executed "
+                            "what it could. CALL tools; never type them into the narration."
+                        ),
+                    })
                 for w in audit_warnings:
                     logger.warning(f"Turn audit [{w['check']}]: {w['detail']}")
                 if audit_warnings:
@@ -1275,9 +1348,15 @@ async def get_portrait(npc_id: str):
 
     try:
         with get_session() as db:
-            npc = db.query(NPC).filter(NPC.id == npc_id).first()
+            # The id often arrives as whatever the DM typed into a tool call
+            # ("brann_coldiron"); the "considers…" portrait must still resolve
+            npc = resolve_npc(db, npc_id, None)
             cached = npc.portrait_path if npc else None
+            if npc:
+                npc_id = npc.id
 
+        if not npc:
+            return JSONResponse({"error": "NPC not found"}, status_code=404)
         if cached and Path(cached).exists():
             return FileResponse(cached, media_type="image/png")
 

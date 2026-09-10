@@ -408,6 +408,7 @@ def prompt_npc_agent(player_id: str, npc_id: str, player_input: str, is_first_in
             player_data = get_player(player_id)
             agent._player_name = player_data.get("name", "Unknown") if player_data else "Unknown"
             agent._agent = agent._create_agent()
+            agent._turn_start_index = len(getattr(agent._agent, "messages", None) or [])
 
             result = agent.respond(player_input, context=narrative_context)
             response = result.get("response", "...")
@@ -443,17 +444,21 @@ def prompt_npc_agent(player_id: str, npc_id: str, player_input: str, is_first_in
     )
     if events:
         result["events"] = events
+    # The lines delivered through `speak` in THIS exchange — a caller that
+    # ran this tool outside the DM's stream (the tool-rescue path) replays
+    # them as speech events, since no tracker saw the nested calls
+    result["spoken"] = _spoken_lines(agent, getattr(agent, "_turn_start_index", 0))
     return result
 
 
-def _spoken_lines(agent: "NPCAgent") -> list[str]:
-    """Every line this NPC delivered through `speak` in its session."""
+def _spoken_lines(agent: "NPCAgent", start: int = 0) -> list[str]:
+    """Lines this NPC delivered through `speak`, from message `start` on."""
     try:
         messages = agent.agent.messages
     except Exception:
         return []
     lines: list[str] = []
-    for message in messages or []:
+    for message in (messages or [])[start:]:
         content = message.get("content") if isinstance(message, dict) else None
         for block in content or []:
             tool_use = block.get("toolUse") if isinstance(block, dict) else None

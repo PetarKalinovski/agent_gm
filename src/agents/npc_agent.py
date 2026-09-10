@@ -197,6 +197,7 @@ class NPCAgent(BaseGameAgent):
 
         # Now create the agent (will call _build_system_prompt which uses self.npc)
         self._agent = self._create_agent()
+        self._turn_start_index = len(getattr(self._agent, "messages", None) or [])
 
         # Generate greeting
         trust = self.relationship.get("trust_level", 50)

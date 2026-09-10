@@ -145,3 +145,122 @@ def test_tracker_fans_out_event_list_in_order():
     assert [s["text"] for s in speech] == ["First line spoken here.", "Second line spoken here."]
     assert "synthesized" not in speech[0]
     assert speech[1]["synthesized"] is True
+
+
+# --------------------------------------------------------------------------
+# Code fences never reach the player; what is inside them is executed
+# --------------------------------------------------------------------------
+
+from src.web.tool_rescue import parse_call, resolve_npc
+from src.web.turn_filters import CodeFenceFilter
+
+
+def _stream(filter_, chunks):
+    out = "".join(filter_.feed(c) for c in chunks)
+    return out + filter_.flush()
+
+
+def test_fence_is_held_back_and_captured():
+    f = CodeFenceFilter()
+    text = _stream(f, ["He turns as you approach. ", "```json\n{\"npc_id\": \"x\"}\n```", " A scout, then."])
+    assert text == "He turns as you approach.  A scout, then."
+    assert f.fences == ['json\n{"npc_id": "x"}\n']
+
+
+def test_fence_split_across_tokens():
+    f = CodeFenceFilter()
+    text = _stream(f, ["Rain. `", "``json\n{\"a\": 1}", "\n``", "` Wind."])
+    assert text == "Rain.  Wind."
+    assert f.fences == ['json\n{"a": 1}\n']
+
+
+def test_unterminated_fence_is_swallowed_at_flush():
+    f = CodeFenceFilter()
+    text = _stream(f, ["Before. ```json\n{\"npc_id\": \"y\", \"player_input\": \"hi\"}"])
+    assert text == "Before. "
+    assert len(f.fences) == 1 and '"npc_id": "y"' in f.fences[0]
+
+
+def test_lone_backticks_in_prose_pass_through():
+    f = CodeFenceFilter()
+    assert _stream(f, ["a `word` and `` two ``", " done"]) == "a `word` and `` two `` done"
+    assert f.fences == []
+
+
+def test_parse_call_reads_bare_arguments_and_explicit_forms():
+    bare = 'json\n{"player_id": "p", "npc_id": "brann_coldiron", "player_input": "Captain.", "is_first_interaction": true, "context": "c"}\n'
+    assert parse_call(bare) == ("prompt_npc_agent", {
+        "player_id": "p", "npc_id": "brann_coldiron", "player_input": "Captain.",
+        "is_first_interaction": True, "context": "c",
+    })
+    explicit = '{"tool": "speak", "arguments": {"npc_name": "Guard", "text": "Halt there.", "tone": "shouted"}}'
+    assert parse_call(explicit) == ("speak", {"npc_name": "Guard", "text": "Halt there.", "tone": "shouted"})
+    assert parse_call("{\"tool\": \"move_player\", \"arguments\": {}}") is None
+    assert parse_call("just prose in a fence") is None
+    assert parse_call("[1, 2, 3]") is None
+
+
+def test_resolve_npc_accepts_ids_names_and_slugs(db):
+    from src.models import Location, LocationType, NPC, get_session
+
+    with get_session() as session:
+        square = Location(name="Square", type=LocationType.DISTRICT)
+        hollow = Location(name="Hollow", type=LocationType.DISTRICT)
+        session.add_all([square, hollow])
+        session.flush()
+        brann = NPC(name="Captain Brann Coldiron", current_location_id=square.id)
+        vex = NPC(name="Vex Marrow", current_location_id=hollow.id)
+        session.add_all([brann, vex])
+        session.commit()
+        brann_id, square_id = brann.id, square.id
+
+    with get_session() as session:
+        assert resolve_npc(session, brann_id, None).name == "Captain Brann Coldiron"
+        assert resolve_npc(session, "brann_coldiron", square_id).name == "Captain Brann Coldiron"
+        assert resolve_npc(session, "Vex", square_id).name == "Vex Marrow"
+        assert resolve_npc(session, "nobody_here", square_id) is None
+        assert resolve_npc(session, None, square_id) is None
+
+
+# --------------------------------------------------------------------------
+# Tool-result echoes are dropped line by line
+# --------------------------------------------------------------------------
+
+from src.web.turn_filters import JunkLineFilter
+
+
+def test_junk_lines_are_dropped_and_prose_kept():
+    f = JunkLineFilter()
+    text = _stream(f, ["He nods.\n[]\n\n[{\"type\": \"text\", ", "\"text\": \"\\n[]\\n\"}]\nThe square empties."])
+    assert text == "He nods.\n\nThe square empties."
+    assert f.dropped == ["[]", '[{"type": "text", "text": "\\n[]\\n"}]']
+
+
+def test_junk_filter_holds_partial_lines():
+    f = JunkLineFilter()
+    assert f.feed("Half a li") == ""
+    assert f.feed("ne.\n[") == "Half a line.\n"
+    assert f.feed("]") == ""
+    assert f.flush() == ""          # the held "[]" was junk
+    assert f.dropped == ["[]"]
+
+
+def test_brackets_inside_prose_survive():
+    f = JunkLineFilter()
+    text = _stream(f, ["The ledger reads [illegible] here.\n", "A list: [] of nothing, he jokes."])
+    assert text == "The ledger reads [illegible] here.\nA list: [] of nothing, he jokes."
+
+
+def test_json_blob_pasted_into_prose_is_removed():
+    f = JunkLineFilter()
+    line = ('Quest Updated: Teeth on the North Road activated{"id": "e63f", "title": "Teeth", '
+            '"rewards": {"currency": 60, "items": ["Wolf-Tooth Charm"]}} He nods.\n')
+    assert _stream(f, [line]) == "Quest Updated: Teeth on the North Road activated He nods.\n"
+    assert f.dropped and f.dropped[0].startswith('{"id": "e63f"')
+
+
+def test_prose_brackets_are_not_json():
+    f = JunkLineFilter()
+    text = "A note reads {the whole square} and [illegible] and {\"unterminated\n"
+    assert _stream(f, [text]) == text
+    assert f.dropped == []
