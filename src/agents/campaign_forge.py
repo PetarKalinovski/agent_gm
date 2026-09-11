@@ -323,6 +323,7 @@ def _parse_payload(raw: str) -> dict[str, Any]:
 
 
 _TRAILING_COMMA = re.compile(r",(\s*[}\]])")
+_DANGLING_KEY = re.compile(r',?\s*"[^"\n]*"\s*:\s*(?=[}\]])')
 _LINE_COMMENT = re.compile(r"^\s*//.*$", re.MULTILINE)
 
 
@@ -333,6 +334,8 @@ def _repair_json(text: str) -> str:
     if not text:
         return ""
     fixed = _LINE_COMMENT.sub("", text)
+    # a key the model abandoned before its value ("sequence":}}) — seen live
+    fixed = _DANGLING_KEY.sub("", fixed)
     fixed = _TRAILING_COMMA.sub(r"\1", fixed)
     try:
         json.loads(fixed)
@@ -343,6 +346,7 @@ def _repair_json(text: str) -> str:
     stack: list[str] = []
     in_string = False
     escape = False
+    mismatch = False
     last_safe = 0        # index just after the last complete value/separator
     for i, ch in enumerate(fixed):
         if in_string:
@@ -360,6 +364,12 @@ def _repair_json(text: str) -> str:
             stack.append("}" if ch == "{" else "]")
             last_safe = i + 1
         elif ch in "}]":
+            if stack and stack[-1] != ch:
+                # the model closed the wrong bracket ("[{...}}"): cut here
+                # and let the re-balance below close things properly
+                fixed = fixed[:i]
+                mismatch = True
+                break
             if stack:
                 stack.pop()
             last_safe = i + 1
@@ -369,7 +379,9 @@ def _repair_json(text: str) -> str:
             continue
         else:
             last_safe = i + 1   # inside a bare value (number, true, null)
-    if in_string:
+    if mismatch:
+        pass
+    elif in_string:
         # drop the unterminated string and whatever key/comma preceded it
         cut = fixed.rfind('"', 0, len(fixed))
         cut = fixed.rfind(",", 0, cut)

@@ -1127,3 +1127,12 @@ def test_garbage_reply_still_raises():
 
     with _pytest.raises(ValueError):
         _parse_payload("I cannot help with that.")
+
+
+def test_dangling_key_before_a_closer_is_dropped():
+    from src.agents.campaign_forge import _parse_payload
+
+    raw = '{"title": "The Long Howl", "beats": [{"key": "b1", "act": 1, "sequence":}}'
+    data = _parse_payload(raw)
+    assert data["title"] == "The Long Howl"
+    assert data["beats"] == [{"key": "b1", "act": 1}]
