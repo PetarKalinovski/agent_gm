@@ -14,6 +14,11 @@ class AgentConfig(BaseModel):
     temperature: float = 0.7
     max_tokens: int = 2048
     description: str = ""
+    # OpenRouter `reasoning` block, passed through verbatim — e.g.
+    # {"max_tokens": 3000} caps a thinking model's reasoning budget, and
+    # {"enabled": false} turns it off. Seen live: Sonnet 5 spent the whole
+    # 16k completion budget on reasoning and returned zero text.
+    reasoning: dict[str, Any] | None = None
 
 
 class TimeCosts(BaseModel):

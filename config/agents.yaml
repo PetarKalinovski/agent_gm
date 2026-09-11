@@ -63,6 +63,9 @@ agents:
     model: "openrouter/anthropic/claude-sonnet-5"
     temperature: 0.85
     max_tokens: 16000   # Sonnet writes 9-15 rich beats; 8192 hit the limit
+    # Without a cap the model reasoned for the entire completion budget and
+    # returned no JSON at all (16000 reasoning tokens, 0 text)
+    reasoning: {max_tokens: 3000}
     description: "Authors the three-act campaign, fixed truths, and story beats for a new character"
 
   # Ambient scene chatter — one background call per location, cached in the DB

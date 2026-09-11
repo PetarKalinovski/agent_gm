@@ -134,14 +134,20 @@ def _create_litellm_model(agent_name: str) -> LiteLLMModel:
         if key:
             client_args["api_key"] = key
 
+    params: dict[str, Any] = {
+        "temperature": config.temperature,
+        "max_tokens": config.max_tokens,
+        "drop_params": True,
+    }
+    if config.reasoning:
+        # OpenRouter reads `reasoning` from the request body; LiteLLM
+        # forwards extra_body untouched to OpenAI-compatible providers
+        params["extra_body"] = {"reasoning": dict(config.reasoning)}
+
     return LiteLLMModel(
         model_id=config.model,
         client_args=client_args,
-        params={
-            "temperature": config.temperature,
-            "max_tokens": config.max_tokens,
-            "drop_params": True,
-        }
+        params=params,
     )
 
 
