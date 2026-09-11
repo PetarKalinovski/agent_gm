@@ -1888,7 +1888,7 @@ class GameRenderer {
     setTimeOfDay(timeOfDay) {
         const tints = {
             dawn: 0xffe6d0, morning: 0xfff1dd, day: 0xffffff, noon: 0xffffff,
-            afternoon: 0xfff8ec, evening: 0xffc9a1, dusk: 0xe0a898, night: 0x8b97c9,
+            afternoon: 0xfff8ec, evening: 0xffc9a1, dusk: 0xe0a898, night: 0x9ba4d3,
         };
         const hex = tints[timeOfDay] !== undefined ? tints[timeOfDay] : 0xffffff;
         this.targetTint = {
