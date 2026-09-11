@@ -274,3 +274,34 @@ def test_same_speech_result_seen_twice_renders_once():
     tracker.process_stream_payload(_tool_result_message(result))
     speech = [n for n in tracker.drain_notifications() if n.get("type") == "speech"]
     assert len(speech) == 1
+
+
+# --------------------------------------------------------------------------
+# A paragraph is read once per turn
+# --------------------------------------------------------------------------
+
+from src.web.turn_filters import SentenceDeduper
+
+PARA = ("Maera's eyes stay on you a beat too long before they settle, polite and unhurried. "
+        "The hearth pops behind her. A few of the trestle tables are empty this late.")
+
+
+def test_repeated_paragraph_is_dropped_second_time():
+    d = SentenceDeduper()
+    assert d.filter(PARA) == PARA
+    assert d.filter(PARA).strip() == ""
+    # a fresh sentence after the repeat still gets through
+    assert d.filter(PARA + " Then the door bangs open behind you.").strip() == "Then the door bangs open behind you."
+
+
+def test_short_sentences_are_never_deduped():
+    d = SentenceDeduper()
+    assert d.filter("Yes. Yes. Yes.") == "Yes. Yes. Yes."
+    assert d.filter("Yes.") == "Yes."
+
+
+def test_narration_then_tokens_reads_once():
+    d = SentenceDeduper()
+    assert d.filter(PARA) == PARA                       # narrate() block
+    tokens = d.filter("Maera's eyes stay on you a beat too long before they settle, polite and unhurried. ")
+    assert tokens.strip() == ""                         # the echo

@@ -103,7 +103,12 @@ def narrate(text: str, style: str = "narrative") -> dict[str, Any]:
 
     _output_text(text + "\n\n", console_output)
 
-    return {"success": True, "style": style, "length": len(text)}
+    return {
+        "success": True, "style": style, "length": len(text),
+        # Seen live: the model called narrate() and then repeated the same
+        # paragraph as its reply — the player read it twice
+        "note": "This text is ALREADY on the player's screen. Do not repeat or paraphrase it in your reply.",
+    }
 
 
 _STAGE_DIRECTION = re.compile(r"\*([^*\n]{1,240})\*")

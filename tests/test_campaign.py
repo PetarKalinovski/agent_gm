@@ -1027,3 +1027,103 @@ def test_no_campaign_write_tool_exists():
     import src.tools.world_write as ww
 
     assert not [name for name in ww.__all__ if "campaign" in name.lower()]
+
+
+# ---------------------------------------------------------------------------
+# A pending row that never finished is regenerated, not honoured forever
+# ---------------------------------------------------------------------------
+
+def test_stale_pending_campaign_is_regenerated(db):
+    from datetime import datetime, timedelta
+
+    from src.models import Location, LocationType, Player, get_session
+    from src.models.campaign import Campaign
+    from src.services import campaign as campaign_service
+
+    with get_session() as session:
+        loc = Location(name="Square", type=LocationType.DISTRICT)
+        session.add(loc)
+        session.flush()
+        player = Player(name="Rook", current_location_id=loc.id)
+        session.add(player)
+        session.flush()
+        corpse = Campaign(player_id=player.id, status="pending",
+                          created_at=datetime.utcnow() - timedelta(minutes=30))
+        session.add(corpse)
+        session.commit()
+        player_id, corpse_id = player.id, corpse.id
+
+    calls = []
+
+    def fake_generate(brief):
+        calls.append(brief)
+        raise RuntimeError("stop here — the claim is what we test")
+
+    result = campaign_service.ensure_campaign(player_id, generate=fake_generate, background=False)
+
+    assert calls, "a stale pending row must trigger a fresh generation"
+    assert result.get("campaign_id") != corpse_id
+    with get_session() as session:
+        rows = session.query(Campaign).filter(Campaign.player_id == player_id).all()
+        assert len(rows) == 1 and rows[0].id != corpse_id
+
+
+def test_fresh_pending_campaign_is_left_alone(db):
+    from src.models import Location, LocationType, Player, get_session
+    from src.models.campaign import Campaign
+    from src.services import campaign as campaign_service
+
+    with get_session() as session:
+        loc = Location(name="Square", type=LocationType.DISTRICT)
+        session.add(loc)
+        session.flush()
+        player = Player(name="Rook", current_location_id=loc.id)
+        session.add(player)
+        session.flush()
+        session.add(Campaign(player_id=player.id, status="pending"))
+        session.commit()
+        player_id = player.id
+
+    calls = []
+    result = campaign_service.ensure_campaign(
+        player_id, generate=lambda brief: calls.append(brief), background=False
+    )
+    assert result["status"] == "pending" and calls == []
+
+
+# ---------------------------------------------------------------------------
+# Nearly-right model JSON is repaired, not rejected
+# ---------------------------------------------------------------------------
+
+def test_trailing_commas_and_comments_are_repaired():
+    from src.agents.campaign_forge import _parse_payload
+
+    raw = """```json
+    {
+      // the pitch
+      "title": "The Whistle and the Wolf",
+      "acts": [{"number": 1, "title": "The Hollow Howl",},],
+      "beats": [],
+    }
+    ```"""
+    data = _parse_payload(raw)
+    assert data["title"] == "The Whistle and the Wolf"
+    assert data["acts"][0]["number"] == 1
+
+
+def test_truncated_reply_is_salvaged():
+    from src.agents.campaign_forge import _parse_payload
+
+    raw = ('{"title": "T", "premise": "P", "beats": [{"key": "a", "title": "One"}, '
+           '{"key": "b", "title": "Two", "directive": "The courier is se')
+    data = _parse_payload(raw)
+    assert data["title"] == "T"
+    assert [b["key"] for b in data["beats"]] == ["a", "b"]
+
+
+def test_garbage_reply_still_raises():
+    import pytest as _pytest
+    from src.agents.campaign_forge import _parse_payload
+
+    with _pytest.raises(ValueError):
+        _parse_payload("I cannot help with that.")

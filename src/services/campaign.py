@@ -22,6 +22,7 @@ thread and degrades to "the game exactly as it plays today" on failure.
 
 import re
 import threading
+from datetime import datetime, timedelta
 import uuid
 from typing import Any
 
@@ -1624,6 +1625,21 @@ def _fail_campaign(player_id: str, campaign_id: str | None, error: str) -> dict[
 # Generation: orchestration
 # ----------------------------------------------------------------------
 
+# A generation claims its row as "pending" before the LLM call; if the
+# process dies mid-call (a restart, a crash) the row stays pending forever
+# and every later caller no-ops. Older than this, a pending row is a corpse.
+PENDING_STALE_AFTER = timedelta(minutes=5)
+
+
+def _stale_pending(campaign) -> bool:
+    if campaign.status != "pending":
+        return False
+    created = getattr(campaign, "created_at", None)
+    if created is None:
+        return True
+    return (datetime.utcnow() - created) > PENDING_STALE_AFTER
+
+
 def ensure_campaign(player_id: str, predecessor_id: str | None = None,
                     force: bool = False, generate=None,
                     background: bool = True) -> dict[str, Any]:
@@ -1641,11 +1657,16 @@ def ensure_campaign(player_id: str, predecessor_id: str | None = None,
 
     with get_session() as session:
         existing = get_campaign_row(session, player_id)
-        if existing is not None and not force:
+        if existing is not None and not force and not _stale_pending(existing):
             status = "pending" if existing.status == "pending" else (
                 "ready" if existing.status == "active" else "exists"
             )
             return {"status": status, "campaign_id": existing.id}
+        if existing is not None and existing.status == "pending" and not force:
+            logger.warning(
+                f"campaign: pending row for {player_id} never finished "
+                f"(created {existing.created_at}) — regenerating"
+            )
         if existing is not None:
             session.query(StoryBeat).filter(StoryBeat.campaign_id == existing.id).delete()
             session.delete(existing)

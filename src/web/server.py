@@ -57,7 +57,7 @@ from src.services.scene_exits import compute_exit_doors
 from src.services.scene_objects import normalize_objects, resolve_interaction
 from src.services.travel import check_route, travel_now
 from src.web import pending_actions
-from src.web.turn_filters import CodeFenceFilter, DialogueDeduper, JunkLineFilter, speech_events_for_unspoken
+from src.web.turn_filters import CodeFenceFilter, DialogueDeduper, JunkLineFilter, SentenceDeduper, speech_events_for_unspoken
 from src.web.tool_rescue import rescue_tool_calls, resolve_npc
 from src.web.turn_audit import audit_turn, format_audit_feedback
 
@@ -614,6 +614,9 @@ async def play_sse(request: GameRequest):
             fence = CodeFenceFilter()
             # Drops tool-result echoes ("[]", content-block JSON) line by line
             junk = JunkLineFilter()
+            # Drops a paragraph the player already read this turn (narrate()
+            # output repeated as the reply, or the reverse)
+            sentences = SentenceDeduper()
             turn_text_parts: list[str] = []
             last_state_json: str | None = None
 
@@ -738,7 +741,7 @@ async def play_sse(request: GameRequest):
                 if isinstance(response, dict) and "data" in response:
                     token_data = response["data"]
                     if token_data:
-                        released = deduper.feed(junk.feed(fence.feed(token_data)))
+                        released = sentences.filter(deduper.feed(junk.feed(fence.feed(token_data))))
                         if released:
                             turn_text_parts.append(released)
                             token_event = {"type": "token", "data": released}
@@ -746,7 +749,7 @@ async def play_sse(request: GameRequest):
 
                 # Yield any narration output
                 while narration_buffer:
-                    text = deduper.filter_block(narration_buffer.pop(0))
+                    text = sentences.filter(deduper.filter_block(narration_buffer.pop(0)))
                     if not text.strip():
                         continue
                     logger.debug(f"Narration: {text[:50]}...")
@@ -760,11 +763,11 @@ async def play_sse(request: GameRequest):
             # held backtick or an unterminated fence — then the deduper)
             held = junk.feed(fence.flush()) + junk.flush()
             if held:
-                released = deduper.feed(held)
+                released = sentences.filter(deduper.feed(held))
                 if released:
                     turn_text_parts.append(released)
                     yield f"data: {json.dumps({'type': 'token', 'data': released})}\n\n"
-            tail = deduper.flush()
+            tail = sentences.filter(deduper.flush())
             if tail.strip():
                 turn_text_parts.append(tail)
                 yield f"data: {json.dumps({'type': 'token', 'data': tail})}\n\n"

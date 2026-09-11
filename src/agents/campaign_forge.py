@@ -12,6 +12,9 @@ today.
 """
 
 import json
+from pathlib import Path
+import time
+import re
 from typing import Any
 
 from loguru import logger
@@ -285,21 +288,131 @@ def generate_campaign_payload(brief: str) -> dict[str, Any]:
 
 
 def _parse_payload(raw: str) -> dict[str, Any]:
-    """Strip fences, parse, and insist on an object."""
+    """Strip fences, parse, and insist on an object.
+
+    Model JSON is almost right: trailing commas, a comment, a reply cut off
+    by max_tokens mid-string. Each is repaired before giving up (seen live:
+    two consecutive generations failed on a value at char 7025 and a new
+    character played without a story). The raw reply is kept under
+    data/debug/ when even the repair fails.
+    """
     text = _strip_fences(raw)
+    candidates = [text]
+    start, end = text.find("{"), text.rfind("}")
+    if start != -1 and end > start:
+        candidates.append(text[start:end + 1])
+    if start != -1:
+        candidates.append(text[start:])          # truncated: no closing brace yet
+    last_error: Exception | None = None
+    for candidate in candidates:
+        for attempt in (candidate, _repair_json(candidate)):
+            if not attempt:
+                continue
+            try:
+                data = json.loads(attempt)
+            except Exception as e:  # noqa: BLE001 - any decode failure
+                last_error = e
+                continue
+            if isinstance(data, dict):
+                return data
+            last_error = ValueError("payload was not a JSON object")
+    if start == -1:
+        raise ValueError("no JSON object in reply")
+    _dump_bad_reply(raw)
+    raise ValueError(f"unparseable JSON: {last_error}")
+
+
+_TRAILING_COMMA = re.compile(r",(\s*[}\]])")
+_LINE_COMMENT = re.compile(r"^\s*//.*$", re.MULTILINE)
+
+
+def _repair_json(text: str) -> str:
+    """Best-effort repairs: comments and trailing commas out, then close
+    whatever a truncated reply left open (an unterminated string, arrays,
+    objects) after cutting back to the last complete value."""
+    if not text:
+        return ""
+    fixed = _LINE_COMMENT.sub("", text)
+    fixed = _TRAILING_COMMA.sub(r"\1", fixed)
     try:
-        data = json.loads(text)
+        json.loads(fixed)
+        return fixed
     except Exception:
-        start, end = text.find("{"), text.rfind("}")
-        if start == -1 or end <= start:
-            raise ValueError("no JSON object in reply")
-        try:
-            data = json.loads(text[start:end + 1])
-        except Exception as e:
-            raise ValueError(f"unparseable JSON: {e}")
-    if not isinstance(data, dict):
-        raise ValueError("payload was not a JSON object")
-    return data
+        pass
+    # Truncation: walk the text tracking string/bracket state
+    stack: list[str] = []
+    in_string = False
+    escape = False
+    last_safe = 0        # index just after the last complete value/separator
+    for i, ch in enumerate(fixed):
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+                last_safe = i + 1
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch in "{[":
+            stack.append("}" if ch == "{" else "]")
+            last_safe = i + 1
+        elif ch in "}]":
+            if stack:
+                stack.pop()
+            last_safe = i + 1
+        elif ch in ",:":
+            last_safe = i + 1
+        elif ch.isspace():
+            continue
+        else:
+            last_safe = i + 1   # inside a bare value (number, true, null)
+    if in_string:
+        # drop the unterminated string and whatever key/comma preceded it
+        cut = fixed.rfind('"', 0, len(fixed))
+        cut = fixed.rfind(",", 0, cut)
+        fixed = fixed[:cut if cut != -1 else last_safe]
+    else:
+        fixed = fixed[:last_safe]
+    fixed = fixed.rstrip().rstrip(",")
+    # re-balance after the cut
+    stack = []
+    in_string = False
+    escape = False
+    for ch in fixed:
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch in "{[":
+            stack.append("}" if ch == "{" else "]")
+        elif ch in "}]" and stack:
+            stack.pop()
+    # a dangling key ("title":) must go too
+    fixed = re.sub(r',?\s*"[^"\n]*"\s*:\s*$', "", fixed)
+    fixed = fixed.rstrip().rstrip(",")
+    fixed += "".join(reversed(stack))
+    fixed = _TRAILING_COMMA.sub(r"\1", fixed)
+    return fixed
+
+
+def _dump_bad_reply(raw: str) -> None:
+    try:
+        debug_dir = Path("data/debug")
+        debug_dir.mkdir(parents=True, exist_ok=True)
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        (debug_dir / f"campaign_reply_{stamp}.txt").write_text(raw or "", encoding="utf-8")
+        logger.warning(f"campaign_forge: raw reply saved to data/debug/campaign_reply_{stamp}.txt")
+    except OSError:
+        pass
 
 
 def _strip_fences(raw: str) -> str:

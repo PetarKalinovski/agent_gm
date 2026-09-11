@@ -27,6 +27,43 @@ def _normalize(text: str) -> str:
     return " ".join(text.translate(_PUNCT_TABLE).lower().split())
 
 
+class SentenceDeduper:
+    """Drops sentences the player already read this turn.
+
+    The DM sometimes delivers a paragraph through `narrate` and then writes
+    the same paragraph again as its reply (seen live with Sonnet); the two
+    arrive by different paths (a narration block, then tokens). Every
+    sentence of 40+ characters released to the client is remembered for
+    the turn; a later copy — from either path — is dropped. Works on
+    already sentence-bounded text (the DialogueDeduper's releases and the
+    narration blocks), so it never holds tokens back.
+    """
+
+    MIN_CHARS = 24
+    _SPLIT = re.compile(r"(?<=[.!?…])\s+")
+
+    def __init__(self) -> None:
+        self.seen: set[str] = set()
+
+    def filter(self, text: str) -> str:
+        if not text:
+            return text
+        parts = self._SPLIT.split(text)
+        kept: list[str] = []
+        for part in parts:
+            key = _normalize(part)
+            if len(key) >= self.MIN_CHARS:
+                if key in self.seen:
+                    continue
+                self.seen.add(key)
+            kept.append(part)
+        if len(kept) == len(parts):
+            return text
+        out = " ".join(p for p in kept if p)
+        # keep paragraph breaks readable when a whole paragraph vanished
+        return out if out.strip() else ""
+
+
 class CodeFenceFilter:
     """Holds Markdown code fences back from the player.
 
