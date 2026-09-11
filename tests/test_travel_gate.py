@@ -57,3 +57,48 @@ def test_ungated_hierarchy_moves_still_free(db):
     assert move_player(player_id, town_id).get("success")
     result = move_player(player_id, square_id)
     assert result.get("success") and result["travel_time_hours"] == 0.1
+
+# ---------------------------------------------------------------------------
+# A pass shown once opens the road — for that player, both ways
+# ---------------------------------------------------------------------------
+
+from src.services.travel import check_route, travel_now
+
+
+def test_requirements_met_clears_the_route_for_that_player(db):
+    with get_session() as session:
+        player, town, square, hollow = _build_world(session)
+        other = Player(name="Stranger", current_location_id=square)
+        session.add(other)
+        session.commit()
+        other_id = other.id
+
+    assert move_player(player, hollow).get("blocked") is True
+    assert move_player(player, hollow, requirements_met=True).get("success") is True
+
+    with get_session() as session:
+        me = session.get(Player, player)
+        stranger = session.get(Player, other_id)
+        # the road back is open for me, still shut for a stranger
+        assert check_route(session, hollow, square, me)["blocked"] is False
+        assert check_route(session, square, hollow, stranger)["blocked"] is True
+
+    # and the canvas walks it without a DM turn
+    result = travel_now(player, square)
+    assert result.get("success") is True
+    with get_session() as session:
+        assert session.get(Player, player).current_location_id == square
+
+
+def test_arrival_lands_by_the_door_back(db):
+    with get_session() as session:
+        player, town, square, hollow = _build_world(session)
+        me = session.get(Player, player)
+        me.position_x, me.position_y = 88.0, 50.0
+        session.commit()
+
+    assert move_player(player, hollow, requirements_met=True).get("success") is True
+    with get_session() as session:
+        me = session.get(Player, player)
+        assert (me.position_x, me.position_y) != (88.0, 50.0)
+        assert 0.0 <= me.position_x <= 100.0 and 0.0 <= me.position_y <= 100.0

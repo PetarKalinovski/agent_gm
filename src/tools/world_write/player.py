@@ -12,7 +12,7 @@ from src.models import (
 )
 from src.services import perception
 from src.services import progression as prog
-from src.services.travel import check_route
+from src.services.travel import check_route, clear_route_for, place_at_arrival_door
 
 
 def _normalize_inventory(raw: list) -> list[dict[str, Any]]:
@@ -99,18 +99,28 @@ def move_player(player_id: str, destination_id: str, requirements_met: bool = Fa
                 "message": message,
             }
 
+        origin_id = player.current_location_id
+        # The DM waved them through: that road stays open for this player —
+        # the canvas can walk it (both ways) without asking again
+        if route["blocked"] and requirements_met and route["reason"] in ("route", "gate"):
+            clear_route_for(session, origin_id, destination_id, player_id)
+
         # Update player location and mark destination visited — one transaction
         player.current_location_id = destination_id
         destination.visited = True
         destination.discovered = True
+        destination_name = destination.name
         session.commit()
 
-        return {
-            "success": True,
-            "destination": destination.name,
-            "travel_time_hours": travel_time,
-            "reminder": f"Advance time by ~{travel_time}h and describe the new location.",
-        }
+    # Stand them just inside the door they came through (never blocks a move)
+    place_at_arrival_door(player_id, destination_id, origin_id)
+
+    return {
+        "success": True,
+        "destination": destination_name,
+        "travel_time_hours": travel_time,
+        "reminder": f"Advance time by ~{travel_time}h and describe the new location.",
+    }
 
 
 @tool

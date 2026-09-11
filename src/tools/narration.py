@@ -152,7 +152,13 @@ def speak(
     # gesture still renders in italics. NPC agents do this constantly.
     text, lifted = split_stage_directions(text)
     if lifted:
-        action = " ".join(part for part in (action, lifted) if part) or None
+        # The agent may pass the same gesture as `action` AND inside the
+        # text; join only what is new
+        have = " ".join((action or "").lower().split())
+        if not have:
+            action = lifted
+        elif " ".join(lifted.lower().split()) not in have:
+            action = f"{action} {lifted}"
 
     console = get_console()
 
@@ -179,13 +185,11 @@ def speak(
         dialogue = Text(f'"{text}"', style=style)
         console.print(speaker + dialogue)
 
-    # Plain text for web
-    plain_text = ""
-    if action:
-        plain_text += f"*{action}*\n"
-    plain_text += f'{npc_name}: "{text}"\n\n'
-
-    _output_text(plain_text, console_output)
+    # The web client renders the structured `speech` event below (portrait,
+    # voice, bubble, italic action) — a plain-text copy would show the
+    # gesture twice and the line once more. Console play still prints it.
+    if get_web_output_callback() is None:
+        console_output()
 
     # The "event" key surfaces this through the tool-result stream as a
     # structured SSE event (same mechanism as npc_death) — the web layer

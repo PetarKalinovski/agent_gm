@@ -56,6 +56,37 @@ def _apply_dress_code(route: dict[str, Any], destination, player) -> dict[str, A
     return route
 
 
+def _cleared(connection, player) -> bool:
+    """True when this player has already been waved through this route."""
+    player_id = getattr(player, "id", None)
+    return bool(player_id) and player_id in (connection.cleared_for or [])
+
+
+def clear_route_for(session, from_location_id: str | None, destination_id: str, player_id: str) -> int:
+    """Record that `player_id` has satisfied the requirements between the two
+    places: the direct connection (either direction) and, for a gated
+    destination, every requirement-locked entry into it. Returns how many
+    connections were marked. Called when the DM confirms
+    `requirements_met=True`; from then on the canvas walks the road freely."""
+    if not player_id:
+        return 0
+    rows = session.query(Connection).filter(
+        ((Connection.from_location_id == from_location_id) & (Connection.to_location_id == destination_id)) |
+        ((Connection.from_location_id == destination_id) & (Connection.to_location_id == from_location_id)) |
+        (Connection.to_location_id == destination_id)
+    ).all()
+    marked = 0
+    for conn in rows:
+        if not conn.requirements:
+            continue
+        cleared = list(conn.cleared_for or [])
+        if player_id not in cleared:
+            cleared.append(player_id)
+            conn.cleared_for = cleared
+            marked += 1
+    return marked
+
+
 def check_route(session, from_location_id: str | None, destination_id: str,
                 player=None) -> dict[str, Any]:
     """Decide whether the player may walk from one location to another.
@@ -92,6 +123,8 @@ def check_route(session, from_location_id: str | None, destination_id: str,
 
     if conn:
         requirements = list(conn.requirements or [])
+        if requirements and _cleared(conn, player):
+            requirements = []
         return _apply_dress_code({
             "travel_time_hours": conn.travel_time_hours,
             "blocked": bool(requirements),
@@ -112,6 +145,7 @@ def check_route(session, from_location_id: str | None, destination_id: str,
     entries = session.query(Connection).filter(
         Connection.to_location_id == destination_id
     ).all()
+    entries = [c for c in entries if not (c.requirements and _cleared(c, player))]
     gate_requirements = [r for c in entries for r in (c.requirements or [])]
     if entries and gate_requirements and all(c.requirements for c in entries):
         return _apply_dress_code({

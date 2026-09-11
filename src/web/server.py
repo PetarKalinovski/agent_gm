@@ -67,6 +67,11 @@ _pending_audit_feedback: dict[str, list] = {}
 # What the ENGINE did on the DM's behalf last turn (tool calls it wrote as
 # text and the rescue path executed) — the DM must not redo or re-narrate it
 _pending_engine_notes: dict[str, list[str]] = {}
+# The last combat roster sent to each player that no /api/combat/result has
+# answered yet. Seen live: start_combat streamed while the client was still
+# loading the new scene, the roster was dropped, and the DM waited for an
+# outcome that could never come. The next turn re-issues it instead.
+_pending_combat: dict[str, dict] = {}
 
 load_dotenv()
 
@@ -618,6 +623,17 @@ async def play_sse(request: GameRequest):
             # beat must not keep exempting the audit forever)
             previous_tick = get_last_tick(request.player_id)
 
+            # A roster the client never fought (dropped mid scene-load, a
+            # refresh, a crash) is fought NOW — the DM already narrated the
+            # fight breaking out and is waiting for its outcome.
+            stale_roster = _pending_combat.get(request.player_id)
+            if stale_roster and "[COMBAT OUTCOME]" not in (request.player_input or "")[:40]:
+                logger.warning("Re-issuing a combat roster the client never fought")
+                yield f"data: {json.dumps({'type': 'narration', 'content': 'The fight is not over.'})}\n\n"
+                yield f"data: {json.dumps(stale_roster, ensure_ascii=False, default=str)}\n\n"
+                yield f"data: {json.dumps({'type': 'complete', 'tools': [], 'audit': []})}\n\n"
+                return
+
             # What the ENGINE did between turns — canvas travel, pickups,
             # potions, gear, growth. Drained under the play lock; the DM reads
             # it as already-true facts and must not re-apply any of it.
@@ -695,6 +711,8 @@ async def play_sse(request: GameRequest):
                         except Exception as e:
                             logger.warning(f"Speech TTS enrichment failed: {e}")
                         deduper.register_speech(notification.get("text"))
+                    elif notification.get("type") == "combat_start":
+                        _pending_combat[request.player_id] = dict(notification)
                     encoded = json.dumps(notification, ensure_ascii=False, default=str)
                     yield f"data: {encoded}\n\n"
 
@@ -1396,6 +1414,8 @@ async def combat_result(request: CombatResultRequest):
     already true. Growth rides this response, never SSE.
     """
     from src.services.combat import apply_combat_result, combat_outcome_message
+
+    _pending_combat.pop(request.player_id, None)
 
     init_db(get_active_db_path())
     changes = apply_combat_result(

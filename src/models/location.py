@@ -164,6 +164,10 @@ class Connection(Base):
     difficulty: Mapped[int] = mapped_column(Integer, default=0)  # 0-100, how hard to traverse
     description: Mapped[str] = mapped_column(Text, default="")  # Description of the route
     requirements: Mapped[list] = mapped_column(JSON, default=list)  # Items/abilities needed
+    # Player ids the DM has waved through once: a pass shown at the gate
+    # opens that road for the rest of the game (both directions), so the
+    # canvas can walk it without a DM turn. NULL = nobody yet.
+    cleared_for: Mapped[list | None] = mapped_column(JSON, nullable=True)
     bidirectional: Mapped[bool] = mapped_column(Boolean, default=True)
     hidden: Mapped[bool] = mapped_column(Boolean, default=False)  # Must be discovered
     discovered: Mapped[bool] = mapped_column(Boolean, default=False)

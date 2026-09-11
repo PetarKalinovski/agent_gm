@@ -395,3 +395,18 @@ def test_speak_event_carries_clean_text_and_action():
     assert result["text"] == "Or you could tell me why you came."
     assert result["action"] == "lifts the bone whistle"
     assert result["event"] == "speech"
+
+
+def test_speak_does_not_echo_the_line_as_web_narration():
+    from src.tools.narration import set_web_output_callback
+
+    captured = []
+    set_web_output_callback(captured.append)
+    try:
+        result = speak("Aldric Vane", "*I raise a hand* Go. Before I change my mind.", "cold",
+                       action="I raise a hand")
+    finally:
+        set_web_output_callback(None)
+    assert captured == []                      # nothing but the event reaches the web
+    assert result["text"] == "Go. Before I change my mind."
+    assert result["action"] == "I raise a hand"  # not joined twice

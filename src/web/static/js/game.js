@@ -102,6 +102,8 @@ class GameRenderer {
         this.cineFocus = null;                   // {x, y} in world pixels
         this.timeScale = 1;                      // kill_cam slow-mo
         this._pendingCombat = null;              // roster queued behind a boss_intro
+        this._queuedForReady = null;             // events that arrived mid-load
+        this._queuedFor = null;                  // ...and which scene they belong to
         this._visionEndTimer = null;
 
         // Weather: screen-space particle field + a tint that MULTIPLIES the
@@ -383,6 +385,13 @@ class GameRenderer {
         // 1. CLEAR PREVIOUS SCENE IMMEDIATELY
         if (this.combat) this._endCombat(true);
         this._pendingCombat = null;      // never spawn a stale roster in a new scene
+        // Events that arrive WHILE this scene loads (a boss entrance, the
+        // combat roster the DM sent right after moving the player) wait in
+        // _queuedForReady and fire when the scene is playable. Seen live:
+        // start_combat landed during the walk into Wolf's Hollow and the
+        // fight was silently dropped. A different destination discards it.
+        if (this._queuedFor && this._queuedFor !== locationId) this._queuedForReady = null;
+        this._queuedFor = locationId;
         if (this.cine) this._endCinematic(true);
         this.backgroundLayer.removeChildren();
         this.npcLayer.removeChildren();
@@ -513,7 +522,27 @@ class GameRenderer {
             // The overlay outlives the fetch while the scene is unplayable —
             // that persistence IS the buffering the reveal waits behind
             this.showLoading(!this.sceneReady, this._lastReadiness);
+            this._flushSceneQueue();
         }
+    }
+
+    /** Play whatever arrived while the scene was loading, now that it can
+     *  be played: the cinematic first (a boss entrance parks the roster
+     *  behind itself), then the fight. */
+    _flushSceneQueue() {
+        if (this.isLoading || !this.sceneReady || !this.player) return;
+        const queued = this._queuedForReady;
+        if (!queued) return;
+        this._queuedForReady = null;
+        if (queued.cinematic) this.playCinematic(queued.cinematic);
+        if (queued.combat) this.startCombat(queued.combat.enemies, queued.combat.boss);
+    }
+
+    _queueForReady(key, value) {
+        this._queuedForReady = this._queuedForReady || {};
+        this._queuedForReady[key] = value;
+        this._queuedFor = this.locationId;
+        console.log(`Scene still loading — ${key} queued until it is playable`);
     }
 
     async loadBackground(url) {
@@ -1826,6 +1855,7 @@ class GameRenderer {
                 this.sceneReady = true;
                 this._loadingSince = 0;
                 this.showLoading(false);
+                this._flushSceneQueue();
             });
         }
 
@@ -2428,7 +2458,11 @@ class GameRenderer {
      *  While a combat-blocking cinematic (boss_intro) plays, the roster is
      *  parked in _pendingCombat and spawns when the entrance ends. */
     startCombat(enemies, boss) {
-        if (!this.player || this.playerDead || this.isLoading || !this.sceneReady) return;
+        if (this.playerDead) return;
+        if (!this.player || this.isLoading || !this.sceneReady) {
+            this._queueForReady('combat', { enemies: enemies || [], boss: boss || null });
+            return;
+        }
         if (this.cine && GameRenderer.CINE[this.cine.kind]?.blocksCombat) {
             this._pendingCombat = { enemies: enemies || [], boss: boss || null };
             window.dispatchEvent(new CustomEvent('combat-active', { detail: { active: true } }));
@@ -3451,7 +3485,11 @@ class GameRenderer {
         if (!p || !p.kind) return;
         if (p.kind === 'weather') { this.setWeather(p.mood || 'clear'); return; }
         const spec = GameRenderer.CINE[p.kind];
-        if (!spec || !this.player) return;
+        if (!spec) return;
+        if (!this.player || this.isLoading || !this.sceneReady) {
+            this._queueForReady('cinematic', p);
+            return;
+        }
         // Client-side safety: a fight owns the screen. boss_intro precedes
         // its spawn, so it is the only one that can queue combat behind it.
         if (this.combat && p.kind !== 'kill_cam') return;
