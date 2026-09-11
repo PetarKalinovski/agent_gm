@@ -62,7 +62,7 @@ agents:
     # with no story. One Sonnet call per character is cheap insurance.
     model: "openrouter/anthropic/claude-sonnet-5"
     temperature: 0.85
-    max_tokens: 8192
+    max_tokens: 16000   # Sonnet writes 9-15 rich beats; 8192 hit the limit
     description: "Authors the three-act campaign, fixed truths, and story beats for a new character"
 
   # Ambient scene chatter — one background call per location, cached in the DB
