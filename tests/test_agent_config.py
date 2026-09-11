@@ -8,7 +8,7 @@ from src.config import AgentConfig, load_agents_config
 
 def test_campaign_forge_caps_its_reasoning_budget():
     cfg = load_agents_config()["campaign_forge"]
-    assert cfg.reasoning == {"max_tokens": 3000}
+    assert cfg.reasoning == {"enabled": False}
     assert cfg.max_tokens >= 12000
 
 
