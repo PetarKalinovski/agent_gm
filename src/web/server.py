@@ -1280,6 +1280,9 @@ async def get_sprite(character_type: str, character_id: str, direction: str,
     if "." in direction:
         direction = direction.split(".")[0]
 
+    # A cold process (first request after start) has no engine yet; the
+    # background generation this may spawn reads the character row
+    init_db(get_active_db_path())
     asset_manager = get_asset_manager()
     is_player = character_type == "player"
     axis = "action" if _ACTION_FRAME_RE.match(direction) else "body"

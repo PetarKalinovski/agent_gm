@@ -2813,7 +2813,15 @@
                 if (historyData.messages && historyData.messages.length > 0) {
                     console.log(`Loading ${historyData.messages.length} messages from history`);
                     for (const msg of historyData.messages) {
-                        addMessage(msg.role === 'user' ? 'user' : 'assistant', msg.content);
+                        let content = msg.content || '';
+                        // The auto-sent combat turn is an engine message; the
+                        // player saw a short label live, never the brackets
+                        if (msg.role === 'user' && /^\s*\[COMBAT OUTCOME/.test(content)) {
+                            content = /: victory/.test(content) ? '\u2694 The fight is over.'
+                                : /: defeat/.test(content) ? '\u2694 You fall.'
+                                : '\u2694 The fight ends.';
+                        }
+                        addMessage(msg.role === 'user' ? 'user' : 'assistant', content);
                     }
                     // Returning to an ongoing story — fetch a "Previously..."
                     // recap in the background and pin it at the bottom
