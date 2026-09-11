@@ -360,3 +360,38 @@ def test_voice_pool_assignment_matches_gender_and_is_stable(db, tmp_path, monkey
 
     # Persisted: the same voice comes back without re-picking
     assert gen.ensure_voice_assigned(npc_id) == first
+
+
+# ---------------------------------------------------------------------------
+# *stage directions* inside a spoken line never reach the voice
+# ---------------------------------------------------------------------------
+
+from src.tools.narration import split_stage_directions
+
+
+def test_stage_directions_are_lifted_out_of_the_words():
+    spoken, action = split_stage_directions(
+        "*I slowly turn my head toward the sound* Long way from the lanterns, courier."
+    )
+    assert spoken == "Long way from the lanterns, courier."
+    assert action == "I slowly turn my head toward the sound"
+
+
+def test_multiple_directions_join_and_words_survive():
+    spoken, action = split_stage_directions("*sighs* Fine. *tosses the coin* Take it.")
+    assert spoken == "Fine. Take it."
+    assert action == "sighs; tosses the coin"
+
+
+def test_plain_lines_are_untouched():
+    assert split_stage_directions("No asterisks here.") == ("No asterisks here.", "")
+    assert split_stage_directions("") == ("", "")
+    # a line that is only a gesture stays as it was — something must be said
+    assert split_stage_directions("*shrugs*") == ("*shrugs*", "")
+
+
+def test_speak_event_carries_clean_text_and_action():
+    result = speak("Vex Marrow", "*lifts the bone whistle* Or you could tell me why you came.", "grim")
+    assert result["text"] == "Or you could tell me why you came."
+    assert result["action"] == "lifts the bone whistle"
+    assert result["event"] == "speech"

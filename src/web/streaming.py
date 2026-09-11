@@ -46,6 +46,7 @@ class ToolUsageTracker:
         """Initialize trackers for active tools and notification buffers."""
         self._tools: OrderedDict[str, dict[str, Any]] = OrderedDict()
         self._notifications: list[dict[str, Any]] = []
+        self._spoken_keys: set[tuple[str, str]] = set()
         self._snapshots: dict[str, str] = {}
         self._result_seen = False
 
@@ -240,6 +241,13 @@ class ToolUsageTracker:
             # NPC dialogue (from the speak tool) — the server layer enriches
             # this with npc_id + a TTS audio_id before it reaches the client
             elif event == "speech":
+                # One speak() call must render one line. Seen live on the
+                # LiteLLM/Anthropic path: the same tool result reached the
+                # tracker twice and the player read the line twice.
+                key = (str(output_data.get("npc") or ""), str(output_data.get("text") or ""))
+                if key in self._spoken_keys:
+                    return
+                self._spoken_keys.add(key)
                 note = {
                     "type": "speech",
                     "npc_name": output_data.get("npc"),

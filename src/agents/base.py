@@ -2,6 +2,7 @@
 
 import os
 import logging
+import re
 from typing import Any
 
 from strands import Agent
@@ -66,6 +67,13 @@ def _resolve_anthropic_client_args() -> dict[str, Any]:
     )
 
 
+def _rejects_temperature(model_id: str) -> bool:
+    """True for Claude 5-family ids (claude-sonnet-5, claude-opus-5,
+    claude-fable-5-1, ...), which return 400 when temperature is sent."""
+    name = (model_id or "").lower()
+    return bool(re.search(r"claude-(?:sonnet|opus|haiku|fable)-5(?:[.-]|$)", name))
+
+
 def _create_anthropic_model(agent_name: str) -> AnthropicModel:
     """Create a native Anthropic model (bypasses LiteLLM).
 
@@ -84,11 +92,15 @@ def _create_anthropic_model(agent_name: str) -> AnthropicModel:
 
     client_args = _resolve_anthropic_client_args()
 
+    # Claude 5 models reject `temperature` outright ("deprecated for this
+    # model", HTTP 400); older ones still take it
+    params = {} if _rejects_temperature(model_id) else {"temperature": config.temperature}
+
     model = AnthropicModel(
         model_id=model_id,
         max_tokens=config.max_tokens,
         client_args=client_args,
-        params={"temperature": config.temperature},
+        params=params,
     )
 
     # When using OAuth (auth_token), the SDK auto-reads ANTHROPIC_API_KEY

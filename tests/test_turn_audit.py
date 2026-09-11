@@ -294,3 +294,27 @@ def test_single_keyword_truth_never_fires():
 
 def test_empty_turn_text_is_clean():
     assert audit_turn("", [], STATE, STATE, campaign=BEAT) == []
+
+
+# ---------------------------------------------------------------------------
+# item claims in the forms the live DM actually used
+# ---------------------------------------------------------------------------
+
+def test_taking_an_item_from_an_npc_needs_a_tool():
+    text = "I take the brass token from Captain Coldiron, the metal warm from his hand."
+    assert "item_without_tool" in _checks(audit_turn(text, [], STATE, STATE))
+    text2 = "He hands you the gate pass without a word."
+    assert "item_without_tool" in _checks(audit_turn(text2, [], STATE, STATE))
+    text3 = "She presses a small iron key into your palm."
+    assert "item_without_tool" in _checks(audit_turn(text3, [], STATE, STATE))
+
+
+def test_item_claim_is_clean_when_the_bag_changed():
+    text = "He hands you the gate pass without a word."
+    after = {**STATE, "inventory": [{"name": "Gate Pass"}]}
+    assert "item_without_tool" not in _checks(audit_turn(text, [], STATE, after))
+
+
+def test_taking_a_look_is_not_an_item():
+    text = "You take a long look at the square from the well. The wind takes the lantern smoke."
+    assert "item_without_tool" not in _checks(audit_turn(text, [], STATE, STATE))

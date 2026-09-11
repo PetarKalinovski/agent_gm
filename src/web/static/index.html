@@ -3375,6 +3375,13 @@
                                         clearThinking(messageEl);
                                         textBuffer += payload.content;
                                         queueChatRender();
+                                    } else if (payload.type === 'error') {
+                                        // A turn that died server-side used to leave an empty
+                                        // bubble; say so, so the player knows to try again
+                                        clearThinking(messageEl);
+                                        const why = (payload.message || '').slice(0, 160);
+                                        textBuffer += `\n\n*(The story stumbled${why ? ': ' + why : ''}. Say it again.)*`;
+                                        queueChatRender();
                                     } else if (payload.type === 'tool_update' && payload.tool) {
                                         renderToolPill(toolsContainer, payload.tool);
                                         if (payload.tool.name === 'prompt_npc_agent' &&

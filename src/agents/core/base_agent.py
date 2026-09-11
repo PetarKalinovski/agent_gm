@@ -21,6 +21,37 @@ from src.core.types import AgentContext
 logger = logging.getLogger(__name__)
 
 
+def strip_reasoning_blocks(messages: list) -> int:
+    """Drop `reasoningContent` blocks from a loaded history, in place.
+
+    A thinking model's reasoning is persisted with the session. It is
+    useless on the next turn (the Chat Completions path warns it is not
+    supported in multi-turn) and fatal after a model swap: the native
+    Anthropic provider requires a `signature` on every thinking block and
+    raises KeyError on blocks another provider wrote. Sanitising on load
+    makes the DM model a config knob, not a one-way door.
+
+    Returns the number of blocks removed. Messages left with no content
+    are removed too (an empty assistant turn is rejected upstream).
+    """
+    removed = 0
+    kept_messages = []
+    for message in messages or []:
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, list):
+            kept_messages.append(message)
+            continue
+        kept = [block for block in content
+                if not (isinstance(block, dict) and "reasoningContent" in block)]
+        removed += len(content) - len(kept)
+        if kept:
+            message["content"] = kept
+            kept_messages.append(message)
+    if removed:
+        messages[:] = kept_messages
+    return removed
+
+
 class BaseGameAgent(ABC):
     """Base class for all game agents.
 
@@ -80,7 +111,7 @@ class BaseGameAgent(ABC):
         semantic_hook = SemanticMemoryHook()
 
         try:
-            return create_agent(
+            agent = create_agent(
                 agent_name=self.AGENT_NAME,
                 system_prompt=self._build_system_prompt(),
                 tools=self._get_tools(),
@@ -89,6 +120,10 @@ class BaseGameAgent(ABC):
                 hooks=[semantic_hook],
                 callback_handler=self.context.callback_handler,
             )
+            removed = strip_reasoning_blocks(getattr(agent, "messages", None) or [])
+            if removed:
+                logger.info(f"{self.AGENT_NAME}: dropped {removed} stored reasoning block(s) from history")
+            return agent
         except SessionException as e:
             # Session is corrupted - delete it and retry
             logger.warning(f"Corrupted session detected for {session_id}, resetting: {e}")

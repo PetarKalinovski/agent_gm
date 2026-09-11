@@ -264,3 +264,13 @@ def test_prose_brackets_are_not_json():
     text = "A note reads {the whole square} and [illegible] and {\"unterminated\n"
     assert _stream(f, [text]) == text
     assert f.dropped == []
+
+
+def test_same_speech_result_seen_twice_renders_once():
+    tracker = ToolUsageTracker()
+    result = {"success": True, "npc": "Brann", "tone": "grim", "event": "speech",
+              "text": "You have got it. Brass, in your hand now.", "action": None}
+    tracker.process_stream_payload(_tool_result_message(result))
+    tracker.process_stream_payload(_tool_result_message(result))
+    speech = [n for n in tracker.drain_notifications() if n.get("type") == "speech"]
+    assert len(speech) == 1

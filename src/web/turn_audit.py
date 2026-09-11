@@ -36,7 +36,17 @@ _DAMAGE_CLAIM = re.compile(
 
 _ITEM_CLAIM = re.compile(
     r"\b(?:added to your (?:pack|inventory|satchel)"
-    r"|you (?:pocket|stow|tuck away|now carry))\b",
+    r"|you (?:pocket|stow|tuck away|now carry)\b"
+    # "You take the brass token from Coldiron" / "I take the pass from him"
+    # — but not "you take a long look at the square from the well"
+    r"|(?:you|i) (?:take|accept|receive) (?:the|a|an|his|her|their) "
+    r"(?!(?:long |quick |deep |last |good |hard |slow |short |careful )?"
+    r"(?:look|breath|moment|step|seat|sip|drink|swig|pause|glance|peek|sniff|"
+    r"turn|chance|hint|beat|second|minute|while)\b)[^.!?\n]{0,40}\bfrom\b"
+    # "He hands you the pass" / "She presses a key into your palm"
+    r"|(?:hands|gives|passes|tosses|slides) you (?:the|a|an|his|her|their)\b"
+    r"|presses (?:the|a|an|it|something) [^.!?\n]{0,30}\binto your (?:hand|palm)"
+    r")",
     re.IGNORECASE,
 )
 _ITEM_TOOLS = {"add_to_inventory", "remove_from_inventory", "transfer_item"}

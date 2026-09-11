@@ -107,6 +107,7 @@ def rescue_tool_calls(
     for blob in fences or []:
         parsed = parse_call(blob)
         if not parsed:
+            logger.info(f"Tool rescue: fence held no rescuable call: {blob.strip()[:160]!r}")
             continue
         tool_name, args = parsed
         try:

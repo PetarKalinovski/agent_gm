@@ -234,6 +234,12 @@ def load_agents_config(config_path: Path | None = None) -> dict[str, AgentConfig
         with open(agents_file) as f:
             data = yaml.safe_load(f) or {}
         for name, config in data.get("agents", {}).items():
+            # FORGE_MODEL_<AGENT_NAME>=provider/model swaps one agent's model
+            # for this process only — A/B a DM model in a sandbox server
+            # without touching the shared config the human's game runs on
+            override = os.environ.get(f"FORGE_MODEL_{name.upper()}")
+            if override:
+                config = {**config, "model": override}
             _agents_config[name] = AgentConfig(**config)
 
     return _agents_config

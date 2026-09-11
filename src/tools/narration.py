@@ -1,5 +1,6 @@
 """Tools for narration and output to the player."""
 
+import re
 import contextvars
 from typing import Any, Callable
 
@@ -105,6 +106,28 @@ def narrate(text: str, style: str = "narrative") -> dict[str, Any]:
     return {"success": True, "style": style, "length": len(text)}
 
 
+_STAGE_DIRECTION = re.compile(r"\*([^*\n]{1,240})\*")
+
+
+def split_stage_directions(text: str) -> tuple[str, str]:
+    """(spoken words, stage directions) for a line with *asterisked* actions.
+
+    "*I lift the whistle* Long way, courier." -> ("Long way, courier.",
+    "I lift the whistle"). Multiple directions join with "; ". A line that
+    is nothing but a direction stays a line (something must be said).
+    """
+    if not text or "*" not in text:
+        return text or "", ""
+    directions = [m.group(1).strip() for m in _STAGE_DIRECTION.finditer(text)]
+    if not directions:
+        return text, ""
+    spoken = _STAGE_DIRECTION.sub(" ", text)
+    spoken = re.sub(r"\s{2,}", " ", spoken).strip()
+    if not spoken:
+        return text, ""
+    return spoken, "; ".join(d for d in directions if d)
+
+
 @tool
 def speak(
     npc_name: str,
@@ -123,6 +146,14 @@ def speak(
     Returns:
         Dictionary confirming the speech.
     """
+    # Stage directions written into the line itself ("*I lift the whistle*
+    # Long way from the lanterns, courier.") are moved to `action`: the
+    # voice reads only the words, the bubble shows only the words, and the
+    # gesture still renders in italics. NPC agents do this constantly.
+    text, lifted = split_stage_directions(text)
+    if lifted:
+        action = " ".join(part for part in (action, lifted) if part) or None
+
     console = get_console()
 
     # Format based on tone

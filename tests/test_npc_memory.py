@@ -71,3 +71,50 @@ def test_update_npc_relationship_key_moments_actually_persist(player):
 
     rel = _get_rel(npc_id, player)
     assert rel.key_moments == ["Saved my life", "Betrayed me at the docks"]
+
+
+# ---------------------------------------------------------------------------
+# Stored reasoning blocks never reach the next model call
+# ---------------------------------------------------------------------------
+
+from src.agents.core.base_agent import strip_reasoning_blocks
+
+
+def test_strip_reasoning_blocks_keeps_text_and_tools():
+    messages = [
+        {"role": "user", "content": [{"text": "hello"}]},
+        {"role": "assistant", "content": [
+            {"reasoningContent": {"reasoningText": {"text": "thinking..."}}},
+            {"text": "Well met."},
+            {"toolUse": {"toolUseId": "t1", "name": "speak", "input": {}}},
+        ]},
+        {"role": "assistant", "content": [
+            {"reasoningContent": {"reasoningText": {"text": "only thoughts", "signature": "sig"}}},
+        ]},
+        {"role": "user", "content": "plain string content"},
+    ]
+    removed = strip_reasoning_blocks(messages)
+    assert removed == 2
+    assert [m["role"] for m in messages] == ["user", "assistant", "user"]
+    assert messages[1]["content"] == [
+        {"text": "Well met."},
+        {"toolUse": {"toolUseId": "t1", "name": "speak", "input": {}}},
+    ]
+    assert messages[2]["content"] == "plain string content"
+
+
+def test_strip_reasoning_blocks_is_a_no_op_without_reasoning():
+    messages = [{"role": "user", "content": [{"text": "hi"}]}]
+    assert strip_reasoning_blocks(messages) == 0
+    assert messages == [{"role": "user", "content": [{"text": "hi"}]}]
+
+
+def test_claude_5_ids_reject_temperature():
+    from src.agents.base import _rejects_temperature
+
+    assert _rejects_temperature("claude-sonnet-5")
+    assert _rejects_temperature("claude-opus-5")
+    assert _rejects_temperature("claude-fable-5-1")
+    assert not _rejects_temperature("claude-sonnet-4-5")
+    assert not _rejects_temperature("claude-haiku-4-5-20251001")
+    assert not _rejects_temperature("")
