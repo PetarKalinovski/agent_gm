@@ -1388,10 +1388,14 @@ no text, no shadows."""
         if not big:
             return None
 
-        # A group is a set of labels restricted to a column range
+        # Poses read like text: row by row, left to right. The model draws
+        # wide poses (a leaping wolf) as two rows of three rather than one
+        # strip of six, and sorting purely by x would interleave the rows.
+        rows_of = self._blob_rows(labels, big)
+        big_sorted = sorted(big, key=lambda b: (rows_of[b[0]], b[1]))
         groups = [
-            {"labels": {lab}, "x0": x0, "x1": x1, "cut": False}
-            for lab, x0, x1, _ in sorted(big, key=lambda b: b[1])
+            {"labels": {lab}, "x0": x0, "x1": x1, "cut": False, "row": rows_of[lab]}
+            for lab, x0, x1, _ in big_sorted
         ]
         profile = mask.sum(axis=0)
 
@@ -1415,8 +1419,8 @@ no text, no shadows."""
                 return None
             cut = lo + int(np.argmin(prof[lo:hi]))
             through = prof[cut] > prof[x0:x1].max() * self._SLICE_CUT_THROUGH
-            left = {"labels": set(g["labels"]), "x0": x0, "x1": cut, "cut": through}
-            right = {"labels": set(g["labels"]), "x0": cut, "x1": x1, "cut": through}
+            left = {"labels": set(g["labels"]), "x0": x0, "x1": cut, "cut": through, "row": g.get("row", 0)}
+            right = {"labels": set(g["labels"]), "x0": cut, "x1": x1, "cut": through, "row": g.get("row", 0)}
             groups[groups.index(g)] = left
             groups.insert(groups.index(left) + 1, right)
 
@@ -1433,24 +1437,37 @@ no text, no shadows."""
             gaps = [
                 (groups[i + 1]["x0"] - groups[i]["x1"], i)
                 for i in range(len(groups) - 1)
+                if groups[i].get("row", 0) == groups[i + 1].get("row", 0)
             ]
+            if not gaps:
+                del groups[lightest]
+                continue
             _, i = min(gaps)
             a, b = groups[i], groups[i + 1]
             groups[i:i + 2] = [{
                 "labels": a["labels"] | b["labels"],
                 "x0": a["x0"], "x1": b["x1"], "cut": a["cut"] or b["cut"],
+                "row": a.get("row", 0),
             }]
         if len(groups) != n:
             return None
 
         # Debris near a pose is a detached part of it (a weapon tip, a
-        # flicked cloak edge); debris far from every pose is a mark.
+        # flicked cloak edge); debris far from every pose is a mark. With
+        # several rows, "near" is measured to the pose's centre, not its
+        # column, so a mark under the top row does not join the bottom one.
         reach = (w / n) * self._SLICE_ATTACH
-        centers = [(g["x0"] + g["x1"]) / 2 for g in groups]
+        centers = []
+        for g in groups:
+            ys, xs = np.nonzero(group_mask(g))
+            centers.append(((xs.mean() if len(xs) else (g["x0"] + g["x1"]) / 2),
+                            (ys.mean() if len(ys) else h / 2)))
         for lab, x0, x1, _ in small:
+            sl = slices[lab - 1]
             cx = (x0 + x1) / 2
-            i = min(range(n), key=lambda i: abs(centers[i] - cx))
-            if abs(centers[i] - cx) <= reach:
+            cy = (sl[0].start + sl[0].stop) / 2
+            i = min(range(n), key=lambda i: (centers[i][0] - cx) ** 2 + (centers[i][1] - cy) ** 2)
+            if ((centers[i][0] - cx) ** 2 + (centers[i][1] - cy) ** 2) ** 0.5 <= reach:
                 groups[i]["labels"].add(lab)
                 groups[i]["x0"] = min(groups[i]["x0"], x0)
                 groups[i]["x1"] = max(groups[i]["x1"], x1)
@@ -1476,6 +1493,33 @@ no text, no shadows."""
             cell.info["clipped"] = bool(g["cut"])
             cells.append(cell)
         return cells
+
+    @staticmethod
+    def _blob_rows(labels, big) -> dict[int, int]:
+        """Row index per big blob: blobs whose vertical centres sit within
+        60% of the median blob height of each other share a row."""
+        import numpy as np
+        from scipy import ndimage
+
+        if not big:
+            return {}
+        objs = ndimage.find_objects(labels)
+        centres = {}
+        heights = []
+        for lab, _x0, _x1, _mass in big:
+            sl = objs[lab - 1]
+            centres[lab] = (sl[0].start + sl[0].stop) / 2
+            heights.append(sl[0].stop - sl[0].start)
+        tolerance = float(np.median(heights)) * 0.6
+        rows: dict[int, int] = {}
+        row = -1
+        last = None
+        for lab in sorted(centres, key=centres.get):
+            if last is None or centres[lab] - last > tolerance:
+                row += 1
+            rows[lab] = row
+            last = centres[lab]
+        return rows
 
     def _cells_from_grid(self, img: "Image.Image", mask, n: int) -> list["Image.Image"]:
         """The fixed n-column grid (legacy slicing). Cells are inset 2% so
@@ -1643,7 +1687,12 @@ no text, no shadows."""
 
         max_char_h = max(f.height for f in transparent)
         canvas_h = max(1, round(max_char_h / idle_ratio))
-        canvas_w = canvas_h  # square, like idle sprites
+        # Square like the idles — unless a frame is wider than that (a
+        # leaping wolf is twice as wide as it is tall); a square canvas
+        # clipped such frames on the right. The height still carries the
+        # idle's scale, so the sprite renders at the same size on screen.
+        max_char_w = max(f.width for f in transparent)
+        canvas_w = max(canvas_h, max_char_w + 8)
         baseline_y = round(canvas_h * idle_baseline_frac)
 
         frames: list[Image.Image] = []

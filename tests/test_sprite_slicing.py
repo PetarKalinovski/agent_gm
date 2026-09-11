@@ -329,3 +329,56 @@ def test_beast_prompt_keeps_it_on_four_legs(tmp_path):
     assert "ON ALL FOURS" in wolf and "teeth and claws" in wolf
     assert "weapon arm" not in wolf
     assert "ON ALL FOURS" not in man and "hunting knife" in man
+
+
+# --------------------------------------------------------------------------
+# Two rows of three read row-major; wide frames are not clipped
+# --------------------------------------------------------------------------
+
+def test_two_row_grid_reads_row_major(tmp_path):
+    """The live wolf strip: six wide poses drawn as a 2x3 grid. Reading
+    order is top row left-to-right, then the bottom row — sorting by x
+    alone interleaves the rows."""
+    gen = _generator(tmp_path)
+    w, h = 1500, 900
+    blobs = []
+    shades = []
+    for row in range(2):
+        for col in range(3):
+            x0 = 40 + col * 500
+            y0 = 60 + row * 450
+            blobs.append((x0, y0, x0 + 380, y0 + 260))       # wide, low poses
+            shades.append(30 + (row * 3 + col) * 20)          # unique grey per pose
+    img = Image.new("RGB", (w, h), (255, 255, 255))
+    d = ImageDraw.Draw(img)
+    for (x0, y0, x1, y1), shade in zip(blobs, shades):
+        d.rectangle((x0, y0, x1, y1), fill=(shade, shade, shade))
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+
+    cells = gen._slice_walk_strip(buf.getvalue(), 6)
+
+    assert len(cells) == 6
+    order = [int(np.asarray(c.convert("L"))[c.height // 2, c.width // 2]) for c in cells]
+    assert order == shades                       # row-major, not column-major
+    for c in cells:
+        assert c.width >= 380 and c.height >= 260  # whole poses, not slivers
+
+
+def test_wide_frames_keep_their_full_width(tmp_path, monkeypatch):
+    gen = _generator(tmp_path)
+    monkeypatch.setattr(gen, "_remove_background", _white_to_alpha)
+    cells = []
+    for _ in range(6):
+        img = Image.new("RGB", (620, 300), (255, 255, 255))
+        ImageDraw.Draw(img).rectangle((10, 60, 610, 280), fill=(40, 40, 60))  # 600 wide, 220 tall
+        img.info["clipped"] = False
+        cells.append(img)
+
+    frames = gen._normalize_walk_frames(cells, _idle_png(), partner_repair=False)
+
+    for f in frames:
+        alpha = np.asarray(f.getchannel("A")) > 128
+        xs = np.nonzero(alpha.any(axis=0))[0]
+        assert xs.max() - xs.min() + 1 >= 600      # nothing lost off the right edge
+        assert f.width >= 608
