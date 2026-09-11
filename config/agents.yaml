@@ -19,7 +19,12 @@
 # is added latency the player feels — so they use a fast non-thinking model.
 agents:
   dm_orchestrator:
-    model: "openrouter/arcee-ai/trinity-large-thinking"
+    # 2026-09-11 playtest: trinity-large-thinking printed tool calls as text,
+    # pasted tool results into prose, narrated in first person and invented
+    # items in 4 of 4 turns; Claude Sonnet 5 via OpenRouter ran the same
+    # turns with a clean audit. Override per process with
+    # FORGE_MODEL_DM_ORCHESTRATOR=provider/model (see src/config.py).
+    model: "openrouter/anthropic/claude-sonnet-5"
     temperature: 0.7
     max_tokens: 4096
     description: "Main dungeon master agent that narrates the world"
