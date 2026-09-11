@@ -295,3 +295,37 @@ def test_motion_score_separates_walking_from_standing():
         ImageDraw.Draw(img).rectangle((x, 0, x + 10, 49), fill=(0, 0, 0, 255))
         moving.append(img)
     assert ImageGenerator._motion_score(moving) > 0.3
+
+
+# --------------------------------------------------------------------------
+# Beasts attack like beasts
+# --------------------------------------------------------------------------
+
+from types import SimpleNamespace
+
+
+def _character(**kw):
+    base = {"id": "x", "name": "", "species": None, "description_physical": ""}
+    base.update(kw)
+    return SimpleNamespace(**base)
+
+
+def test_species_and_name_decide_beasthood():
+    assert ImageGenerator._is_beast(_character(name="Hollow Wolf"))
+    assert ImageGenerator._is_beast(_character(name="Grey Thing", species="dire wolf"))
+    assert ImageGenerator._is_beast(_character(name="Scar", description_physical="A lean grey wolf with a torn ear"))
+    assert not ImageGenerator._is_beast(_character(name="Vex Marrow", species="human",
+                                                    description_physical="wolf-tooth trophies on his belt"))
+    assert not ImageGenerator._is_beast(_character(name="Captain Brann Coldiron"))
+    assert not ImageGenerator._is_beast(_character(name="Wolfgang the Smith", species="human"))
+
+
+def test_beast_prompt_keeps_it_on_four_legs(tmp_path):
+    gen = _generator(tmp_path)
+    bible = SimpleNamespace(visual_style="storybook")
+    wolf = gen._build_action_cycle_prompt(_character(name="Hollow Wolf"), bible, "attack")
+    man = gen._build_action_cycle_prompt(_character(name="Vex Marrow", species="human"), bible, "attack",
+                                         weapon_desc="a notched hunting knife")
+    assert "ON ALL FOURS" in wolf and "teeth and claws" in wolf
+    assert "weapon arm" not in wolf
+    assert "ON ALL FOURS" not in man and "hunting knife" in man

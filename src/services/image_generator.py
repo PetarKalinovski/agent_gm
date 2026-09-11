@@ -913,6 +913,82 @@ Frame 6 — RECOVERED: low ready stance facing right, knees bent, arms in guard.
 Every frame is a strict FULL SIDE PROFILE facing right.""",
     }
 
+    # Animals get their own choreography. The humanoid one ("weapon arm
+    # drawn back at hip height", "guard up") turned a wolf into a bipedal
+    # boxer on its hind legs — six clean frames of the wrong creature.
+    _BEAST_CHOREOGRAPHY = {
+        "attack": """A predator's lunge in 6 frames — crouch, spring, bite, land. The animal stays
+ON ALL FOURS in every frame; it never stands upright, never uses its forelegs
+like arms, never adopts a human fighting stance.
+Frame 1 — STALK: side profile facing right; low crouch, head lowered below the
+  shoulders, ears flat, weight gathered over the hindquarters, tail low.
+Frame 2 — COIL: hindquarters compressed, forelegs braced, lips pulled back from
+  the teeth, every muscle loaded.
+Frame 3 — SPRING: fully airborne, body stretched horizontal toward the right
+  edge, forelegs reaching, jaws wide open.
+Frame 4 — BITE: forelegs planting, jaws snapping shut at the target's height,
+  head driven forward, hindquarters still in the air.
+Frame 5 — LAND: all four paws on the ground, body compressed from the landing,
+  head still low and forward.
+Frame 6 — SNARL: back in the low stalking crouch of frame 1, teeth bared.
+Every frame is a strict FULL SIDE PROFILE facing right, attacking toward the
+right edge of the image, on four legs.""",
+        "dodge": """A predator's evasive leap in 6 frames — sidestep, bound, land. The animal stays
+ON ALL FOURS in every frame; it never stands upright.
+Frame 1 — FLINCH: side profile facing right; body crouched, head jerking away.
+Frame 2 — PUSH-OFF: hindquarters driving, forelegs lifting, body launching
+  forward-right.
+Frame 3 — BOUND: fully airborne, body arched, legs tucked.
+Frame 4 — DESCENT: forelegs reaching down toward the ground, body extending.
+Frame 5 — LAND: forepaws down, hindquarters following, body compressed.
+Frame 6 — READY: low crouch facing right, weight on all four paws.
+Every frame is a strict FULL SIDE PROFILE facing right, on four legs.""",
+    }
+    _BEAST_WEAPON_LINE = (
+        "The animal fights with teeth and claws only. No weapon, no tool, nothing held —\n"
+        "it is an animal in every frame."
+    )
+    _HUMANOID_SPECIES = {
+        "human", "humans", "humanoid", "elf", "elves", "dwarf", "dwarves", "halfling",
+        "orc", "orcs", "goblin", "gnome", "half-elf", "half-orc", "tiefling", "android",
+        "robot", "cyborg", "vampire", "ghoul", "zombie", "skeleton", "undead", "demon",
+        "angel", "giant", "ogre", "troll", "lizardfolk", "kobold", "dragonborn",
+    }
+    _BEAST_WORDS = {
+        "wolf", "wolves", "dog", "hound", "cur", "bear", "boar", "cat", "lion", "tiger",
+        "panther", "leopard", "jaguar", "lynx", "fox", "rat", "horse", "deer", "stag",
+        "elk", "bull", "ox", "goat", "ram", "snake", "serpent", "viper", "spider",
+        "beast", "creature", "drake", "wyrm", "raptor", "lizard", "crocodile",
+        "hyena", "jackal", "coyote", "badger", "wolverine", "mule", "donkey", "pig",
+        "sow", "hog", "wyvern", "griffin", "basilisk", "manticore",
+    }
+
+    @classmethod
+    def _is_beast(cls, character: "NPC | Player") -> bool:
+        """True when the character is an animal (draws on four legs).
+
+        The `species` field decides when it is set; otherwise the name and
+        the physical description are searched for animal words. Humanoid
+        species are never beasts even if their description mentions one
+        ("wolf-tooth trophies").
+        """
+        import re as _re
+
+        def tokens(value) -> set[str]:
+            return set(_re.split(r"[^a-z]+", str(value or "").lower())) - {""}
+
+        # The name is the strongest signal: "Hollow Wolf" is a wolf even when
+        # the species column still holds its "human" default
+        if tokens(getattr(character, "name", "")) & cls._BEAST_WORDS:
+            return True
+        species = tokens(getattr(character, "species", ""))
+        if species & cls._BEAST_WORDS:
+            return True
+        if species & cls._HUMANOID_SPECIES:
+            return False
+        physical = str(getattr(character, "description_physical", "") or "").lower()
+        return bool(tokens(" ".join(physical.split()[:12])) & cls._BEAST_WORDS)
+
     # What the strip says about the weapon. Three states, not two:
     #   None  -> the LEGACY sentence (byte-identical default; the reference
     #            image decides, which is what every existing character got)
@@ -964,7 +1040,9 @@ Every frame is a strict FULL SIDE PROFILE facing right.""",
             raise ValueError(f"Unknown action {action!r}")
         visual_style = world_bible.visual_style if world_bible else "fantasy RPG game art"
         n = self.ACTION_KEYFRAME_COUNT
-        weapon_line = self._weapon_line(weapon_desc)
+        beast = self._is_beast(character)
+        choreography = (self._BEAST_CHOREOGRAPHY if beast else self._ACTION_CHOREOGRAPHY)[action]
+        weapon_line = self._BEAST_WEAPON_LINE if beast else self._weapon_line(weapon_desc)
 
         return f"""The attached image shows the character "{character.name}" standing idle, from a 2D RPG.
 Draw a sprite sheet: this EXACT character performing a {n}-frame {action} animation.
@@ -974,7 +1052,7 @@ vertical columns; place exactly one full-body pose centered in each column, with
 clear empty space between poses (poses never touch the image edges).
 
 The motion must be dynamic and clearly readable, like classic action-game animation:
-{self._ACTION_CHOREOGRAPHY[action]}
+{choreography}
 
 Every frame: the SAME character design — clothing, colors, face and proportions
 matching the reference image EXACTLY (do not redesign or simplify the outfit),

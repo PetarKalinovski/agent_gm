@@ -1063,9 +1063,13 @@ class GameRenderer {
         this.lookAhead.x += (leadX - this.lookAhead.x) * leadEase;
         this.lookAhead.y += (leadY - this.lookAhead.y) * leadEase;
 
-        // Target camera position (player centered, plus look-ahead)
+        // Target camera position (player centered, plus look-ahead). The
+        // sprite is anchored at the FEET; centring that point on a short
+        // canvas put the whole body in the top half, head under the HUD.
+        // Centre the body's midpoint instead.
+        const bodyLift = (this.player.sprite.height || 0) * 0.45;
         const targetX = this.player.sprite.x + this.lookAhead.x - this.app.screen.width / 2;
-        const targetY = this.player.sprite.y + this.lookAhead.y - this.app.screen.height / 2;
+        const targetY = this.player.sprite.y - bodyLift + this.lookAhead.y - this.app.screen.height / 2;
 
         // Clamp camera to world bounds
         const maxX = this.worldWidth - this.app.screen.width;
