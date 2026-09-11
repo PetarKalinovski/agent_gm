@@ -50,7 +50,9 @@ DM Orchestrator (main loop, strongest model)
 └── Creator Agent - On-demand location/NPC generation (fast model)
 ```
 
-The DM prompt and `DM_TOOLS` in `src/agents/dm_orchestrator.py` must stay in
+The DM runs on Claude Sonnet 5 via OpenRouter (`config/agents.yaml`; the previous
+thinking model typed tool calls as text and narrated in first person — see the
+model-slop guards below). The DM prompt and `DM_TOOLS` in `src/agents/dm_orchestrator.py` must stay in
 sync — `tests/test_dm_prompt_tools.py` enforces that every tool the prompt
 references is registered.
 
@@ -165,6 +167,35 @@ World generation uses separate agents:
   conversations; quoted lines inside `narrate` are silent and get flagged
   (`dialogue_without_speak`).
 
+- **Model-slop guards** (`src/web/turn_filters.py`, `tool_rescue.py`): the
+  token stream passes `CodeFenceFilter` (a fenced block is a tool call typed
+  as text — hidden, then executed by `rescue_tool_calls` if it is a dialogue
+  tool, NPC slugs like `brann_coldiron` resolved) → `JunkLineFilter` (`[]`,
+  content-block JSON, quest dicts pasted mid-sentence) → `DialogueDeduper`
+  (re-quotes of spoken lines) → `SentenceDeduper` (a `narrate()` paragraph
+  echoed as the reply). Unspoken quoted NPC lines become `synthesized`
+  speech events (voice + bubble, no second chat line); the NPC agent's
+  prose quotes become `events` on its tool result. Audit checks:
+  `tool_call_in_prose`, `tool_result_in_prose`, `dialogue_without_speak`
+  (also fires on said-tag-free action-beat quotes). Stored reasoning blocks
+  are stripped from agent history on load, so the DM model is a config knob
+  (`FORGE_MODEL_<AGENT>=provider/model` overrides per process).
+- **Combat continuity**: a `combat_start`/`cinematic` that arrives while the
+  client is loading a new scene is queued and fired when the scene is
+  playable; the server remembers the last unanswered roster and re-issues
+  it on the next turn instead of running the DM.
+- **Routes**: `move_player(requirements_met=True)` records the player on
+  `Connection.cleared_for`; `check_route` treats that road as open for them
+  both ways, so the canvas walks it without another DM turn. Every move
+  (tool or canvas) lands the player just inside the door they came through.
+  Doors slide along their wall to open floor (`scene_exits._slide_clear`).
+- **World sim**: `sim_move_npc` refuses moves onto a player's location or of
+  any campaign-staged NPC; the opening day is claimed but never simulated.
+- **Campaign author**: stale `pending` rows (a restart mid-generation)
+  regenerate after 5 min; model JSON is repaired (fences, comments, trailing
+  commas, truncation, wrong closers) before failing, raw replies saved under
+  `data/debug/`.
+
 ### Tool-Based World Mutation
 
 Agents interact with world state exclusively through tools:
@@ -197,7 +228,7 @@ No migration tool — schema evolution uses nullable columns with `DEFAULT NULL`
 
 `src/services/` handles asset generation and caching:
 - **AssetManager** (`asset_manager.py`) - Orchestrates sprite/portrait/background generation with DB-backed caching. Entry point for all asset requests.
-- **ImageGenerator** (`image_generator.py`) - Generates sprites, portraits, and location backgrounds via LLM image APIs. Walk animations are 6-frame cycles generated as a single filmstrip per direction (front/back/right; left is mirrored from right — image models have a left-to-right walking bias and flip requested left-facing strips, so we generate the direction they're biased toward; the left idle is likewise a mirror of the right idle so it matches the mirrored walk frames) — one call per direction keeps frames style-consistent, then the strip is sliced (artifact-immune: full-span rows/columns like grid lines and letterbox cards are cleared before the content bbox), background-removed, validated (ghost/sliver cells are replaced by their phase partner; a mostly-broken strip regenerates once), and normalized to the idle sprite's character-height ratio and baseline with feet-centroid horizontal anchoring so frames render at identical size with feet planted. Combat action cycles (`generate_action_cycle`: attack/dodge, 6 keys, right-facing, mirrored client-side) reuse the same machinery but skip RIFE (attacks read through snap, not smoothness) and repair broken frames from the nearest neighbor instead of the phase partner (actions are arcs, not loops). Action frames generate lazily: a 404 on `{id}_attack1.png` triggers `ensure_action_sprites` in the background.
+- **ImageGenerator** (`image_generator.py`) - Generates sprites, portraits, and location backgrounds via LLM image APIs. Filmstrips are sliced by ink blobs, not a fixed grid (`_erase_lines` → `_cells_from_blobs`: touching poses split at their thinnest column, rows read row-major so a 2×3 grid is fine, debris attached to the nearest pose, foreign pixels painted out; grid slicing is the last resort and flags wall-touching cells). Raw strips are kept under `debug/strips/`. Animals get a four-legged attack/dodge choreography (`_is_beast`). The normalized canvas is as wide as its widest frame. Walk animations are 6-frame cycles generated as a single filmstrip per direction (front/back/right; left is mirrored from right — image models have a left-to-right walking bias and flip requested left-facing strips, so we generate the direction they're biased toward; the left idle is likewise a mirror of the right idle so it matches the mirrored walk frames) — one call per direction keeps frames style-consistent, then the strip is sliced (artifact-immune: full-span rows/columns like grid lines and letterbox cards are cleared before the content bbox), background-removed, validated (ghost/sliver cells are replaced by their phase partner; a mostly-broken strip regenerates once), and normalized to the idle sprite's character-height ratio and baseline with feet-centroid horizontal anchoring so frames render at identical size with feet planted. Combat action cycles (`generate_action_cycle`: attack/dodge, 6 keys, right-facing, mirrored client-side) reuse the same machinery but skip RIFE (attacks read through snap, not smoothness) and repair broken frames from the nearest neighbor instead of the phase partner (actions are arcs, not loops). Action frames generate lazily: a 404 on `{id}_attack1.png` triggers `ensure_action_sprites` in the background.
 - **ReferenceImageSearch** (`reference_search.py`) - Searches Bing Images for reference photos of known-IP characters/locations. Uses entity-ID-based caching (`references/{entity_id}.png`). Controlled by `reference_search_query` field on NPC/Location models — `NULL` means no web search.
 - **MusicGenerator** (`music_generator.py`) - Per-world mood palette (explore/tension/danger/somber/night/triumph) via the Suno API; style prompts built from the WorldBible. Cached as `music/{mood}.mp3`; `GET /api/assets/music/manifest` triggers background generation and reports status.
 - **VoiceGenerator** (`voice_generator.py`) - NPC dialogue TTS: local Qwen3-TTS voice cloning when a reference clip exists at `voices/refs/{npc_id}.wav`, else ElevenLabs using `NPC.voice_id` (auto-assigned from the `audio.voice_pool` by tag-matching NPC descriptions). Lines cached as `voices/{sha1(npc|text|tone)}.mp3`.
