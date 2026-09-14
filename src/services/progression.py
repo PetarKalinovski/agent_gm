@@ -577,6 +577,37 @@ def _shift_health(status: str, steps: int) -> str:
     return HEALTH_ORDER[max(0, idx - max(0, steps))]
 
 
+def shift_health(status: str, steps: int) -> str:
+    """Public: the same ladder step rest and potions use. Never resurrects."""
+    if status == "dead":
+        return "dead"
+    return _shift_health(status, steps)
+
+
+# Coin a body carries, by danger tier: (low, high) inclusive. A beggar is
+# never a payday; a boss is a chest. Rolled on the module RNG so set_seed pins it.
+TIER_COIN: dict[str, tuple[int, int]] = {
+    "harmless": (0, 0), "weak": (1, 6), "standard": (5, 20),
+    "dangerous": (20, 60), "deadly": (60, 150), "boss": (150, 400),
+}
+
+
+def coin_drop(tier: str | None) -> int:
+    low, high = TIER_COIN.get(str(tier or "standard"), TIER_COIN["standard"])
+    if high <= 0:
+        return 0
+    return _RNG.randint(low, high)
+
+
+# Sleep heals by the quality of the bed: health-ladder steps toward healthy
+REST_QUALITY: dict[str, int] = {"poor": 1, "fair": 2, "good": 3}
+REST_DEFAULT_QUALITY = "fair"
+
+
+def rest_steps(quality: str | None) -> int:
+    return REST_QUALITY.get(str(quality or REST_DEFAULT_QUALITY).lower(), REST_QUALITY[REST_DEFAULT_QUALITY])
+
+
 def _consume_one(p, item: dict) -> int:
     """Decrement the stack (removing it at zero). Returns what is left."""
     inventory = [dict(e) if isinstance(e, dict) else e for e in (getattr(p, "inventory", None) or [])]

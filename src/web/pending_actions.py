@@ -26,6 +26,7 @@ MAX_PENDING = 12
 KINDS = (
     "move", "take", "read", "open", "search", "combat",
     "equip", "consume", "levelup", "objective",
+    "loot", "rest", "shop",
 )
 
 # player_id -> list of {"kind", "summary", "tools", ...extra}
@@ -38,6 +39,8 @@ _lock = threading.Lock()
 _KIND_TOOLS: dict[str, set[str]] = {
     "move": {"move_player", "advance_time"},
     "consume": {"use_item", "update_player_health"},
+    "rest": {"advance_time", "update_player_health", "adjust_currency"},
+    "shop": {"transfer_item", "adjust_currency"},
 }
 
 # Bullet prefixes for the canvas kinds. `combat` is deliberately absent: the
@@ -48,6 +51,9 @@ _BULLET_LABELS = {
     "open": "Opened",
     "search": "Searched",
     "objective": "Objective met",
+    "loot": "Looted",
+    "rest": "Rested",
+    "shop": "Traded",
 }
 
 # Every objective on a quest is ticked. Completion is still the DM's call —
@@ -91,6 +97,29 @@ def equip_note(name: str, slot: str = "weapon", *, automatic: bool = False,
     if reads_as:
         note += f" To strangers they now read as {reads_as}."
     return note
+
+
+def rest_note(location_name: str, kind: str, before: str, after: str, price: int, day: int) -> str:
+    """`They slept the night at The Drowned Lantern (paid 8) ...` + the morning order."""
+    where = f"the {kind} at {location_name}" if kind == "camp" else location_name
+    note = f"They slept the night at {where}"
+    note += f" (paid {price} coin)" if price else ""
+    note += f". It is now first light on Day {day}"
+    if before != after:
+        note += f"; they woke {after.replace('_', ' ')} (were {before.replace('_', ' ')})"
+    note += (
+        ". The clock, their coin and their health are ALREADY moved. Open on the MORNING: "
+        "never re-narrate the night, never advance_time or update_player_health for it."
+    )
+    return note
+
+
+def shop_note(verb: str, item_name: str, quantity: int, npc_name: str, total: int) -> str:
+    """`They bought Iron Sword from Sorrel Tack for 30 coin.` (already applied)"""
+    count = f"{quantity} x " if quantity > 1 else ""
+    prep = "from" if verb == "bought" else "to"
+    return (f"They {verb} {count}{item_name} {prep} {npc_name} for {total} coin at the counter "
+            "(coin and item ALREADY moved — never re-apply it, and quote no other price).")
 
 
 def unequip_note(name: str) -> str:

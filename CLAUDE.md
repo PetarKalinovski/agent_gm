@@ -54,7 +54,7 @@ The DM runs on Claude Sonnet 5 via OpenRouter (`config/agents.yaml`; the previou
 thinking model typed tool calls as text and narrated in first person — see the
 model-slop guards below). The DM prompt and `DM_TOOLS` in `src/agents/dm_orchestrator.py` must stay in
 sync — `tests/test_dm_prompt_tools.py` enforces that every tool the prompt
-references is registered.
+references is registered. The `journal` tool was removed (nothing read it).
 
 World generation uses separate agents:
 - WorldForge - Master world generator
@@ -75,6 +75,43 @@ World generation uses separate agents:
 - **Quests**: `activate_quest`/`update_quest_status` sync `Player.active_quests`
   and apply `Quest.rewards` (currency/items/reputation) transactionally; both
   emit structured quest events (frontend banners + triumph music stinger).
+- **Objectives** (`src/services/objectives.py`): `Quest.objectives` entries
+  are objects `{text, kind, target_id, item_name, done}` with a fixed `kind`
+  menu (`go_to`/`talk_to`/`obtain`/`kill`/`deliver`/`custom`). The ENGINE
+  ticks every kind but `custom` from its own paths (`move_player` arrival,
+  `prompt_npc_agent`, `add_to_inventory`/`transfer_item`, `kill_npc`/
+  `apply_combat_result`/campaign `npc_status`), emits `objective_done` SSE
+  events (also `objectives_done` on the travel/interact/combat-result REST
+  responses), writes an `Objective met` ledger line, and exempts the same-turn
+  audit via `pop_audit_tools`. `normalize_objectives` is the whole
+  backward-compat story: strings still load as `custom` (a legacy `[DONE]`
+  prefix is honoured), names resolve to ids, and `done` is STICKY across a
+  DM rewrite. All-done never completes a quest — the DM is told and calls
+  `update_quest_status`. `create_quest` takes `scale`. Quests are
+  world-global; the player's `active_quests` list is only an ordering hint.
+- **The Lead** (`src/services/lead.py`): the one code-chosen next step —
+  the newest active quest's first undone objective, else the earliest
+  armed/stalled beat's player-facing `StoryBeat.lead` (+ `lead_target`,
+  authored spoiler-safe by campaign_forge, resolved at persist). Rides
+  `state.lead` with a resolved `target` (`here`) and a BFS
+  `route_next_hop_location_id` over discovered connections/hierarchy that
+  prunes roads `check_route` blocks unless the locked road IS the target.
+  Client: a `#lead-tracker` line under the HUD and canvas markers
+  (`game._updateLeadMarkers`: NPC halo, door glow + chevron, rim arrow along
+  the exit's map `position`). DM context gets objectives (`✓`/`◦`) and a
+  `[PLAYER'S LEAD]` block — or an order to create one when it is empty.
+- **Suggested actions** (`src/services/suggestions.py`): 2-4 code-derived
+  chips on `state.suggestions` (lead first, people here, exits, objects,
+  "Look around"); the client routes door/object chips through `canvas-travel`
+  / `canvas-interact` (no DM turn) and talk chips through `npc-interact`.
+- **Opening turn** (`src/services/opening.py`, `POST /api/opening/{id}`): a
+  character with no DM history gets a title card (campaign title/act, else
+  world name/tagline — cinematic source `opening` bypasses rarity but is
+  ledgered), the Location row as the scene, and an auto-sent `[OPENING]`
+  directive (premise + act-1 + the lead, never a beat directive) that must
+  END by handing over a lead. The endpoint waits up to 45 s for a `pending`
+  campaign. History replay skips `[OPENING]`; `PUT /api/world/players/{id}`
+  also runs `ensure_campaign`.
 - **Travel**: `move_player` blocks on `Connection.requirements` until the DM
   confirms them with `requirements_met=True`; hierarchy hops cannot bypass a
   destination whose every authored entry route is requirement-locked.
@@ -194,7 +231,45 @@ World generation uses separate agents:
 - **Campaign author**: stale `pending` rows (a restart mid-generation)
   regenerate after 5 min; model JSON is repaired (fences, comments, trailing
   commas, truncation, wrong closers) before failing, raw replies saved under
-  `data/debug/`.
+  `data/debug/`. Beats carry a player-facing `lead`/`lead_target`.
+- **Loot** (`src/services/loot.py`): a death (`kill_npc`, `apply_combat_result`)
+  leaves the NPC's `inventory_notable` + a tier coin drop
+  (`progression.TIER_COIN`/`coin_drop`) on the location as a `body` scene
+  object where they fell (`defeated_positions` from the client). The player
+  searches it on the canvas (`[E] Search`, `/api/interact`); items keep their
+  mechanics (`_normalize_loot_item` round-trips the Item model). Bodies live in
+  their own pool (`MAX_BODIES_PER_LOCATION`, oldest evicted) and can only enter
+  with `src == "engine"` through `normalize_objects(trusted=True)`; every LLM/
+  editor write is `trusted=False` and cannot author a body or `items`/`coin`.
+  Ledger kind `loot`; the combat-result response carries `bodies` so the
+  client sparkles them without a reload.
+- **Rest** (`src/services/rest.py`): `Location.rest` (`{kind: inn|camp, price,
+  quality}`, NULL = nowhere safe; a `rest` scene object with no spec is a
+  makeshift camp). `rest_now` charges first, heals by quality
+  (`progression.REST_QUALITY` steps up the health ladder), moves the clock to
+  `MORNING_HOUR`, ledgers a "DAY N" title card (source `auto`), and writes a
+  `Rested` ledger line ordering the DM to open on the morning. Three doors,
+  one service: `POST /api/rest`, the `rest` DM tool, `[E] Rest` on a bed.
+  Deliberately no campaign/world tick inside — both run in the next turn's
+  context build; the day tick is backgrounded by the endpoint.
+- **Shop** (`GET /api/shop/{npc_id}`, `POST .../buy|sell`, Trade button + HUD
+  panel, "Trade with X" chip): merchant stock priced through
+  `standing.price_for`; selling pays `sell_price` (buyback fraction) — the
+  old `transfer_item` never paid. `NPC.currency` NULL = bottomless till.
+  Equipped and quest items are never sold. Ledger kind `shop`.
+- **Standing** (`src/services/standing.py`, the ONLY copy of every threshold):
+  reputation bands (honoured…hostile) × NPC disposition drive
+  `price_multiplier` (clamped); `check_route` refuses a location whose
+  `controlling_faction_id` hates the player (`reason: "standing"`, precedence
+  route > gate > dress > standing, never recorded as a cleared road);
+  `prompt_npc_agent` returns a code-authored, voiced refusal (no model call)
+  when the NPC is hostile and trust < `REFUSAL_TRUST`; `reveal_secret` (now in
+  `NPC_TOOLS`) needs `SECRET_TRUST`.
+- **Stalled beats**: a fired beat the DM fails to narrate three times becomes
+  `stalled` (never silently delivered): it stops blocking, its lead goes on
+  the tracker, it is delivered when its keywords or `met_condition` show up,
+  and after `STALLED_SKIP_DAYS` it is `skipped` (un-seals nothing) so the act
+  can close.
 
 ### Tool-Based World Mutation
 
@@ -319,6 +394,7 @@ fast model).
 - **Asset endpoints** - On-demand sprite/portrait/background generation, reference image upload/get/delete
 - **World CRUD** - Full REST API for all entity types (NPCs, locations, factions, quests, connections, players, world bible)
 - **World management** - List/select/create worlds, WorldForge streaming generation
+- **Canvas services** - `POST /api/rest`, `GET/POST /api/shop/{npc_id}[/buy|/sell]`, `POST /api/opening/{player_id}`
 - **Frontend** - Single-file SPA at `src/web/static/index.html`
 
 ### Key Patterns

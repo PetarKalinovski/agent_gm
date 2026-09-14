@@ -101,7 +101,8 @@
 
         /* Chat Panel */
         #chat-panel {
-            height: 40vh;
+            height: 28vh;            /* the canvas is the game; the chat is its margin */
+            min-height: 140px;
             background: var(--bg-secondary);
             border-top: 1px solid var(--bg-tertiary);
             display: flex;
@@ -378,6 +379,33 @@
             gap: 0.5rem;
             flex-shrink: 0;
         }
+
+        /* Suggested-action chips above the input */
+        .action-chips {
+            display: flex;
+            gap: 0.4rem;
+            padding: 0.35rem 1rem 0;
+            background: var(--bg-primary);
+            overflow-x: auto;
+            flex-shrink: 0;
+            scrollbar-width: none;
+        }
+        .action-chips:empty { display: none; }
+        .action-chips button {
+            flex: 0 0 auto;
+            padding: 0.25rem 0.7rem;
+            border-radius: 999px;
+            border: 1px solid rgba(255, 255, 255, 0.14);
+            background: rgba(255, 255, 255, 0.06);
+            color: var(--text-primary);
+            font-size: 0.78rem;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+        .action-chips button:hover { background: rgba(255, 255, 255, 0.14); }
+        .action-chips button.lead { border-color: rgba(245, 158, 11, 0.7); color: #fcd34d; }
+        .action-chips button.locked { opacity: 0.75; }
+        .action-chips.busy button { opacity: 0.4; pointer-events: none; }
 
         .chat-input input {
             flex: 1;
@@ -1473,6 +1501,9 @@
                         </div>
                     </div>
                 </div>
+                <!-- Suggested actions: code-derived from the lead, the people
+                     here, the ways out, the things here (state.suggestions) -->
+                <div id="action-chips" class="action-chips"></div>
                 <div class="chat-input">
                     <input type="text" id="user-input" placeholder="What do you do?" disabled>
                     <button id="send-btn" disabled>Send</button>
@@ -1890,8 +1921,8 @@
     <!-- ?v= busts browser caches — bump when these files change, or stale
          clients keep running old code (live bug: combat frames never
          requested because a cached game.js predated them) -->
-    <script src="/static/js/game.js?v=20260914a"></script>
-    <script src="/static/js/audio.js?v=20260914a"></script>
+    <script src="/static/js/game.js?v=20260915a"></script>
+    <script src="/static/js/audio.js?v=20260915a"></script>
 
     <script>
         // State
@@ -2213,8 +2244,9 @@
                 }
 
                 modal.style.display = 'flex';
-                nameInput.value = '';
+                // The suggested name stays — it is a suggestion, not a placeholder
                 nameInput.focus();
+                nameInput.select();
 
                 const submit = async () => {
                     const name = nameInput.value.trim();
@@ -2394,9 +2426,56 @@
 
             applyCampaignChips(state.campaign);
             applyLead(state.lead);
+            renderActionChips(state.suggestions);
 
             renderHudPanel();
         }
+
+        /** Chips under the input. Doors and objects resolve through the same
+         *  REST paths the canvas uses (no DM turn); the rest fill the input. */
+        let currentSuggestions = [];
+        function renderActionChips(list) {
+            const box = document.getElementById('action-chips');
+            if (!box) return;
+            currentSuggestions = Array.isArray(list) ? list : [];
+            box.innerHTML = currentSuggestions.map((c, i) => {
+                const cls = [c.kind === 'lead' || i === 0 ? 'lead' : '', c.locked ? 'locked' : ''].filter(Boolean).join(' ');
+                const glyph = c.kind === 'travel' ? (c.locked ? '&#128274; ' : '&#8594; ')
+                    : c.kind === 'talk' ? '&#128172; ' : c.kind === 'interact' ? '&#10022; '
+                    : c.kind === 'trade' ? '&#9679; ' : '';
+                return `<button class="${cls}" data-chip="${i}" title="${escapeHtml(c.text || '')}">${glyph}${escapeHtml(c.label || '')}</button>`;
+            }).join('');
+            box.classList.toggle('busy', !!isProcessing);
+        }
+        document.getElementById('action-chips').addEventListener('click', (e) => {
+            const btn = e.target.closest('button[data-chip]');
+            if (!btn || isProcessing || !currentPlayerId) return;
+            const chip = currentSuggestions[Number(btn.dataset.chip)];
+            if (!chip) return;
+            if (chip.kind === 'travel' && chip.location_id && !chip.locked) {
+                window.dispatchEvent(new CustomEvent('canvas-travel', {
+                    detail: { exitId: chip.location_id, name: chip.label.replace(/^Head to /, ''), locked: false }
+                }));
+                return;
+            }
+            if (chip.kind === 'interact' && chip.object_id) {
+                window.dispatchEvent(new CustomEvent('canvas-interact', {
+                    detail: { objectId: chip.object_id, label: chip.label }
+                }));
+                return;
+            }
+            if (chip.kind === 'trade' && chip.npc_id) {
+                openShop(chip.npc_id);
+                return;
+            }
+            if (chip.kind === 'talk' && chip.npc_id) {
+                const npcName = chip.label.replace(/^(Talk to|Ask) /, '').replace(/ about .*$/, '');
+                window.dispatchEvent(new CustomEvent('npc-interact', {
+                    detail: { npcId: chip.npc_id, npcName: (game && game.npcs[chip.npc_id] && game.npcs[chip.npc_id].data.name) || npcName }
+                }));
+            }
+            sendMessage(chip.text || chip.label);
+        });
 
         /** The tracker line under the HUD + the canvas markers, from state.lead. */
         let lastLeadText = null;
@@ -2498,6 +2577,27 @@
                     `</span></div>`;
             } else if (hudPanelMode === 'campaign') {
                 panel.innerHTML = renderCampaignPanel();
+            } else if (hudPanelMode === 'shop') {
+                const v = shopView;
+                if (!v) { panel.innerHTML = '<div class="muted">No one is trading.</div>'; return; }
+                const mood = v.reason ? `<div class="muted" style="margin-bottom:.4rem">${esc(v.reason)}</div>` : '';
+                const row = (i, act) => {
+                    const meta = [];
+                    if (i.slot) meta.push(esc(i.slot));
+                    if (i.tier) meta.push(esc(i.tier));
+                    if (i.effect_tag) meta.push(esc(String(i.effect_tag).replace('_', ' ')));
+                    if (i.quantity > 1) meta.push(`x${i.quantity}`);
+                    const disabled = act === 'buy' ? !i.affordable : !i.sellable;
+                    const why = act === 'sell' && i.reason ? ` title="${esc(i.reason)}"` : '';
+                    return `<div class="hud-item"><span>${esc(i.name)}` +
+                        (meta.length ? ` <span class="muted">${meta.join(' &middot; ')}</span>` : '') +
+                        `</span><span><b>${i.price}</b> &#9679; <button data-act="${act}" data-item="${esc(i.item_id)}" data-npc="${esc(v.npc_id)}"${disabled ? ' disabled' : ''}${why}>${act === 'buy' ? 'Buy' : 'Sell'}</button></span></div>`;
+                };
+                panel.innerHTML = `<h4>${esc(v.npc_name)}'s counter <span class="muted" style="font-weight:normal">&middot; you have ${v.currency} &#9679;</span></h4>` + mood +
+                    `<div class="muted" style="margin:.3rem 0 .2rem">Their shelf</div>` +
+                    (v.stock.length ? v.stock.map(i => row(i, 'buy')).join('') : '<div class="muted">Nothing on the shelf.</div>') +
+                    `<div class="muted" style="margin:.6rem 0 .2rem">Your bag</div>` +
+                    (v.sellable.length ? v.sellable.map(i => row(i, 'sell')).join('') : '<div class="muted">Nothing to sell.</div>');
             } else if (hudPanelMode === 'quests') {
                 const quests = lastPlayerState.quests || [];
                 panel.innerHTML = '<h4>Active Quests</h4>' + (quests.length
@@ -2599,6 +2699,28 @@
             const btn = ev.target.closest('button[data-act]');
             if (!btn || !currentPlayerId) return;
             const act = btn.dataset.act;
+            if (act === 'buy' || act === 'sell') {
+                btn.disabled = true;
+                try {
+                    const res = await fetch(`/api/shop/${btn.dataset.npc}/${act}`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ player_id: currentPlayerId, item_id: btn.dataset.item, quantity: 1 }),
+                    });
+                    const data = await res.json();
+                    if (data.shop) shopView = data.shop;
+                    if (data.state) applyPlayerState(data.state);
+                    else if (data.error) showToast(esc(data.error), '', 2600);
+                    if (data.success && game && game.spawnFloater) {
+                        game.spawnFloater(act === 'buy' ? `- ${data.cost} coin` : `+ ${data.cost} coin`, act === 'buy' ? 0xfca5a5 : 0xfde68a);
+                    }
+                } catch (err) {
+                    console.error('trade failed:', err);
+                } finally {
+                    renderHudPanel();
+                }
+                return;
+            }
             const path = {
                 equip: 'equip', unequip: 'unequip',
                 use: 'use-consumable', quick: 'quick-slot', 'quick-clear': 'quick-slot',
@@ -2679,6 +2801,29 @@
                 }
             });
         }
+        /** A new character's first moment: card → scene → the DM's first words. */
+        async function runOpening(session) {
+            const fallback = () => addMessage('assistant', `Your story begins at the ${session.location}. What do you do?`);
+            try {
+                const res = await fetch(`/api/opening/${currentPlayerId}`, { method: 'POST' });
+                const data = await res.json();
+                if (!data.opening) { fallback(); return; }
+                if (data.cinematic && game && game.playCinematic) game.playCinematic(data.cinematic);
+                if (data.scene) {
+                    addMessage('assistant', `**${data.scene.location}** (${data.scene.time_of_day})\n\n${data.scene.description || ''}`);
+                    if (window.forgeAudio) window.forgeAudio.handlePlayEvent({ type: 'scene', ...data.scene });
+                }
+                if (data.dm_message) {
+                    // Let the card land before the DM speaks
+                    setTimeout(() => sendMessage(data.dm_message, { silent: true, noNpc: true }),
+                               data.cinematic ? 2200 : 300);
+                }
+            } catch (e) {
+                console.error('Opening failed:', e);
+                fallback();
+            }
+        }
+
         function objectiveText(o) {
             return (o && typeof o === 'object') ? String(o.text || '') : String(o || '');
         }
@@ -2897,6 +3042,9 @@
                         let content = msg.content || '';
                         // The auto-sent combat turn is an engine message; the
                         // player saw a short label live, never the brackets
+                        // The opening directive is engine text; the player saw
+                        // a title card and the scene, never the brackets
+                        if (msg.role === 'user' && /^\s*\[OPENING\]/.test(content)) continue;
                         if (msg.role === 'user' && /^\s*\[COMBAT OUTCOME/.test(content)) {
                             content = /: victory/.test(content) ? '\u2694 The fight is over.'
                                 : /: defeat/.test(content) ? '\u2694 You fall.'
@@ -2921,8 +3069,9 @@
                             .catch(() => {});
                     }
                 } else {
-                    // No history, show welcome message
-                    addMessage('assistant', `Your story begins at the ${session.location}. What do you do?`);
+                    // No history: the engine opens the story (title card,
+                    // scene, then the DM's first words)
+                    await runOpening(session);
                 }
             } catch (e) {
                 console.error('Failed to load chat history:', e);
@@ -2935,8 +3084,19 @@
 
         // --- UI and Chat Logic ---
 
+        // Layout is a preference: restore the chat height/collapse this
+        // browser last used before the renderer measures its container
+        (function restoreChatLayout() {
+            try {
+                const h = parseInt(localStorage.getItem('forge-chat-height') || '', 10);
+                if (h >= 100 && h <= window.innerHeight - 150) chatPanel.style.height = h + 'px';
+                if (localStorage.getItem('forge-chat-collapsed') === '1') chatPanel.classList.add('collapsed');
+            } catch (e) { /* storage may be unavailable */ }
+        })();
+
         toggleBtn.addEventListener('click', () => {
             chatPanel.classList.toggle('collapsed');
+            try { localStorage.setItem('forge-chat-collapsed', chatPanel.classList.contains('collapsed') ? '1' : '0'); } catch (e) {}
             setTimeout(() => { if (game && game.app) { game.app.resize(); game.onResize(); } }, 300);
         });
 
@@ -2973,6 +3133,7 @@
                 resizeHandle.classList.remove('dragging');
                 document.body.style.cursor = '';
                 document.body.style.userSelect = '';
+                try { localStorage.setItem('forge-chat-height', String(chatPanel.offsetHeight)); } catch (e) {}
             }
         });
 
@@ -3009,7 +3170,40 @@
             // Focus input and update placeholder
             userInput.placeholder = `Talk to ${name}...`;
             userInput.focus();
+
+            // A counter? Offer the trade panel (REST, no DM turn)
+            offerTrade(npcId, name);
         });
+
+        let shopView = null;
+        async function fetchShop(npcId) {
+            const res = await fetch(`/api/shop/${npcId}?player_id=${encodeURIComponent(currentPlayerId)}`);
+            const data = await res.json();
+            return res.ok ? data : null;
+        }
+        async function offerTrade(npcId, name) {
+            const btn = document.getElementById('trade-btn');
+            if (btn) btn.remove();
+            try {
+                const view = await fetchShop(npcId);
+                if (!view || (!view.stock.length && !view.sellable.length)) return;
+                const b = document.createElement('button');
+                b.id = 'trade-btn';
+                b.textContent = 'Trade';
+                b.style.cssText = 'margin-top:.4rem;padding:.2rem .7rem;border-radius:999px;border:1px solid rgba(245,158,11,.6);background:rgba(245,158,11,.12);color:#fcd34d;font-size:.75rem;cursor:pointer;';
+                b.addEventListener('click', () => openShop(npcId));
+                npcName.insertAdjacentElement('afterend', b);
+            } catch (e) { /* not a merchant */ }
+        }
+        async function openShop(npcId) {
+            try {
+                const view = await fetchShop(npcId);
+                if (!view) { showToast('No one is trading here.', '', 2600); return; }
+                shopView = view;
+                hudPanelMode = 'shop';
+                renderHudPanel();
+            } catch (e) { console.error('shop failed:', e); }
+        }
 
         // --- Canvas exit / travel chooser ---
         let exitChooser = null;
@@ -3132,9 +3326,16 @@
                     if (data.chat_prompt) sendMessage(data.chat_prompt);
                     return;
                 }
+                if (data.refused && data.message) { showToast(escapeHtml(data.message), 'quest-failed'); return; }
                 if (data.spent || !data.success) return;
                 if (data.state) applyPlayerState(data.state);   // floaters + HUD, free
                 showObjectivesDone(data.objectives_done);
+                const rested = (data.result || {}).rest;
+                if (rested && rested.success) {
+                    // Fade to black, "DAY N", first light — the night is the engine's
+                    if (rested.cinematic && game && game.playCinematic) game.playCinematic(rested.cinematic);
+                    showToast(`&#127769; ${escapeHtml(rested.summary || 'You rest.')}`, 'quest', 6000);
+                }
                 if (data.consumed && game && game.markObjectConsumed) {
                     game.markObjectConsumed(objectId);
                 }
@@ -3207,7 +3408,7 @@
         // A real-time fight ended: apply mechanics server-side (code
         // enforces), then hand the DM an aftermath that is already true
         window.addEventListener('combat-ended', async (e) => {
-            const { outcome, hitsTaken, heartsLost, heartsHealed, defeated } = e.detail || {};
+            const { outcome, hitsTaken, heartsLost, heartsHealed, defeated, defeatedAt } = e.detail || {};
             if (!currentPlayerId) return;
             try {
                 const res = await fetch('/api/combat/result', {
@@ -3220,6 +3421,7 @@
                         hearts_lost: heartsLost || 0,
                         hearts_healed: heartsHealed || 0,
                         defeated_npc_ids: defeated || [],
+                        defeated_positions: defeatedAt || {},
                     }),
                 });
                 const data = await res.json();
@@ -3238,6 +3440,8 @@
                 }
                 if (data.state) applyPlayerState(data.state);
                 showObjectivesDone(data.objectives_done);
+                // The dead keep what they carried — sparkle their bodies now
+                if (data.bodies && data.bodies.length && game && game.addSceneObjects) game.addSceneObjects(data.bodies);
                 if (data.dm_message) {
                     const label = outcome === 'victory' ? '⚔ The fight is over.'
                         : outcome === 'defeat' ? '⚔ You fall.'
@@ -3389,6 +3593,7 @@
             if (!input || !currentPlayerId || isProcessing) return;
 
             isProcessing = true;
+            document.getElementById('action-chips').classList.add('busy');
             // The canvas reads this: no doors, no barks, no instant travel
             // underneath a turn the DM is still thinking about
             window.forgeTurnBusy = true;
@@ -3399,7 +3604,7 @@
 
             // Add user message (system turns show a short label instead of
             // the raw bracketed payload)
-            addMessage('user', opts.display || input);
+            if (!opts.silent) addMessage('user', opts.display || input);
 
             // Create streaming message
             const messageEl = createStreamingMessage();
@@ -3550,6 +3755,7 @@
                                         // of the loop — only the visual side is ours
                                         if (game && game.playCinematic) game.playCinematic(payload);
                                     } else if (payload.type === 'npc_death' && payload.npc_id) {
+                                        if (payload.body && game && game.addSceneObjects) game.addSceneObjects([payload.body]);
                                         console.log(`NPC Death Event: ${payload.npc_name} (${payload.npc_id})`);
                                         if (game && game.playDeathAnimation) {
                                             game.playDeathAnimation(payload.npc_id);
@@ -3584,6 +3790,7 @@
                 clearThinking(messageEl);
                 flushChatRender();
                 isProcessing = false;
+                document.getElementById('action-chips').classList.remove('busy');
                 window.forgeTurnBusy = false;
                 currentAbort = null;
                 // A vision never outlives the turn that opened it — it holds

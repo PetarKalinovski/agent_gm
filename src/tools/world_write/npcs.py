@@ -441,8 +441,11 @@ def kill_npc(npc_id: str, cause_of_death: str = "unknown") -> dict[str, Any]:
         if npc.status == "dead":
             return {"error": f"{npc.name} is already dead"}
 
-        # Set status to dead
+        # Set status to dead — and leave what they carried where they fell
         npc.status = "dead"
+        from src.services.loot import leave_body
+        from src.services.scene_objects import public_row
+        body = leave_body(session, npc)
         session.commit()
 
         result = {
@@ -453,6 +456,13 @@ def kill_npc(npc_id: str, cause_of_death: str = "unknown") -> dict[str, Any]:
             "cause_of_death": cause_of_death,
             "message": f"{npc.name} has died. Cause: {cause_of_death}",
         }
+        if body:
+            result["body"] = public_row(body)
+            result["instruction"] = (
+                "Whatever they carried is on them, where they fell — a body the "
+                "player can search on the canvas. Do NOT hand it over with "
+                "add_to_inventory, and do not say what is on it."
+            )
 
     # Their death completes any "kill" objective aimed at them
     from src.services import objectives as objectives_mod
@@ -493,6 +503,12 @@ def reveal_secret(npc_id: str, player_id: str, secret_index: int) -> dict[str, A
                 player_id=player_id,
             )
             session.add(rel)
+
+        # The engine decides whether they trust the player enough to say it
+        from src.services.standing import secret_refusal
+        refused = secret_refusal(npc, rel)
+        if refused:
+            return refused
 
         revealed = rel.revealed_secrets.copy() if rel.revealed_secrets else []
         if secret_index not in revealed:

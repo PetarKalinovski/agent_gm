@@ -391,8 +391,12 @@ def apply_combat_result(
     hearts_lost: int = 0,
     hearts_healed: int = 0,
     defeated_npc_ids: list[str] | None = None,
+    defeated_positions: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Apply a finished fight to the database. Returns what changed.
+
+    defeated_positions: {npc_id: {"x", "y"}} in normalized scene coordinates,
+    where each enemy actually fell — their body is left there.
 
     outcome: "victory" | "defeat" | "fled"
     Health only ever worsens here; "defeat" means downed → critical (the DM
@@ -452,6 +456,13 @@ def apply_combat_result(
                 {"npc_name": npc.name, "tier": tier, "xp": gain}
             )
             npc.status = "dead"
+            # What they carried stays on them, where they fell
+            from src.services.loot import leave_body
+            from src.services.scene_objects import public_row
+            fell = (defeated_positions or {}).get(npc_id) or {}
+            body = leave_body(session, npc, x=fell.get("x"), y=fell.get("y"))
+            if body:
+                changes.setdefault("bodies", []).append({"npc_id": npc.id, **public_row(body)})
             session.add(Event(
                 name=f"Death of {npc.name}",
                 description=(
@@ -549,6 +560,12 @@ def combat_outcome_message(changes: dict[str, Any], fled: bool = False) -> str:
             f"Killed: {roster} (already marked dead — do NOT call kill_npc). "
             "Match the weight of your aftermath to those words: a 'harmless' kill "
             "is an ugly little murder; a 'boss' kill is the end of a chapter."
+        )
+    if changes.get("bodies"):
+        parts.append(
+            "What they carried is still on them, where they fell — a body on the "
+            "canvas the player can search. Do not narrate the contents and do not "
+            "hand anything over."
         )
     if changes.get("health"):
         parts.append(f"Player health is now '{changes['health']}' (already applied — do NOT call update_player_health for these wounds).")

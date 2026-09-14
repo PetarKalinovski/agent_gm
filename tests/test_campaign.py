@@ -615,7 +615,8 @@ def test_delivery_without_keywords_leaves_the_beat_fired(world):
     assert _beat_row("Beat b1").status == "fired"
 
 
-def test_beat_redelivery_then_giveup(world):
+def test_beat_redelivery_then_stalls(world):
+    """Three misses park the beat as `stalled` — never a silent delivery."""
     beats = [_beat("b1", 1, 1, delivery_keywords=["Kestrel"])] + _filler(5)
     camp.persist_campaign(world["player"], _payload(world, beats))
     _set_clock(1, 14)
@@ -628,6 +629,9 @@ def test_beat_redelivery_then_giveup(world):
 
     camp.mark_beat_delivery(world["player"], "still nothing")
     assert camp.run_campaign_tick(world["player"])["fired_beat"] is None
+    assert _beat_row("Beat b1").status == "stalled"
+    # The words finally arrive in a later turn: delivered then, not before
+    assert camp.mark_beat_delivery(world["player"], "Kestrel is waiting.")["delivered"] is True
     assert _beat_row("Beat b1").status == "delivered"
 
 

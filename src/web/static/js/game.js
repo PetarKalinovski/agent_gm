@@ -2177,6 +2177,16 @@ class GameRenderer {
         }
     }
 
+    /** Add objects the engine placed after the scene loaded (a body). */
+    addSceneObjects(list) {
+        const rows = (list || []).filter(o => o && o.id != null && !this.objects.some(x => x.id === o.id));
+        if (!rows.length) return;
+        const current = this.objects.map(o => ({
+            id: o.id, kind: o.kind, label: o.label, x: o.x, y: o.y, consumed: o.consumed, locked: o.locked,
+        }));
+        this._buildObjects(current.concat(rows));
+    }
+
     /** A pulsing 4-point sparkle per interactable; consumed ones grey out. */
     _buildObjects(objects) {
         for (const o of this.objects) {
@@ -2356,7 +2366,7 @@ class GameRenderer {
         let text = null;
         if (!this.combat && !this.cine && !this.editorMode && !this.playerDead) {
             if (this.nearObject) {
-                const verbs = { take: 'Take', read: 'Read', open: 'Open', search: 'Search' };
+                const verbs = { take: 'Take', read: 'Read', open: 'Open', search: 'Search', body: 'Search', rest: 'Rest —' };
                 text = `[E]  ${verbs[this.nearObject.kind] || 'Use'} ${this.nearObject.label}`;
             } else if (this.nearDoor) {
                 text = `[E]  Try the way to ${this.nearDoor.name}`;
@@ -2836,6 +2846,9 @@ class GameRenderer {
             heartsLost: c.heartsLost || 0,
             heartsHealed: c.heartsHealed || 0,
             defeated: c.enemies.filter(e => e.dead && e.npcId).map(e => e.npcId),
+            // Where each of them fell — their body is left there
+            defeatedAt: Object.fromEntries(c.enemies.filter(e => e.dead && e.npcId)
+                .map(e => [e.npcId, { x: e.nx, y: e.ny }])),
             playerHp: Math.max(0, c.playerHp),
         };
         this._endCombat(false);

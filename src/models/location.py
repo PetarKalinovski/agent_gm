@@ -117,6 +117,12 @@ class Location(Base):
     # move_player through one path.
     dress_code: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
+    # Where a character can sleep. NULL = nowhere safe here (a `rest` scene
+    # object on such a place is a makeshift camp). Normalized by
+    # src/services/rest.normalize_rest; applied by rest_now.
+    # {"kind": "inn"|"camp", "price": int, "quality": "poor"|"fair"|"good"}
+    rest: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
     # Pre-generated ambient one-liners for this scene (no TTS, no DM)
     # [{"npc_id": str|None, "text": str}, ...]
     ambient_barks: Mapped[list | None] = mapped_column(JSON, nullable=True)

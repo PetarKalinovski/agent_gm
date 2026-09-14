@@ -340,6 +340,7 @@ def prompt_npc_agent(player_id: str, npc_id: str, player_input: str, is_first_in
         # code. It rides the SYSTEM prompt (see below), not the narrative blob,
         # so a long DM briefing cannot dilute it.
         recognition_block = ""
+        player_row = None
         try:
             from src.models import Player as _Player
             player_row = uow.session.get(_Player, player_id)
@@ -367,6 +368,29 @@ def prompt_npc_agent(player_id: str, npc_id: str, player_input: str, is_first_in
             "key_moments": relationship.key_moments if relationship else [],
             "recent_messages": (relationship.recent_messages or [])[-recent_limit * 2:] if relationship else [],
             "revealed_secrets": relationship.revealed_secrets if relationship else [],
+        }
+
+        # Someone who hates the player and does not trust them will not talk.
+        # Code decides, before any model is built; the one line they do say
+        # rides out as a real speech event (voice, bubble, chat line).
+        from src.services import standing as _standing
+        refusal = _standing.conversation_refusal(uow.session, player_row, npc_result.data, relationship)
+
+    if refusal:
+        _record_npc_exchange(
+            npc_id=npc_id, player_id=player_id, player_input=player_input,
+            npc_response=refusal["line"], is_first_interaction=is_first_interaction,
+            conversation_ended=True,
+        )
+        return {
+            "text_response": refusal["note"],
+            "refused": True,
+            "conversation_ended": True,
+            "note": refusal["note"],
+            "events": [{
+                "event": "speech", "npc": npc_data.get("name") or "???",
+                "text": refusal["line"], "tone": "hostile", "action": None,
+            }],
         }
 
     # Auto-fetch recent DM context — grab up to 20 messages but stop if we

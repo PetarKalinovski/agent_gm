@@ -183,6 +183,10 @@ The kind menu — pick ONE of these four words. Never invent a fifth:
            payload: {"item": {...}, "lock": "<what it needs, e.g. 'a small brass key'>"}
 - "search" a place to rummage: a woodpile, a bunk, a rubbish heap.
            payload: {"text": "<what they turn up>", "item": {...}}   (item optional)
+- "rest"   a bed, a bunk, a campfire — where the night can be spent. Reusable.
+           payload: {"text": "<one line about the bed>"}. Pair it with the
+           location's `rest` field ({"kind": "inn"|"camp", "price", "quality"});
+           without one it plays as a poor makeshift camp.
 
 Rules:
 1. x/y are positions in the SCENE IMAGE, 0-100, where y=0 is the far

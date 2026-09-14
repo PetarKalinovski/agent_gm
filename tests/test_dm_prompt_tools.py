@@ -16,7 +16,7 @@ TOOL_PREFIXES = (
     "get_", "add_", "update_", "move_", "kill_", "create_", "schedule_",
     "advance_", "describe_", "show_", "prompt_", "transfer_", "use_",
     "adjust_", "remove_", "activate_", "narrate", "speak", "journal",
-    "roll_", "stock_", "play_",
+    "roll_", "stock_", "play_", "rest", "reveal_", "join_", "leave_",
 )
 
 

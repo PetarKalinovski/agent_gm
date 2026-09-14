@@ -52,6 +52,7 @@ from src.models import (
 )
 from src.services import progression as prog
 from src.services.perception import normalize_attire, normalize_dress_code
+from src.services.rest import normalize_rest
 from src.services.scene_objects import normalize_objects
 
 PLAYTEST_DB_PATH = "data/emberfall.db"
@@ -362,7 +363,15 @@ def create_playtest_world(db_path: str = PLAYTEST_DB_PATH) -> None:
                         },
                     },
                 },
+                {
+                    "kind": "rest",
+                    "label": "Upstairs bed",
+                    "x": 86, "y": 30,
+                    "payload": {"text": "A narrow bed under the eaves; the sheets smell of woodsmoke."},
+                },
             ]),
+            # The one place in Emberfall a courier can sleep: eight coin, a good bed
+            rest=normalize_rest({"kind": "inn", "price": 8, "quality": "good"}),
         )
         session.add(tavern)
         session.flush()

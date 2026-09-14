@@ -81,6 +81,9 @@ class NPC(Base):
     # Abilities
     skills: Mapped[list] = mapped_column(JSON, default=list)
     inventory_notable: Mapped[list] = mapped_column(JSON, default=list)  # Important items
+    # A merchant's till. NULL = bottomless (every legacy merchant, unchanged);
+    # a number is a real purse that runs out when the player sells too much.
+    currency: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     # State
     status: Mapped[str] = mapped_column(String(50), default="alive")  # alive, dead, missing, imprisoned

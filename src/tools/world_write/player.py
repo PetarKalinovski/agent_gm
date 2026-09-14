@@ -76,6 +76,16 @@ def move_player(player_id: str, destination_id: str, requirements_met: bool = Fa
                     "move_player again with requirements_met=True. Otherwise narrate "
                     "why they can't get through."
                 )
+            elif route["reason"] == "standing":
+                message = (
+                    f"{destination.name} is closed to them: "
+                    f"{', '.join(str(r) for r in requirements)} "
+                    "The engine decided this from their standing with the faction that holds "
+                    "the place. Run the refusal in the house's own voice — a guard, a shut "
+                    "gate, a crowd that turns. Only if the fiction genuinely gets them past it "
+                    "(a disguise, a bribe, a friend inside) call move_player again with "
+                    "requirements_met=True; it is never a permanent pass."
+                )
             elif route["reason"] == "dress":
                 message = (
                     f"{destination.name} will not take them dressed as they are: "

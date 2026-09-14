@@ -73,7 +73,9 @@ def test_world_shape(playtest_db):
         # Every seeded location carries canvas objects (E-to-interact surface)
         for loc_name in ("Market Square", "The Drowned Lantern", "Wolf's Hollow"):
             loc = session.query(Location).filter_by(name=loc_name).one()
-            assert loc.objects and 1 <= len(loc.objects) <= 3
+            # 1-3 authored things to touch; a bed (kind 'rest') is the engine's own pool
+            authored = [o for o in loc.objects if o.get('kind') in ('take', 'read', 'open', 'search')]
+            assert loc.objects and 1 <= len(authored) <= 3
 
 
 def test_locked_connection_and_quest(playtest_db):

@@ -75,6 +75,7 @@ from src.tools.world_write.time import advance_time
 
 # Combat tools
 from src.tools.world_write.combat import start_combat
+from src.tools.world_write.rest import rest
 
 # Quest tools
 from src.tools.world_write.quests import (
@@ -135,6 +136,7 @@ __all__ = [
     "advance_time",
     # Combat
     "start_combat",
+    "rest",
     # Quests
     "create_quest",
     "activate_quest",

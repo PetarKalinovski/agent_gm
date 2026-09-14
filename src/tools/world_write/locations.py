@@ -11,6 +11,7 @@ from src.models import (
     get_session,
 )
 from src.services.perception import normalize_dress_code
+from src.services.rest import normalize_rest
 from src.services.scene_objects import normalize_objects
 
 # `objects` is written by an LLM and normalised by code on the way in: unknown
@@ -40,6 +41,7 @@ def add_location(
     discovered: bool = False,
     objects: list[dict] | None = None,
     dress_code: dict | None = None,
+    rest: dict | None = None,
 ) -> dict[str, Any]:
     """Add a new location to the world.
 
@@ -72,12 +74,18 @@ def add_location(
              "reason": "<one sentence in the house's own voice>"}
             See the DRESS CODES section of your instructions. Most locations
             must not have one.
+        rest: Where a character can sleep here, if anywhere. Inns, camps,
+            a friend's floor: {"kind": "inn"|"camp", "price": <coin per
+            night, 0 for free>, "quality": "poor"|"fair"|"good"}. Pair it
+            with a "rest" object (a bed, a campfire) so it can be seen.
+            Leave it out for anywhere nobody could safely sleep.
 
     Returns:
         Dictionary with the created location's details.
     """
-    normalized_objects = normalize_objects(objects)
+    normalized_objects = normalize_objects(objects, trusted=False)
     normalized_dress_code = normalize_dress_code(dress_code)
+    normalized_rest = normalize_rest(rest)
     with get_session() as session:
         location = Location(
             name=name,
@@ -98,6 +106,7 @@ def add_location(
             discovered=discovered,
             objects=normalized_objects or None,
             dress_code=normalized_dress_code,
+            rest=normalized_rest,
         )
         session.add(location)
         session.commit()
@@ -154,6 +163,7 @@ def update_location(
     parent_id: str | None = None,
     objects: list[dict] | None = None,
     dress_code: dict | None = None,
+    rest: dict | None = None,
 ) -> dict[str, Any]:
     """Update an existing location's details.
 
@@ -182,6 +192,8 @@ def update_location(
              "x": 0-100, "y": 0-100, "payload": {...}}.
             See the SCENE OBJECTS section of your instructions for the exact
             payload per kind. Invalid entries are dropped by the engine.
+        rest: Replaces where a character can sleep here ({} to clear):
+            {"kind": "inn"|"camp", "price": int, "quality": "poor"|"fair"|"good"}.
         dress_code: Replaces what this place refuses at the door.
             {"min_style": "filthy"|"rough"|"common"|"fine"|"noble" or null,
              "banned_styles": [any of those five, plus "concealing"],
@@ -234,9 +246,11 @@ def update_location(
         if parent_id is not None:
             location.parent_id = parent_id
         if objects is not None:
-            location.objects = normalize_objects(objects) or None
+            location.objects = normalize_objects(objects, trusted=False) or None
         if dress_code is not None:
             location.dress_code = normalize_dress_code(dress_code)
+        if rest is not None:
+            location.rest = normalize_rest(rest)   # {} clears
 
         session.commit()
 

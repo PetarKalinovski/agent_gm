@@ -236,6 +236,7 @@ class ToolUsageTracker:
                     "npc_id": output_data.get("npc_id"),
                     "npc_name": output_data.get("npc_name"),
                     "cause": output_data.get("cause_of_death"),
+                    "body": output_data.get("body"),
                 })
 
             # NPC dialogue (from the speak tool) — the server layer enriches

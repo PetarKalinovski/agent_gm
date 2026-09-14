@@ -54,6 +54,12 @@ FALLBACK_DAYS = 7                # backstop for non-time triggers
 TIME_FALLBACK_DAYS = 3           # extra slack past a `time` beat's schedule
 CAMPAIGN_BEAT_SPACING_HOURS = 2  # min in-game gap between non-deadline beats
 BEAT_DELIVERY_ATTEMPTS = 3       # mirrors Event delivery re-surfacing
+# A beat the DM failed to narrate three times is parked as `stalled`: it stops
+# blocking the story but nothing is claimed told — its lead goes on the
+# player's tracker instead, and it is delivered when its keywords or its
+# met_condition finally show up. Past this many in-game days it is skipped
+# (skipped un-seals nothing) so an act can still close.
+STALLED_SKIP_DAYS = 3
 FACTION_POWER_SHIFT = {"weakened": -15, "strengthened": +15, "shattered": -40, "ascendant": +30}
 # (player_level_at_least, completed_quests_at_least) — either arm carries it
 MILESTONE_THRESHOLDS = {"early": (2, 1), "midway": (4, 3), "late": (6, 5)}
@@ -671,6 +677,9 @@ def run_campaign_tick(player_id: str) -> dict[str, Any]:
         # 3. Arm anything waiting on a beat that has now been delivered
         _arm_after_beats(campaign, beats, now)
 
+        # 3b. A beat stalled for too long is skipped, so the act can close
+        _skip_stale_stalled(session, campaign, beats, now, events, cinematics)
+
         # 4. A beat the DM never narrated blocks the whole story
         fired = _resurface_undelivered(session, campaign, beats, now, events, cinematics)
 
@@ -775,21 +784,34 @@ def _arm_after_beats(campaign: Campaign, beats: list[StoryBeat], now: tuple[int,
             _arm_beat(beat, now)
 
 
+def _skip_stale_stalled(session, campaign: Campaign, beats: list[StoryBeat],
+                        now: tuple[int, int], events: list, cinematics: list) -> None:
+    for beat in beats:
+        if beat.status != "stalled" or beat.fired_day is None:
+            continue
+        if now[0] - beat.fired_day > STALLED_SKIP_DAYS:
+            logger.warning(f"campaign beat skipped after stalling: {beat.title}")
+            beat.status = "skipped"
+            _check_act_transition(session, campaign, beat, now, events, cinematics)
+
+
 def _resurface_undelivered(session, campaign: Campaign, beats: list[StoryBeat],
                            now: tuple[int, int], events: list,
                            cinematics: list) -> dict[str, Any] | None:
-    """Re-surface a fired-but-unnarrated beat, or give up on it after 3 tries.
+    """Re-surface a fired-but-unnarrated beat, or park it after 3 tries.
 
     Mirrors the Event delivery loop: the world already changed, so the beat
-    cannot silently vanish — but it also cannot block the story forever.
+    cannot silently vanish — but it also cannot block the story forever. It
+    used to be marked delivered anyway, which un-sealed truths the player
+    never heard; now it is `stalled` (see STALLED_SKIP_DAYS).
     """
     for beat in beats:
         if beat.status != "fired":
             continue
         attempts = beat.delivery_attempts or 0
         if attempts >= BEAT_DELIVERY_ATTEMPTS:
-            logger.warning(f"campaign beat gave up: {beat.title}")
-            _deliver_beat(session, campaign, beat, now, events, cinematics)
+            logger.warning(f"campaign beat stalled (never narrated): {beat.title}")
+            beat.status = "stalled"
             continue
         beat.delivery_attempts = attempts + 1
         return _fired_payload(beat, attempt=beat.delivery_attempts)
@@ -1042,13 +1064,21 @@ def mark_beat_delivery(player_id: str, turn_text: str) -> dict[str, Any]:
             return result
         now = _now(session)
         act_before = campaign.current_act
+        player = session.get(Player, player_id)
 
         for beat in _campaign_beats(session, campaign):
-            if beat.status != "fired":
+            if beat.status not in ("fired", "stalled"):
                 continue
             keywords = [str(k).lower() for k in (beat.delivery_keywords or []) if str(k).strip()]
-            if keywords and not any(k in lowered for k in keywords):
-                continue  # left `fired`; the next tick re-surfaces it
+            spoken = not keywords or any(k in lowered for k in keywords)
+            if not spoken and beat.status == "stalled":
+                # A parked beat also counts as delivered once the world shows
+                # its condition met — the player got there without the words
+                spoken = bool(beat.met_condition) and evaluate_condition(
+                    session, beat.met_condition, campaign, player
+                )
+            if not spoken:
+                continue  # `fired` is re-surfaced next tick; `stalled` waits
             _deliver_beat(session, campaign, beat, now, events, cinematics)
             result["delivered"] = True
             result["beat_id"] = beat.id

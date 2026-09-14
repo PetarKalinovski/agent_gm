@@ -19,14 +19,22 @@ import re
 from typing import Any
 
 from src.models import Location, Player, get_session
+from src.models.item import Item
 
 
-OBJECT_KINDS = ("take", "read", "open", "search")   # FIXED MENU. Never extend at runtime.
+OBJECT_KINDS = ("take", "read", "open", "search", "rest", "body")   # FIXED MENU. Never extend at runtime.
 
-# Objects are consumed by take/open/search; `read` is re-readable forever.
-CONSUMING_KINDS = ("take", "open", "search")
+# What an author (creator agent, world forge, editor) may place; a body is
+# placed by the engine only, when someone dies (src/services/loot.py)
+AUTHORED_KINDS = ("take", "read", "open", "search", "rest")
+ENGINE_SRC = "engine"
 
-MAX_OBJECTS_PER_LOCATION = 3
+# Objects are consumed by take/open/search/body; `read` and `rest` are reusable.
+CONSUMING_KINDS = ("take", "open", "search", "body")
+
+MAX_OBJECTS_PER_LOCATION = 3     # the authored pool (take/read/open/search)
+MAX_RESTS_PER_LOCATION = 1       # one bed or campfire per scene
+MAX_BODIES_PER_LOCATION = 4      # the engine pool; oldest evicted first
 LABEL_MAX = 48
 TEXT_MAX = 400
 
@@ -83,26 +91,58 @@ def _normalize_item(raw: Any) -> dict[str, Any] | None:
     }
 
 
-def normalize_objects(raw: Any) -> list[dict[str, Any]]:
+def _normalize_loot_item(raw: Any) -> dict[str, Any] | None:
+    """A body's item keeps its mechanics: round-trip through the Item model
+    so slot / tier / effect_tag / visual_desc / attire survive the grave."""
+    if not isinstance(raw, dict):
+        return None
+    name = str(raw.get("name") or "").strip()
+    if not name:
+        return None
+    data = dict(raw)
+    data.setdefault("id", _slug(name))
+    data.setdefault("type", "misc")
+    data.setdefault("value", 0)
+    data.setdefault("description", "")
+    try:
+        item = Item.from_dict(data).to_dict()
+    except Exception:
+        return None
+    try:
+        item["quantity"] = max(1, int(item.get("quantity") or 1))
+    except (TypeError, ValueError):
+        item["quantity"] = 1
+    return item
+
+
+def normalize_objects(raw: Any, *, trusted: bool = True) -> list[dict[str, Any]]:
     """Coerce whatever an LLM produced into valid object rows. Never raises.
 
     Drops entries that are not dicts or carry an unknown `kind`, assigns
     missing ids, clamps coordinates, truncates text, strips effects and
     unknown keys from item payloads, drops `lock` on anything but `open`,
-    and caps the list at MAX_OBJECTS_PER_LOCATION.
+    and caps each pool: MAX_OBJECTS_PER_LOCATION authored objects, one
+    `rest`, MAX_BODIES_PER_LOCATION bodies (oldest evicted).
+
+    `trusted=False` is the LLM/editor authoring boundary: a `body` (and its
+    `items`/`coin`) can only enter through the engine (`src == "engine"` on
+    a row that came out of the database), never through a model's JSON.
     """
-    normalized: list[dict[str, Any]] = []
+    authored: list[dict[str, Any]] = []
+    rests: list[dict[str, Any]] = []
+    bodies: list[dict[str, Any]] = []
     used_ids: set[str] = set()
 
     for index, entry in enumerate(raw or []):
-        if len(normalized) >= MAX_OBJECTS_PER_LOCATION:
-            break
         if not isinstance(entry, dict):
             continue
 
         kind = str(entry.get("kind") or "").strip().lower()
         if kind not in OBJECT_KINDS:
             continue
+        engine_entry = bool(trusted and entry.get("src") == ENGINE_SRC)
+        if kind == "body" and not engine_entry:
+            continue        # nobody authors a corpse with loot on it
 
         label = str(entry.get("label") or "").strip()[:LABEL_MAX] or kind.capitalize()
 
@@ -130,7 +170,20 @@ def normalize_objects(raw: Any) -> list[dict[str, Any]]:
         if kind == "open" and raw_payload.get("lock"):
             payload["lock"] = str(raw_payload["lock"])[:LABEL_MAX * 2]
 
-        normalized.append({
+        # Engine-only: what a body carries (full item dicts + coin)
+        if kind == "body" and engine_entry:
+            payload["items"] = [
+                i for i in (_normalize_loot_item(x) for x in (raw_payload.get("items") or []))
+                if i is not None
+            ]
+            try:
+                payload["coin"] = max(0, int(raw_payload.get("coin") or 0))
+            except (TypeError, ValueError):
+                payload["coin"] = 0
+            if raw_payload.get("npc_id"):
+                payload["npc_id"] = str(raw_payload["npc_id"])
+
+        row: dict[str, Any] = {
             "id": object_id,
             "kind": kind,
             "label": label,
@@ -138,9 +191,34 @@ def normalize_objects(raw: Any) -> list[dict[str, Any]]:
             "y": _clamp_coord(entry.get("y"), DEFAULT_Y),
             "payload": payload,
             "consumed": bool(entry.get("consumed", False)),
-        })
+        }
+        if engine_entry:
+            row["src"] = ENGINE_SRC
+        if kind == "body":
+            bodies.append(row)
+        elif kind == "rest":
+            rests.append(row)
+        else:
+            authored.append(row)
 
-    return normalized
+    return (
+        authored[:MAX_OBJECTS_PER_LOCATION]
+        + rests[:MAX_RESTS_PER_LOCATION]
+        + bodies[-MAX_BODIES_PER_LOCATION:]
+    )
+
+
+def public_row(obj: dict[str, Any]) -> dict[str, Any]:
+    """One object as the client may see it (no payload)."""
+    return {
+        "id": obj["id"],
+        "kind": obj["kind"],
+        "label": obj["label"],
+        "x": obj["x"],
+        "y": obj["y"],
+        "consumed": obj["consumed"],
+        "locked": bool(obj["kind"] == "open" and obj["payload"].get("lock")),
+    }
 
 
 def public_objects(raw: Any) -> list[dict[str, Any]]:
@@ -150,18 +228,7 @@ def public_objects(raw: Any) -> list[dict[str, Any]]:
     reveal is the whole point of the interaction. `locked` ships as a bare
     boolean so the renderer can draw a keyhole.
     """
-    return [
-        {
-            "id": obj["id"],
-            "kind": obj["kind"],
-            "label": obj["label"],
-            "x": obj["x"],
-            "y": obj["y"],
-            "consumed": obj["consumed"],
-            "locked": bool(obj["kind"] == "open" and obj["payload"].get("lock")),
-        }
-        for obj in normalize_objects(raw)
-    ]
+    return [public_row(obj) for obj in normalize_objects(raw)]
 
 
 def _mark_consumed(location_id: str, object_id: str) -> None:
@@ -242,8 +309,44 @@ def resolve_interaction(player_id: str, location_id: str, object_id: str) -> dic
     text = payload.get("text")
     items_gained: list[dict[str, Any]] = []
     floater = None
+    coin_gained = 0
 
-    if kind != "read" and item:
+    if kind == "body":
+        # The dead keep their mechanics: spawn the full item, not a flavour copy
+        from src.tools.world_write.items import adjust_currency, spawn_item_to_user
+        for loot in payload.get("items") or []:
+            quantity = max(1, int(loot.get("quantity") or 1))
+            spawned = spawn_item_to_user(player_id, loot, quantity, user_type="player")
+            if "error" not in spawned:
+                items_gained.append({"name": loot["name"], "quantity": quantity})
+        coin = int(payload.get("coin") or 0)
+        if coin > 0:
+            paid = adjust_currency(player_id, coin)
+            if "error" not in paid:
+                coin_gained = coin
+        found = [f"{i['name']}" + (f" x{i['quantity']}" if i["quantity"] > 1 else "") for i in items_gained]
+        if coin_gained:
+            found.append(f"{coin_gained} coin")
+        text = (f"{text} " if text else "") + (f"You find: {', '.join(found)}." if found else "Nothing worth taking.")
+        if coin_gained and not items_gained:
+            floater = f"+ {coin_gained} coin"
+        elif items_gained:
+            floater = f"+ {items_gained[0]['name']}"
+
+    rest_result = None
+    if kind == "rest":
+        from src.services.rest import rest_now
+        rest_result = rest_now(player_id)
+        if "error" in rest_result:
+            reason = rest_result["error"]
+            message = {
+                "cannot_afford": f"The bed costs {rest_result.get('price')} and you carry {rest_result.get('currency')}.",
+                "no_rest_here": "There is nowhere safe to sleep here.",
+                "dead": "The dead do not sleep.",
+            }.get(reason, "You cannot rest now.")
+            return {"success": False, "refused": True, "error": reason, "label": label, "message": message}
+
+    if kind not in ("read", "body", "rest") and item:
         added = add_to_inventory(
             player_id,
             item["name"],
@@ -260,7 +363,7 @@ def resolve_interaction(player_id: str, location_id: str, object_id: str) -> dic
     if consumed:
         _mark_consumed(location_id, object_id)
 
-    show_panel = bool(text) and kind in ("read", "open", "search")
+    show_panel = bool(text) and kind in ("read", "open", "search", "body")
     return {
         "success": True,
         "object_id": object_id,
@@ -272,5 +375,7 @@ def resolve_interaction(player_id: str, location_id: str, object_id: str) -> dic
             "panel_title": label if show_panel else None,
             "panel_text": text if show_panel else None,
             "items_gained": items_gained,
+            "coin_gained": coin_gained,
+            "rest": rest_result,
         },
     }

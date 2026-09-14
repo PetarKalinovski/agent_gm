@@ -59,6 +59,11 @@ from src.services.travel import check_route, travel_now
 from src.web import pending_actions
 from src.services import objectives as objectives_mod
 from src.services import lead as lead_mod
+from src.services import opening as opening_mod
+from src.services import suggestions as suggestions_mod
+from src.services.rest import normalize_rest, rest_now
+from src.services import standing
+from src.tools.world_write.items import _validate_inventory, transfer_item
 from src.web.turn_filters import CodeFenceFilter, DialogueDeduper, JunkLineFilter, SentenceDeduper, speech_events_for_unspoken
 from src.web.tool_rescue import rescue_tool_calls, resolve_npc
 from src.web.turn_audit import audit_turn, format_audit_feedback
@@ -308,12 +313,17 @@ def build_player_state(player_id: str) -> dict[str, Any]:
     if str(location.get("type", "")).lower() in INDOOR_LOCATION_TYPES:
         weather = "clear"
 
-    # The compass: one code-chosen next step (quest objective, else beat lead)
+    # The compass: one code-chosen next step (quest objective, else beat
+    # lead) and the chips that make it, the people here, and the ways out
+    # one click each
     lead = None
+    suggestions: list[dict[str, Any]] = []
     try:
         with get_session() as db:
             row = db.get(Player, player_id)
             lead = lead_mod.compute_lead(db, row) if row else None
+            if row is not None:
+                suggestions = suggestions_mod.suggest_actions(db, row, lead, row.current_location_id)
     except Exception as e:
         logger.debug(f"Lead unavailable: {e}")
 
@@ -345,6 +355,7 @@ def build_player_state(player_id: str) -> dict[str, Any]:
         "appearance": appearance,
         "campaign": campaign,
         "lead": lead,
+        "suggestions": suggestions,
         "weather": weather,
     }
 
@@ -469,6 +480,23 @@ resuming after time away. From the transcript, write 2-4 sentences in second
 person ("you") capturing: where the player is, what they were pursuing, and
 any unresolved thread or looming danger. Write ONLY the recap text — no
 preamble, no headers, no meta commentary. Match the world's tone."""
+
+
+@app.post("/api/opening/{player_id}")
+async def run_opening(player_id: str):
+    """A brand-new character's first moment: title card + scene + the
+    `[OPENING]` directive the client auto-sends. `{"opening": False}` once
+    the DM has any history, so a refresh mid-opening cannot double-fire."""
+    init_db(get_active_db_path())
+    session = await asyncio.to_thread(get_or_create_session, player_id)
+    if not opening_mod.is_first_turn(session["dm"]):
+        return {"opening": False}
+    await asyncio.to_thread(opening_mod.wait_for_campaign, player_id)
+    payload = await asyncio.to_thread(opening_mod.opening_payload, player_id)
+    if not payload:
+        return {"opening": False}
+    logger.info(f"Opening sequence for {player_id}: card={'yes' if payload.get('cinematic') else 'no'}")
+    return payload
 
 
 @app.get("/api/recap/{player_id}")
@@ -1436,6 +1464,7 @@ class CombatResultRequest(BaseModel):
     hearts_lost: int = 0
     hearts_healed: int = 0
     defeated_npc_ids: list[str] = []
+    defeated_positions: dict[str, dict[str, float]] = {}   # where each enemy fell
 
 
 @app.post("/api/combat/result")
@@ -1459,6 +1488,7 @@ async def combat_result(request: CombatResultRequest):
         hearts_lost=request.hearts_lost,
         hearts_healed=request.hearts_healed,
         defeated_npc_ids=request.defeated_npc_ids,
+        defeated_positions=request.defeated_positions,
     )
     if "error" in changes:
         return JSONResponse(changes, status_code=400)
@@ -1474,6 +1504,8 @@ async def combat_result(request: CombatResultRequest):
         "dm_message": combat_outcome_message(changes),
         "state": build_player_state(request.player_id),
         "objectives_done": objectives_mod.pop_pending_events(request.player_id),
+        # Bodies to sparkle on the canvas without a scene reload
+        "bodies": changes.get("bodies") or [],
     }
     if changes.get("progression"):
         response["progression"] = changes["progression"]
@@ -1670,7 +1702,179 @@ async def canvas_travel(request: TravelRequest):
 
 
 # HTTP status for each way an interaction can refuse
-_INTERACT_ERROR_STATUS = {"no such object": 404, "no player": 404, "not here": 409}
+_INTERACT_ERROR_STATUS = {
+    "no such object": 404, "no player": 404, "not here": 409,
+    "cannot_afford": 409, "no_rest_here": 409, "dead": 409, "no_clock": 409,
+}
+
+
+class RestRequest(BaseModel):
+    player_id: str
+
+
+class ShopTradeRequest(BaseModel):
+    player_id: str
+    item_id: str
+    quantity: int = 1
+
+
+def _shop_view(db, player, npc) -> dict[str, Any]:
+    """What the counter shows: their shelf priced for THIS player, and what
+    the player could sell. Numbers are the engine's; the client renders."""
+    mul, reason = standing.price_multiplier(db, player, npc)
+    stock = []
+    for entry in _validate_inventory(npc.inventory_notable or []):
+        mech = progression.mechanize_item(entry) or {}
+        price = standing.buy_price(standing.base_price(entry), mul)
+        stock.append({
+            "item_id": progression.item_key(entry),
+            "name": entry.get("name", "?"),
+            "quantity": int(entry.get("quantity", 1) or 1),
+            "type": entry.get("type", "misc"),
+            "description": entry.get("description", ""),
+            "slot": mech.get("slot"),
+            "tier": progression.tier_label(mech.get("tier")),
+            "effect_tag": mech.get("effect_tag"),
+            "price": price,
+            "affordable": (player.currency or 0) >= price,
+        })
+    sellable = []
+    for entry in (player.inventory or []):
+        if not isinstance(entry, dict):
+            continue
+        notes = progression.annotate_item(player, entry)
+        equipped = bool(notes.get("equipped"))
+        is_quest = str(entry.get("type") or "") == "quest_item"
+        sellable.append({
+            "item_id": progression.item_key(entry),
+            "name": entry.get("name", "?"),
+            "quantity": int(entry.get("quantity", 1) or 1),
+            "price": standing.sell_price(standing.base_price(entry)),
+            "equipped": equipped,
+            "sellable": not equipped and not is_quest,
+            "reason": "worn" if equipped else ("not for sale" if is_quest else None),
+        })
+    faction_band = standing.standing_for(player, npc.faction_id) if npc.faction_id else "neutral"
+    relationship = standing.relationship_for(db, player.id, npc.id)
+    return {
+        "npc_id": npc.id,
+        "npc_name": npc.name,
+        "standing": faction_band,
+        "disposition": standing.disposition_band(relationship),
+        "reason": reason,
+        "multiplier": mul,
+        "currency": player.currency or 0,
+        "npc_currency": standing.npc_purse(npc),
+        "stock": stock,
+        "sellable": sellable,
+    }
+
+
+def _shop_guard(db, player_id: str, npc_id: str, *, need_stock: bool):
+    """(player, npc, error_response). The refusals a counter can give."""
+    player = db.query(Player).filter(Player.id == player_id).first()
+    if not player:
+        return None, None, JSONResponse({"error": "Player not found", "reason": "missing"}, status_code=404)
+    npc = db.get(NPC, npc_id)
+    if not npc or npc.status != "alive":
+        return None, None, JSONResponse({"error": "No one is trading here", "reason": "missing"}, status_code=404)
+    if npc.current_location_id != player.current_location_id:
+        return None, None, JSONResponse({"error": f"{npc.name} is not here", "reason": "not_here"}, status_code=409)
+    if need_stock and not (npc.inventory_notable or []) and standing.npc_purse(npc) is None:
+        return None, None, JSONResponse({"error": f"{npc.name} has nothing to trade", "reason": "no_shop"}, status_code=404)
+    refusal = standing.conversation_refusal(db, player, npc)
+    if refusal:
+        return None, None, JSONResponse(
+            {"error": f"{npc.name} will not trade with you", "reason": "standing", "line": refusal["line"]},
+            status_code=409,
+        )
+    return player, npc, None
+
+
+@app.get("/api/shop/{npc_id}")
+async def shop_view(npc_id: str, player_id: str):
+    """A merchant's counter, priced for this player. No DM turn."""
+    init_db(get_active_db_path())
+    with get_session() as db:
+        player, npc, err = _shop_guard(db, player_id, npc_id, need_stock=True)
+        if err:
+            return err
+        return _shop_view(db, player, npc)
+
+
+async def _shop_trade(npc_id: str, request: ShopTradeRequest, *, selling: bool):
+    init_db(get_active_db_path())
+    with get_session() as db:
+        player, npc, err = _shop_guard(db, request.player_id, npc_id, need_stock=not selling)
+        if err:
+            return err
+        if selling:
+            entry = next((e for e in (player.inventory or [])
+                          if isinstance(e, dict) and progression.item_key(e) == request.item_id), None)
+            if entry is None:
+                return JSONResponse({"error": "You do not carry that", "reason": "missing"}, status_code=404)
+            if progression.annotate_item(player, entry).get("equipped"):
+                return JSONResponse({"error": "Take it off first", "reason": "equipped"}, status_code=409)
+            if str(entry.get("type") or "") == "quest_item":
+                return JSONResponse({"error": "That is not for sale", "reason": "quest_item"}, status_code=409)
+        npc_name = npc.name
+
+    quantity = max(1, int(request.quantity or 1))
+    if selling:
+        result = transfer_item(request.player_id, npc_id, request.item_id, quantity,
+                               from_type="player", to_type="npc", is_purchase=True)
+    else:
+        result = transfer_item(npc_id, request.player_id, request.item_id, quantity,
+                               from_type="npc", to_type="player", is_purchase=True)
+    if "error" in result:
+        reason = "coin" if "afford" in result["error"] or "currency" in result["error"] else "missing"
+        return JSONResponse({**result, "reason": reason}, status_code=409 if reason == "coin" else 404)
+
+    with get_session() as db:
+        player = db.query(Player).filter(Player.id == request.player_id).first()
+        npc = db.get(NPC, npc_id)
+        item_name = next((e.get("name") for e in ((npc.inventory_notable if selling else player.inventory) or [])
+                          if isinstance(e, dict) and progression.item_key(e) == request.item_id), request.item_id)
+        shop = _shop_view(db, player, npc)
+    pending_actions.record_action(
+        request.player_id, "shop",
+        pending_actions.shop_note("sold" if selling else "bought", str(item_name), quantity, npc_name, result["cost"]),
+        tools=("transfer_item", "adjust_currency"),
+    )
+    if not selling:
+        _prewarm_appearance(request.player_id)
+    return {**result, "shop": shop, "state": build_player_state(request.player_id)}
+
+
+@app.post("/api/shop/{npc_id}/buy")
+async def shop_buy(npc_id: str, request: ShopTradeRequest):
+    """Buy from the counter: the engine's price, the player's coin, no DM turn."""
+    return await _shop_trade(npc_id, request, selling=False)
+
+
+@app.post("/api/shop/{npc_id}/sell")
+async def shop_sell(npc_id: str, request: ShopTradeRequest):
+    """Sell at the counter: the merchant actually pays (buyback fraction)."""
+    return await _shop_trade(npc_id, request, selling=True)
+
+
+@app.post("/api/rest")
+async def canvas_rest(request: RestRequest):
+    """Sleep the night where the player stands — code owns the whole thing.
+
+    Blocked while a turn streams (rest moves the clock, same reason
+    /api/travel guards). The day tick runs in the background afterwards;
+    the campaign tick waits for the next turn, where it has a turn to ride on.
+    """
+    init_db(get_active_db_path())
+    if _play_lock.locked():
+        return JSONResponse({"success": False, "busy": True}, status_code=409)
+    result = await asyncio.to_thread(rest_now, request.player_id)
+    if "error" in result:
+        status = 404 if result["error"] == "no_player" else 409
+        return JSONResponse({"success": False, **result}, status_code=status)
+    asyncio.create_task(asyncio.to_thread(maybe_advance_world))
+    return {**result, "state": build_player_state(request.player_id)}
 
 # A read's summary quotes the words; anything longer is a paragraph
 _INTERACT_SUMMARY_MAX = 90
@@ -1680,8 +1884,13 @@ def _interact_summary(result: dict[str, Any]) -> str:
     """The one-line note the DM reads: what they picked up, or what they read."""
     label = result.get("label") or ""
     items = result.get("result", {}).get("items_gained") or []
-    if items:
-        return ", ".join(str(i.get("name") or "") for i in items if i.get("name")) or label
+    coin = result.get("result", {}).get("coin_gained") or 0
+    if items or coin:
+        names = [str(i.get("name") or "") for i in items if i.get("name")]
+        if coin:
+            names.append(f"{coin} coin")
+        found = ", ".join(names) or label
+        return f"{found} (from {label})" if result.get("kind") == "body" else found
     text = result.get("result", {}).get("panel_text")
     if text:
         return f'{label} ("{str(text)[:_INTERACT_SUMMARY_MAX]}")'
@@ -1707,10 +1916,20 @@ async def canvas_interact(request: InteractRequest):
         )
 
     items = result.get("result", {}).get("items_gained") or []
-    pending_actions.record_action(
-        request.player_id, result["kind"], _interact_summary(result),
-        tools=("add_to_inventory",) if items else (),
-    )
+    coin = result.get("result", {}).get("coin_gained") or 0
+    tools: list[str] = []
+    if items:
+        tools.append("add_to_inventory")
+    if coin:
+        tools.append("adjust_currency")
+    if result["kind"] == "rest":
+        # rest_now wrote its own ledger line; the day tick is the same as /api/rest
+        asyncio.create_task(asyncio.to_thread(maybe_advance_world))
+    else:
+        pending_actions.record_action(
+            request.player_id, "loot" if result["kind"] == "body" else result["kind"],
+            _interact_summary(result), tools=tuple(tools),
+        )
     return {
         **result,
         "state": build_player_state(request.player_id),
@@ -2008,6 +2227,7 @@ class LocationUpdate(BaseModel):
     obstacles: list | None = None  # collision polygons, normalized 0-100
     objects: list | None = None    # canvas interactables (normalized on write)
     dress_code: dict | None = None  # door policy (normalized on write; {} clears)
+    rest: dict | None = None        # where to sleep (normalized on write; {} clears)
     reference_search_query: str | None = None
 
 
@@ -2458,7 +2678,15 @@ async def update_player(player_id: str, update: PlayerUpdate):
             player.scale = update.scale
 
         db.commit()
-        return {"success": True}
+
+    # The name-modal save is the moment a character becomes someone; the spine
+    # is authored here too (no-op when a live row already exists), so a world
+    # whose player row predates POST /api/world/players still gets a story
+    try:
+        await asyncio.to_thread(ensure_campaign, player_id)
+    except Exception as e:
+        logger.debug(f"ensure_campaign on player update skipped: {e}")
+    return {"success": True}
 
 
 @app.get("/api/world/locations/{location_id}")
@@ -2490,6 +2718,7 @@ async def get_location_detail(location_id: str):
             "discovered": loc.discovered,
             "objects": loc.objects or [],
             "dress_code": loc.dress_code,
+            "rest": loc.rest,
             "reference_search_query": loc.reference_search_query,
         }
 
@@ -2532,7 +2761,9 @@ async def update_location(location_id: str, update: LocationUpdate):
         if update.objects is not None:
             # Never trust authored objects: the normalizer strips effects,
             # numbers and unknown kinds before anything reaches a scene
-            loc.objects = normalize_objects(update.objects) or None
+            loc.objects = normalize_objects(update.objects, trusted=False) or None
+        if update.rest is not None:
+            loc.rest = normalize_rest(update.rest)
         if update.dress_code is not None:
             # Clamped to the fixed menu; an empty gate stores as NULL
             loc.dress_code = perception.normalize_dress_code(update.dress_code)

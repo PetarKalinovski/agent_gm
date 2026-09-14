@@ -18,6 +18,7 @@ from src.models import (
 )
 from src.services import perception
 from src.services import progression as prog
+from src.services import standing
 
 
 def _mechanical_annotations(owner, entry: dict[str, Any], is_player: bool) -> dict[str, Any]:
@@ -138,15 +139,18 @@ def create_item_template(
 
 
 @tool
-def get_inventory(owner_id: str, owner_type: str = "player") -> dict[str, Any]:
+def get_inventory(owner_id: str, owner_type: str = "player", for_player_id: str = "") -> dict[str, Any]:
     """Get the inventory of a player or NPC.
 
     Each item carries its `price` — the true, engine-owned number. Quote THAT
-    when you sell something; never invent a price.
+    when you sell something; never invent a price. For a merchant's shelf,
+    pass `for_player_id` and the prices already carry what this merchant
+    thinks of that player (standing and disposition).
 
     Args:
         owner_id: The ID of the owner.
         owner_type: Type of owner ("player" or "npc").
+        for_player_id: When reading an NPC's shelf: the player who is buying.
 
     Returns:
         Dictionary with inventory items and currency.
@@ -165,15 +169,22 @@ def get_inventory(owner_id: str, owner_type: str = "player") -> dict[str, Any]:
                 return {"error": "NPC not found"}
             is_player = False
             raw = owner.inventory_notable
-            currency = getattr(owner, 'currency', 0)  # Default to 0 if not set
+            currency = getattr(owner, 'currency', None)
         else:
             return {"error": "Invalid owner_type"}
 
         inventory = _validate_inventory(raw)
+        buyer = session.get(Player, for_player_id) if (not is_player and for_player_id) else None
+        mul, reason = standing.price_multiplier(session, buyer, owner) if buyer is not None else (1.0, "")
         for entry in inventory:
             entry.update(_mechanical_annotations(owner, entry, is_player))
+            if buyer is not None:
+                entry["price"] = standing.buy_price(standing.base_price(entry), mul)
 
-        return {"inventory": inventory, "currency": currency}
+        result: dict[str, Any] = {"inventory": inventory, "currency": currency}
+        if buyer is not None and reason:
+            result["pricing_note"] = f"Prices already reflect that the player is {reason}."
+        return result
 
 
 @tool
@@ -197,8 +208,16 @@ def adjust_currency(owner_id: str, amount: int, owner_type: str = "player") -> d
             session.commit()
             return {"success": True, "new_currency": owner.currency}
         elif owner_type == "npc":
-            # For now, NPCs don't have currency field - would need migration
-            return {"error": "NPC currency not yet implemented"}
+            owner = session.get(NPC, owner_id)
+            if not owner:
+                return {"error": "NPC not found"}
+            purse = standing.npc_purse(owner)
+            if purse is None:
+                # A bottomless till: coin comes and goes without a number
+                return {"success": True, "new_currency": None, "bottomless": True}
+            owner.currency = max(0, purse + amount)
+            session.commit()
+            return {"success": True, "new_currency": owner.currency}
         else:
             return {"error": "Invalid owner_type"}
 
@@ -275,10 +294,17 @@ def transfer_item(
             return {"error": "Not enough quantity"}
 
         # Mechanical items are priced by the table; plain stuff keeps the
-        # value whoever authored it wrote.
-        unit_price = prog.catalog_price(source_item.to_dict())
-        if unit_price is None:
-            unit_price = source_item.value
+        # value whoever authored it wrote. Buying from a merchant costs what
+        # that merchant thinks of the player; selling to one pays the
+        # buyback fraction (src/services/standing.py owns both numbers).
+        base = standing.base_price(source_item.to_dict())
+        if is_purchase and to_type == "player" and from_type == "npc":
+            mul, _ = standing.price_multiplier(session, dest, source)
+            unit_price = standing.buy_price(base, mul)
+        elif is_purchase and to_type == "npc" and from_type == "player":
+            unit_price = standing.sell_price(base)
+        else:
+            unit_price = base
 
         # Handle purchase
         total_cost = 0
@@ -290,6 +316,19 @@ def transfer_item(
                 dest.currency -= total_cost
                 if from_type == "player":
                     source.currency += total_cost
+                elif from_type == "npc":
+                    purse = standing.npc_purse(source)
+                    if purse is not None:
+                        source.currency = purse + total_cost
+            elif to_type == "npc":
+                # THE sale path: the merchant pays the player
+                purse = standing.npc_purse(dest)
+                if purse is not None:
+                    if purse < total_cost:
+                        return {"error": "NPC cannot afford that", "npc_currency": purse, "price": total_cost}
+                    dest.currency = purse - total_cost
+                if from_type == "player":
+                    source.currency = (source.currency or 0) + total_cost
 
         # Remove from source
         source_item.quantity -= quantity
@@ -314,7 +353,7 @@ def transfer_item(
                 id=source_item.id,
                 name=source_item.name,
                 type=source_item.type,
-                value=unit_price,
+                value=base,
                 description=source_item.description,
                 effects=source_item.effects,
                 stackable=source_item.stackable,
@@ -345,6 +384,7 @@ def transfer_item(
             "item_id": item_id,
             "quantity": quantity,
             "cost": total_cost if is_purchase else 0,
+            "unit_price": unit_price if is_purchase else 0,
         }
         if equipped:
             result["auto_equipped"] = equipped

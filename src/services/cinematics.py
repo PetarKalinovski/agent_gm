@@ -23,7 +23,10 @@ from src.models import Cinematic, DMState, WorldClock, get_session
 VOCABULARY = ("title_card", "boss_intro", "kill_cam", "vision", "weather")
 DM_CALLABLE = ("title_card", "boss_intro", "vision", "weather")   # kill_cam is combat-internal
 WEATHER_LABELS = ("rain", "snow", "fog", "embers", "ash", "clear")
-SOURCES = ("dm", "auto", "campaign")
+# `opening` is the once-per-character title card a new player sees before the
+# DM's first word: it skips the identity/limit guards (the ONE documented
+# bypass) but still writes the ledger, so later cards throttle against it.
+SOURCES = ("dm", "auto", "campaign", "opening")
 
 # Informational for the client + used for audio hold windows. The JS table in
 # game.js is the authority on actual tween timing; test_cinematics keeps the
@@ -298,9 +301,10 @@ def request_cinematic(
             reason = "world_not_initialized"
 
         key = _dedupe_key(kind_label, title_text, npc_ident, mood_label)
-        if reason is None:
+        guarded = source_label != "opening"
+        if reason is None and guarded:
             reason = _identity_reason(session, kind_label, key, mood_label, dm_state)
-        if reason is None:
+        if reason is None and guarded:
             reason = _limit_reason(session, kind_label, now_dt,
                                    _game_minutes(day, hour, minute), day)
 

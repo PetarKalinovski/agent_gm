@@ -21,8 +21,9 @@ from typing import Any
 
 from loguru import logger
 
-from src.models import Connection, Location, Player, get_session
+from src.models import Faction, Connection, Location, Player, get_session
 from src.services import perception
+from src.services import standing
 
 
 # Travel time fallbacks, in hours, when no Connection models the route
@@ -52,6 +53,31 @@ def _apply_dress_code(route: dict[str, Any], destination, player) -> dict[str, A
 
     route["requirements"] = list(route["requirements"]) + [verdict["requirement"]]
     route["reason"] = route["reason"] or "dress"
+    route["blocked"] = True
+    return route
+
+
+def _apply_standing(session, route: dict[str, Any], destination, player) -> dict[str, Any]:
+    """Rule 4: the people who hold a place refuse someone they hate.
+
+    Fires only when the destination has a `controlling_faction_id` and the
+    player's standing with it is `hostile` (pure dict math — this runs once
+    per exit per scene load; the Faction row loads only inside the fired
+    branch). Precedence: route > gate > dress > standing, via the `or`.
+    `requirements_met=True` overrides it for one move, but it is never
+    recorded as a cleared road — a pardon is a scene, not a permanent pass.
+    """
+    if player is None or route.get("reason") == "standing":
+        return route
+    faction_id = getattr(destination, "controlling_faction_id", None)
+    if not faction_id or standing.standing_for(player, faction_id) != "hostile":
+        return route
+    faction = session.get(Faction, faction_id)
+    name = faction.name if faction is not None else "the people who hold this place"
+    route["requirements"] = list(route["requirements"]) + [
+        f"{name} hold {destination.name}, and they want the player gone — nobody they hate walks in."
+    ]
+    route["reason"] = route["reason"] or "standing"
     route["blocked"] = True
     return route
 
@@ -101,7 +127,7 @@ def check_route(session, from_location_id: str | None, destination_id: str,
 
     Returns:
         {"travel_time_hours": float, "blocked": bool, "requirements": list,
-         "reason": "" | "route" | "gate" | "dress"} — `reason` tells the caller
+         "reason": "" | "route" | "gate" | "dress" | "standing"} — `reason` tells the caller
         which rule fired so it can pick the right message for the DM.
     """
     destination = session.get(Location, destination_id)
@@ -125,13 +151,12 @@ def check_route(session, from_location_id: str | None, destination_id: str,
         requirements = list(conn.requirements or [])
         if requirements and _cleared(conn, player):
             requirements = []
-        return _apply_dress_code({
+        return _apply_standing(session, _apply_dress_code({
             "travel_time_hours": conn.travel_time_hours,
             "blocked": bool(requirements),
             "requirements": requirements,
             "reason": "route" if requirements else "",
-        }, destination, player)
-
+        }, destination, player), destination, player)
     # No modeled route: entering a child or stepping back out to the parent
     # is a doorway, everything else is an unmodeled walk
     origin = session.get(Location, from_location_id)
@@ -148,21 +173,18 @@ def check_route(session, from_location_id: str | None, destination_id: str,
     entries = [c for c in entries if not (c.requirements and _cleared(c, player))]
     gate_requirements = [r for c in entries for r in (c.requirements or [])]
     if entries and gate_requirements and all(c.requirements for c in entries):
-        return _apply_dress_code({
+        return _apply_standing(session, _apply_dress_code({
             "travel_time_hours": travel_time,
             "blocked": True,
             "requirements": gate_requirements,
             "reason": "gate",
-        }, destination, player)
-
-    return _apply_dress_code({
+        }, destination, player), destination, player)
+    return _apply_standing(session, _apply_dress_code({
         "travel_time_hours": travel_time,
         "blocked": False,
         "requirements": [],
         "reason": "",
-    }, destination, player)
-
-
+    }, destination, player), destination, player)
 def travel_now(player_id: str, destination_id: str) -> dict[str, Any]:
     """Canvas travel: validate, move, advance the clock. No LLM, one path.
 

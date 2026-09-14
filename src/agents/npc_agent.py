@@ -5,7 +5,7 @@ from typing import Any, Callable
 from src.agents.core.base_agent import BaseGameAgent
 from src.core.types import AgentContext
 from src.tools.world_read import get_npc, get_npc_relationship, get_world_clock, get_available_quests_for_npc, get_world_bible, get_active_quests, get_player, get_recent_events
-from src.tools.world_write import update_npc_relationship, update_npc_mood, update_npc, activate_quest
+from src.tools.world_write import update_npc_relationship, update_npc_mood, update_npc, activate_quest, reveal_secret
 from src.tools.narration import speak, show_quest_update
 
 
@@ -60,8 +60,9 @@ def build_npc_system_prompt(npc: dict[str, Any], relationship: dict[str, Any], s
 **Your most recent exchanges with them (your durable memory — trust this even if the conversation feels new):**
 {chr(10).join(f"- {m.get('role', '?')}: {m.get('content', '')}" for m in relationship.get('recent_messages', [])) if relationship.get('recent_messages') else '- No previous exchanges'}
 
-**Your Secrets (never reveal unless trust is very high 80+):**
+**Your Secrets (yours to keep):**
 {chr(10).join(f'- {s}' for s in hidden_secrets) if hidden_secrets else '- None'}
+If you decide to tell them one, call `reveal_secret` FIRST — the engine decides whether you actually trust them enough to get the words out. If it refuses, you swallow the half-sentence and say nothing of it.
 
 **IMPORTANT Guidelines:**
 1. **Stay in character** - You are {npc['name']}, not an AI assistant
@@ -105,6 +106,7 @@ NPC_TOOLS: list[Callable] = [
     update_npc_relationship,
     update_npc_mood,
     update_npc,
+    reveal_secret,
     get_npc_relationship,
     get_npc,
     get_available_quests_for_npc,
