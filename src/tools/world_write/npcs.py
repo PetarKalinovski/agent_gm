@@ -445,7 +445,7 @@ def kill_npc(npc_id: str, cause_of_death: str = "unknown") -> dict[str, Any]:
         npc.status = "dead"
         session.commit()
 
-        return {
+        result = {
             "success": True,
             "event": "npc_death",  # Special event type for frontend
             "npc_id": npc.id,
@@ -453,6 +453,13 @@ def kill_npc(npc_id: str, cause_of_death: str = "unknown") -> dict[str, Any]:
             "cause_of_death": cause_of_death,
             "message": f"{npc.name} has died. Cause: {cause_of_death}",
         }
+
+    # Their death completes any "kill" objective aimed at them
+    from src.services import objectives as objectives_mod
+    ticked = objectives_mod.note_npc_deaths(None, [npc_id])
+    if ticked:
+        result["objectives_done"] = objectives_mod.done_lines(ticked)
+    return result
 
 
 @tool

@@ -348,7 +348,18 @@ def transfer_item(
         }
         if equipped:
             result["auto_equipped"] = equipped
-        return result
+        item_name = source_item.name
+
+    # Receiving completes an "obtain"; handing over completes a "deliver"
+    from src.services import objectives as objectives_mod
+    ticked: list = []
+    if to_type == "player":
+        ticked = objectives_mod.note_items_gained(to_id, [item_name])
+    elif from_type == "player" and to_type == "npc":
+        ticked = objectives_mod.note_item_given(from_id, to_id, item_name)
+    if ticked:
+        result["objectives_done"] = objectives_mod.done_lines(ticked)
+    return result
 
 
 @tool

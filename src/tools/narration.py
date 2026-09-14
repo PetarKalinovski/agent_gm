@@ -414,7 +414,7 @@ def show_quest_update(
     title: str,
     update_type: str,
     description: str | None = None,
-    objectives: list[str] | None = None,
+    objectives: list[Any] | None = None,
 ) -> dict[str, Any]:
     """Display a quest update notification to the player.
 
@@ -437,6 +437,9 @@ def show_quest_update(
     }
 
     style, header = type_styles.get(update_type, ("white", "📜 QUEST"))
+
+    from src.services.objectives import objective_text
+    objectives = [objective_text(o) for o in (objectives or []) if objective_text(o)]
 
     content = f"**{title}**"
     if description:

@@ -342,7 +342,9 @@ def test_campaign_menus_match_the_frozen_vocabulary():
     assert TRIGGER_TYPES == ("time", "location", "quest_status", "milestone", "after_beat")
     assert CINEMATIC_LABELS == ("none", "act_open", "revelation", "betrayal", "arrival",
                                 "countdown_expired", "finale")
-    assert BEAT_STATUSES == ("pending", "armed", "fired", "delivered", "skipped")
+    # stalled: fired, never narrated in 3 tries; parked (not claimed told) until
+    # its keywords or met_condition show up, or STALLED_SKIP_DAYS passes
+    assert BEAT_STATUSES == ("pending", "armed", "fired", "delivered", "skipped", "stalled")
     assert CAMPAIGN_STATUSES == ("pending", "active", "won", "lost", "abandoned", "failed")
 
 

@@ -47,6 +47,9 @@ class GameRenderer {
 
         // Exit/transition detection
         this.exits = [];               // Available destinations for current location
+        this.locationPosition = null;  // This location's map position (edge-arrow bearing)
+        this.lead = null;              // state.lead — the compass; markers drawn per frame
+        this._leadGfx = null;
         this.edgePushTimer = 0;        // ms spent pushing against a walkable bound
         this.edgePushThreshold = 350;  // push this long against an edge to trigger exit prompt
         this.exitPromptCooldown = 0;   // don't re-prompt immediately after dismissal
@@ -443,6 +446,7 @@ class GameRenderer {
             this.walkableBounds = data.walkable_bounds || { x_min: 5, x_max: 95, y_min: 5, y_max: 95 };
             this.obstacles = data.obstacles || [];
             this.exits = data.exits || [];
+            this.locationPosition = data.location_position || null;
             this._redrawCollisionOverlay();
 
             // Canvas-first play: door markers, scene objects, ambient barks
@@ -930,6 +934,7 @@ class GameRenderer {
         this._updateNpcWander(deltaTime);
         this._updateDoors(deltaTime);
         this._updateObjects();
+        this._updateLeadMarkers();
         this._updateBarks(deltaTime);
         if (this.combat) this._updateCombat(deltaTime);
         // A texture swap deferred past an attack/dodge lands the frame after
@@ -2233,6 +2238,97 @@ class GameRenderer {
             window.dispatchEvent(new CustomEvent('canvas-travel', {
                 detail: { exitId: best.exitId, name: best.name, locked: false },
             }));
+        }
+    }
+
+    /** The compass target (state.lead); markers are rebuilt every frame. */
+    setLead(lead) {
+        this.lead = lead || null;
+        if (!this.lead) this._clearLeadMarkers();
+    }
+
+    _clearLeadMarkers() {
+        if (!this._leadGfx) return;
+        const { halo, door, arrow } = this._leadGfx;
+        halo.visible = door.visible = arrow.visible = false;
+    }
+
+    /** The compass on the canvas: an amber halo under the lead's NPC when
+     *  they are in this scene, a glow + chevron on the door that is the next
+     *  hop toward the target, or a rim arrow along the map bearing when the
+     *  hop has no door here. Hidden in combat, cinematics, editor, death. */
+    _updateLeadMarkers() {
+        const lead = this.lead;
+        const show = lead && !this.combat && !this.cine && !this.editorMode && !this.playerDead && this.sceneReady;
+        if (!show) { this._clearLeadMarkers(); return; }
+        if (!this._leadGfx) {
+            const halo = new PIXI.Graphics();
+            const door = new PIXI.Graphics();
+            const arrow = new PIXI.Graphics();
+            this._leadGfx = { halo, door, arrow };
+        }
+        const { halo, door, arrow } = this._leadGfx;
+        // _buildDoors() empties doorLayer on every scene load — re-attach
+        if (halo.parent !== this.doorLayer) this.doorLayer.addChild(halo);
+        if (door.parent !== this.doorLayer) this.doorLayer.addChild(door);
+        if (arrow.parent !== this.uiLayer) this.uiLayer.addChild(arrow);
+
+        const now = performance.now();
+        const pulse = 0.5 + 0.5 * Math.sin(now * 0.004);
+        const amber = 0xf59e0b;
+        const target = lead.target || {};
+
+        // 1. The person, if they are here
+        halo.clear();
+        halo.visible = false;
+        const npc = target.type === 'npc' ? this.npcs[target.id] : null;
+        if (npc && npc.sprite && !npc.sprite.destroyed && npc.status !== 'dead') {
+            halo.visible = true;
+            halo.x = npc.sprite.x;
+            halo.y = npc.sprite.y + 2;
+            const r = 22 + 5 * pulse;
+            halo.ellipse(0, 0, r, r * 0.38);
+            halo.stroke({ color: amber, width: 2, alpha: 0.5 + 0.4 * pulse });
+            halo.ellipse(0, 0, r * 0.6, r * 0.6 * 0.38);
+            halo.fill({ color: amber, alpha: 0.1 + 0.08 * pulse });
+        }
+
+        // 2. The way there
+        door.clear();
+        door.visible = false;
+        arrow.clear();
+        arrow.visible = false;
+        const hop = lead.route_next_hop_location_id;
+        if (hop && !target.here) {
+            const d = this.doors.find(x => x.exitId === hop);
+            if (d && d.g && !d.g.destroyed) {
+                door.visible = true;
+                door.x = d.g.x;
+                door.y = d.g.y;
+                door.ellipse(0, 4, 30 + 6 * pulse, 11 + 2 * pulse);
+                door.stroke({ color: amber, width: 2, alpha: 0.45 + 0.45 * pulse });
+                const cy = -34 - 4 * pulse;
+                door.moveTo(-7, cy - 6); door.lineTo(0, cy); door.lineTo(7, cy - 6);
+                door.stroke({ color: amber, width: 2.5, alpha: 0.9 });
+                if (d.label && !d.label.destroyed) d.label.alpha = 1;
+            } else {
+                const ex = (this.exits || []).find(x => x && x.id === hop);
+                const pos = ex && ex.position, here = this.locationPosition;
+                if (pos && here && Number.isFinite(pos.x) && Number.isFinite(pos.y)
+                        && Number.isFinite(here.x) && Number.isFinite(here.y)) {
+                    const ang = Math.atan2(pos.y - here.y, pos.x - here.x);
+                    const W = this.app.screen.width, H = this.app.screen.height;
+                    const rad = Math.min(W, H) * 0.42;
+                    arrow.visible = true;
+                    arrow.x = W / 2 + Math.cos(ang) * rad;
+                    arrow.y = H / 2 + Math.sin(ang) * rad;
+                    arrow.rotation = ang;
+                    const k = 10 + 3 * pulse;
+                    arrow.moveTo(-k, -k * 0.7); arrow.lineTo(k, 0); arrow.lineTo(-k, k * 0.7);
+                    arrow.closePath();
+                    arrow.fill({ color: amber, alpha: 0.5 + 0.4 * pulse });
+                }
+            }
         }
     }
 

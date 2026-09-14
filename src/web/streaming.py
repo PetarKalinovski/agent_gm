@@ -289,6 +289,19 @@ class ToolUsageTracker:
                     "boss": output_data.get("boss"),
                 })
 
+            # An objective the engine ticked off (rides tool results as an
+            # `events` item; engine paths outside a turn are drained server-side)
+            elif event == "objective_done":
+                self._notifications.append({
+                    "type": "objective_done",
+                    "quest_id": output_data.get("quest_id"),
+                    "quest_title": output_data.get("quest_title"),
+                    "objective_id": output_data.get("objective_id"),
+                    "text": output_data.get("text"),
+                    "kind": output_data.get("kind"),
+                    "all_done": bool(output_data.get("all_done")),
+                })
+
             # Skill check outcome (roll_check) — labels only, never numbers
             elif event == "check_result":
                 self._notifications.append({

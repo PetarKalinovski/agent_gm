@@ -453,6 +453,18 @@ def execute_ops(session, ops: list | None, campaign: Campaign, player,
                     player_visible=True, narrated_to_player=True,
                 ))
                 applied.append(f"{npc.name} is dead")
+                # A beat-driven death still ticks a "kill" objective — inside
+                # this transaction, published as soon as the caller commits
+                try:
+                    from src.services import objectives as objectives_mod
+                    ticked = objectives_mod.tick_in_session(
+                        session, player, objectives_mod.deaths_matcher([npc.id])
+                    )
+                    if ticked:
+                        applied.extend(objectives_mod.done_lines(ticked))
+                        objectives_mod.publish(getattr(player, "id", None), ticked)
+                except Exception as e:
+                    logger.warning(f"objective tick on campaign death skipped: {e}")
             else:
                 applied.append(f"{npc.name} is now {status}")
             exempt.add("consequence")
@@ -1436,6 +1448,31 @@ def persist_campaign(player_id: str, payload: dict[str, Any],
         return {"status": "active", "campaign_id": campaign.id, "beats": len(beats)}
 
 
+def _clean_lead_target(session, raw: Any) -> dict[str, Any] | None:
+    """{"type", "id"} only when the id resolves; a lead with no marker still
+    beats no lead, so an unresolvable target drops silently (text survives)."""
+    if not isinstance(raw, dict):
+        return None
+    kind = str(raw.get("type") or "").strip().lower()
+    ident = str(raw.get("id") or raw.get("npc_id") or raw.get("location_id") or "").strip()
+    if not ident:
+        return None
+    if kind == "npc" or (not kind and raw.get("npc_id")):
+        row = _get(session, NPC, ident)
+        if row is None:
+            from src.web.tool_rescue import resolve_npc
+            row = resolve_npc(session, ident, None)
+        return {"type": "npc", "id": row.id} if row is not None else None
+    if kind == "location" or (not kind and raw.get("location_id")):
+        row = _get(session, Location, ident)
+        if row is None:
+            wanted = ident.lower()
+            rows = [r for r in session.query(Location).all() if (r.name or "").lower() == wanted]
+            row = rows[0] if rows else None
+        return {"type": "location", "id": row.id} if row is not None else None
+    return None
+
+
 def _build_beats(session, campaign: Campaign, raw_beats: list,
                  truth_ids: set[str]) -> tuple[list[StoryBeat], dict[str, str]]:
     """Validate and construct the beat rows. Returns (beats, key -> beat id)."""
@@ -1471,6 +1508,8 @@ def _build_beats(session, campaign: Campaign, raw_beats: list,
             fixed_truths=[str(t) for t in (entry.get("fixed_truths") or [])],
             reveals_truth_ids=[str(t) for t in (entry.get("reveals_truth_ids") or []) if str(t) in truth_ids],
             delivery_keywords=[str(k) for k in (entry.get("delivery_keywords") or []) if str(k).strip()],
+            lead=(str(entry["lead"]).strip()[:200] or None) if entry.get("lead") else None,
+            lead_target=_clean_lead_target(session, entry.get("lead_target")),
             trigger_type=trigger_type,
             trigger_data=entry.get("trigger_data") if isinstance(entry.get("trigger_data"), dict) else {},
             clock_label=(str(entry["clock_label"])[:120] if entry.get("clock_label") else None),

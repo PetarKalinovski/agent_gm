@@ -435,6 +435,15 @@ def prompt_npc_agent(player_id: str, npc_id: str, player_input: str, is_first_in
         "conversation_ended": conversation_ended,
         "note": "This dialogue was ALREADY shown to the player. Do not repeat or paraphrase it — react to it or move the scene forward.",
     }
+    # Talking to them completes any "talk_to" objective aimed at this NPC
+    try:
+        from src.services import objectives as objectives_mod
+        ticked = objectives_mod.note_conversation(player_id, npc_id)
+        if ticked:
+            result["objectives_done"] = objectives_mod.done_lines(ticked)
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).debug(f"objective tick after conversation skipped: {e}")
     # Lines the NPC wrote as prose instead of speaking are voiced anyway —
     # the tracker fans `events` out as real speech events (voice, portrait,
     # bubble, chat line). Code enforces what the prompt asks for.

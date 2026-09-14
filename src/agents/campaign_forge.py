@@ -71,6 +71,12 @@ happens if they do nothing?"
 6. CONCRETE, NOT ATMOSPHERIC. "Tension rises in the district" is not a beat. "Kestrel
    hangs the kennel master from the market gate and leaves your name carved beside
    him" is a beat.
+7. EVERY BEAT THE PLAYER MUST REACH CARRIES A lead. A beat with a location or
+   quest_status trigger is a beat the player has to walk toward, and the ONLY way
+   they can see the road is the lead on their screen. Every act-1 beat and at
+   least half of all beats carry a lead and a lead_target (an npc or a location
+   from the roster). Leads are written for the player: no directives, no truths,
+   no names the player has not met unless the lead is how they meet them.
 
 ## STRUCTURE
 
@@ -149,6 +155,8 @@ Return ONLY a JSON object, no prose, no code fence:
       "beat_type": "revelation",
       "title": "Short scene title",
       "directive": "2-4 sentences addressed to the Dungeon Master, second person: what MUST happen in the scene. Name who acts, what they do, what the player sees.",
+      "lead": "ONE short second-person line for the PLAYER'S screen, not the DM: what to DO next to reach this beat. Spoiler-safe — it may name a place or a person and a question, never the answer. 'Ask around the Drowned Lantern about the howling.' null for beats that fire without the player.",
+      "lead_target": {"type": "npc", "id": "<roster id of the person the lead points at>"},
       "fixed_truths": ["Statements this beat makes true."],
       "reveals_truth_ids": ["truth_villain"],
       "delivery_keywords": ["Kestrel", "kennel", "brand"],

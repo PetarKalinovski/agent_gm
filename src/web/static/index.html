@@ -471,6 +471,34 @@
         .hud-chip.clickable { cursor: pointer; }
         .hud-chip.clickable:hover { background: rgba(255, 255, 255, 0.16); }
 
+        /* Lead tracker — sits under the HUD row, never intercepts the canvas */
+        .lead-tracker {
+            position: absolute;
+            top: 58px;
+            left: 10px;
+            z-index: 9;
+            display: flex;
+            align-items: baseline;
+            gap: 0.45rem;
+            max-width: min(62%, 520px);
+            padding: 0.35rem 0.7rem;
+            background: rgba(0, 0, 0, 0.62);
+            border-left: 3px solid #f59e0b;
+            border-radius: 6px;
+            color: var(--text-primary);
+            font-size: 0.82rem;
+            line-height: 1.3;
+            pointer-events: none;
+        }
+        .lead-tracker.hidden, .lead-tracker.combat-hidden { display: none; }
+        .lead-tracker .lead-diamond { color: #f59e0b; font-size: 0.75rem; }
+        .lead-tracker .lead-quest { color: var(--text-secondary); font-size: 0.7rem; margin-left: 0.3rem; white-space: nowrap; }
+        .lead-tracker.pulse { animation: leadPulse 0.9s ease-out 1; }
+        @keyframes leadPulse {
+            0% { transform: translateX(-8px); opacity: 0.2; }
+            100% { transform: none; opacity: 1; }
+        }
+
         /* Authoritative NPC dialogue line (matches the TTS exactly) */
         .speech-line {
             display: flex; gap: 10px; align-items: flex-start;
@@ -1390,6 +1418,11 @@
             <span class="hud-chip clickable" id="hud-help-chip" title="Controls">?</span>
         </div>
         <div class="hud-panel hidden" id="hud-panel"></div>
+        <!-- The compass: one code-chosen next step (state.lead). The canvas
+             marks its target; this line names it. -->
+        <div id="lead-tracker" class="lead-tracker hidden">
+            <span class="lead-diamond">&#9670;</span><span class="lead-text"></span><span class="lead-quest"></span>
+        </div>
         <div class="controls-hint">WASD to move | Walk to an edge to travel | Click NPCs to talk</div>
         <div id="travel-overlay">
             <div class="loader"></div>
@@ -1857,8 +1890,8 @@
     <!-- ?v= busts browser caches — bump when these files change, or stale
          clients keep running old code (live bug: combat frames never
          requested because a cached game.js predated them) -->
-    <script src="/static/js/game.js?v=20260911c"></script>
-    <script src="/static/js/audio.js?v=20260911c"></script>
+    <script src="/static/js/game.js?v=20260914a"></script>
+    <script src="/static/js/audio.js?v=20260914a"></script>
 
     <script>
         // State
@@ -2360,8 +2393,36 @@
                 : '100%';
 
             applyCampaignChips(state.campaign);
+            applyLead(state.lead);
 
             renderHudPanel();
+        }
+
+        /** The tracker line under the HUD + the canvas markers, from state.lead. */
+        let lastLeadText = null;
+        function applyLead(lead) {
+            const el = document.getElementById('lead-tracker');
+            if (!el) return;
+            if (!lead || !lead.text) {
+                el.classList.add('hidden');
+                lastLeadText = null;
+                if (game && game.setLead) game.setLead(null);
+                return;
+            }
+            el.querySelector('.lead-text').textContent = lead.text;
+            el.querySelector('.lead-quest').textContent =
+                lead.source === 'quest' && lead.quest_title ? lead.quest_title
+                : lead.source === 'beat' ? 'the story' : '';
+            const overlay = document.querySelector('.game-overlay');
+            if (overlay) el.style.top = (overlay.offsetTop + overlay.offsetHeight + 6) + 'px';
+            el.classList.remove('hidden');
+            if (lead.text !== lastLeadText) {
+                el.classList.remove('pulse');
+                void el.offsetWidth;
+                el.classList.add('pulse');
+                lastLeadText = lead.text;
+            }
+            if (game && game.setLead) game.setLead(lead);
         }
 
         /** A quiet nudge on the XP bar — growth is felt, never counted in chat. */
@@ -2444,7 +2505,11 @@
                         `<div class="hud-item" style="flex-direction:column;align-items:flex-start;">` +
                         `<span>${escapeHtml(q.title)}</span>` +
                         (q.objectives && q.objectives.length
-                            ? `<span class="muted">${q.objectives.map(o => escapeHtml(String(o))).join(' &middot; ')}</span>`
+                            ? `<span class="muted" style="line-height:1.5">${q.objectives.map(o =>
+                                (o && typeof o === 'object')
+                                    ? `<span style="${o.done ? 'opacity:.55;text-decoration:line-through' : ''}">${o.done ? '&#10003;' : '&#9702;'} ${escapeHtml(o.text || '')}</span>`
+                                    : `<span>&#9702; ${escapeHtml(String(o))}</span>`
+                              ).join('<br>')}</span>`
                             : '') +
                         `</div>`
                       ).join('')
@@ -2602,6 +2667,22 @@
         document.getElementById('hud-help-chip').addEventListener('click', showControlsHint);
 
         /** Slide-in toast over the game canvas (quest banners, big events). */
+        // Objectives the ENGINE ticked off — one toast each, and the quest
+        // popover re-renders from the state that rode along with them
+        function showObjectivesDone(list) {
+            (list || []).forEach(o => {
+                if (!o || !o.text) return;
+                showToast(`&#10003; ${escapeHtml(o.text)}` +
+                    (o.quest_title ? ` <span style="opacity:.7">&middot; ${escapeHtml(o.quest_title)}</span>` : ''), 'quest');
+                if (o.all_done && o.quest_title) {
+                    setTimeout(() => showToast(`&#10022; ${escapeHtml(o.quest_title)}: all objectives met`, 'quest'), 900);
+                }
+            });
+        }
+        function objectiveText(o) {
+            return (o && typeof o === 'object') ? String(o.text || '') : String(o || '');
+        }
+
         function showToast(html, kind = '', holdMs = 4200) {
             let stack = document.getElementById('toast-stack');
             if (!stack) {
@@ -3025,6 +3106,7 @@
                 }
                 if (!data.success) return;
                 if (data.state) applyPlayerState(data.state);
+                showObjectivesDone(data.objectives_done);
                 await handleLocationChange(data.destination_id, data.destination_name);
                 showToast(`${esc(data.destination_name)} &middot; ${data.minutes} min`, '', 2200);
             } catch (err) {
@@ -3052,6 +3134,7 @@
                 }
                 if (data.spent || !data.success) return;
                 if (data.state) applyPlayerState(data.state);   // floaters + HUD, free
+                showObjectivesDone(data.objectives_done);
                 if (data.consumed && game && game.markObjectConsumed) {
                     game.markObjectConsumed(objectId);
                 }
@@ -3107,6 +3190,8 @@
         let combatInputLock = false;
         window.addEventListener('combat-active', (e) => {
             combatInputLock = !!(e.detail && e.detail.active);
+            const tracker = document.getElementById('lead-tracker');
+            if (tracker) tracker.classList.toggle('combat-hidden', combatInputLock);
             if (combatInputLock) {
                 userInput.disabled = true;
                 userInput.placeholder = '⚔ Fight! Space dodge · J strike (hold: heavy) · K parry · Q potion';
@@ -3152,6 +3237,7 @@
                     if (progression.leveled_up) showLevelUp(progression);
                 }
                 if (data.state) applyPlayerState(data.state);
+                showObjectivesDone(data.objectives_done);
                 if (data.dm_message) {
                     const label = outcome === 'victory' ? '⚔ The fight is over.'
                         : outcome === 'defeat' ? '⚔ You fall.'
@@ -3422,6 +3508,8 @@
                                             messageEl.insertBefore(line, contentEl);
                                             queueChatRender();
                                         }
+                                    } else if (payload.type === 'objective_done') {
+                                        showObjectivesDone([payload]);
                                     } else if (payload.type === 'quest_activated') {
                                         showToast(`&#10022; New Quest: ${escapeHtml(payload.title || '')}`, 'quest');
                                     } else if (payload.type === 'quest_completed') {
@@ -4862,7 +4950,7 @@
                 </div>
                 <div class="form-group">
                     <label>Objectives (one per line)</label>
-                    <textarea id="edit-quest-objectives" style="min-height: 100px;">${(quest.objectives || []).join('\n')}</textarea>
+                    <textarea id="edit-quest-objectives" style="min-height: 100px;">${(quest.objectives || []).map(objectiveText).join('\n')}</textarea>
                 </div>
                 <div class="form-group">
                     <label>Rewards (JSON: {currency, items, reputation})</label>

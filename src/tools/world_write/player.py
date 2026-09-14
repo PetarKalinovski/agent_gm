@@ -115,12 +115,18 @@ def move_player(player_id: str, destination_id: str, requirements_met: bool = Fa
     # Stand them just inside the door they came through (never blocks a move)
     place_at_arrival_door(player_id, destination_id, origin_id)
 
-    return {
+    result: dict[str, Any] = {
         "success": True,
         "destination": destination_name,
         "travel_time_hours": travel_time,
         "reminder": f"Advance time by ~{travel_time}h and describe the new location.",
     }
+    # Arriving completes any "go_to" objective aimed here — code, not prose
+    from src.services import objectives as objectives_mod
+    ticked = objectives_mod.note_arrival(player_id, destination_id)
+    if ticked:
+        result["objectives_done"] = objectives_mod.done_lines(ticked)
+    return result
 
 
 @tool
@@ -326,7 +332,13 @@ def add_to_inventory(
         }
         if auto:
             result["auto_equipped"] = auto.get("item_name")
-        return result
+
+    # Getting it completes any "obtain" objective that names it
+    from src.services import objectives as objectives_mod
+    ticked = objectives_mod.note_items_gained(player_id, [item_name])
+    if ticked:
+        result["objectives_done"] = objectives_mod.done_lines(ticked)
+    return result
 
 
 @tool

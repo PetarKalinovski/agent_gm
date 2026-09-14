@@ -1,5 +1,7 @@
 """Quest write tools."""
 
+from typing import Any
+
 from strands import tool
 
 from src.models.base import get_session
@@ -14,6 +16,7 @@ from src.services.progression import (
     xp_for_quest,
 )
 from src.tools.world_write.player import _normalize_inventory
+from src.services import objectives as objectives_mod
 
 
 def _get_player(session, player_id: str | None = None):
@@ -142,33 +145,49 @@ def _complete_quest(session, quest, player) -> dict:
 def create_quest(
     title: str,
     description: str,
-    objectives: list[str],
+    objectives: list[Any],
     rewards: dict | None = None,
     assigned_by_npc_id: str | None = None,
     start_active: bool = False,
+    scale: str | None = None,
 ) -> dict:
     """Create a new quest.
 
     Args:
         title: Quest title (e.g., "Find the Lost Artifact").
         description: Full description of what needs to be done.
-        objectives: List of objectives to complete.
+        objectives: List of objective objects. Each is
+            {"text": "Find Captain Coldiron at the Watch House",
+             "kind": "talk_to", "target_id": "<the real npc id>"}
+            kind is one of "go_to" (target_id = a location id), "talk_to"
+            (an npc id), "obtain" (item_name), "kill" (an npc id), "deliver"
+            (item_name + an npc id), "custom" (no target; you mark it done).
+            The engine completes every kind but "custom" when it actually
+            happens, and the first objective's target puts a marker on the
+            player's screen — give it a real id. Plain strings still work
+            (they become "custom").
         rewards: Optional dict of rewards (e.g., {"gold": 100, "items": ["sword"]}).
         assigned_by_npc_id: Optional NPC who can assign this quest.
         start_active: If True, quest starts active. If False (default), quest is
                       not_started and must be activated when NPC offers it.
+        scale: How big this is — "errand", "job", "mission" or "saga". The
+            engine pays growth from the word; leave it out for an ordinary job.
 
     Returns:
         The created quest data.
     """
     with get_session() as session:
+        scale_label = str(scale or "").strip().lower() or None
+        if scale_label not in (None, "errand", "job", "mission", "saga"):
+            scale_label = None
         quest = Quest(
             title=title,
             description=description,
-            objectives=objectives,
+            objectives=objectives_mod.normalize_objectives(objectives, session=session),
             rewards=rewards or {},
             assigned_by_npc_id=assigned_by_npc_id,
             status=QuestStatus.ACTIVE if start_active else QuestStatus.NOT_STARTED,
+            scale=scale_label,
         )
         session.add(quest)
 
@@ -183,10 +202,18 @@ def create_quest(
             "id": quest.id,
             "title": quest.title,
             "status": quest.status,
+            "objectives": objectives_mod.objectives_public(quest),
             "message": f"Quest '{title}' created successfully",
         }
         if start_active:
             result["event"] = "quest_activated"
+        untargeted = [o["text"] for o in result["objectives"]
+                      if o["kind"] != "custom" and not o["target_id"]]
+        if untargeted:
+            result["warning"] = (
+                "These objectives name no real target, so the player's screen cannot "
+                f"point at them: {untargeted}. Pass a real npc/location id next time."
+            )
         return result
 
 
@@ -271,6 +298,11 @@ def activate_quest(quest_id: str) -> dict:
             return {"error": f"Quest '{quest.title}' is already {quest.status}"}
 
         quest.status = QuestStatus.ACTIVE
+        # Entering play repairs a legacy seed: strings become objects, names
+        # become ids, so the tracker has something to point at
+        quest.objectives = objectives_mod.normalize_objectives(
+            quest.objectives, previous=quest.objectives, session=session
+        )
 
         player = _get_player(session)
         if player:
@@ -282,7 +314,7 @@ def activate_quest(quest_id: str) -> dict:
             "id": quest.id,
             "title": quest.title,
             "description": quest.description,
-            "objectives": quest.objectives,
+            "objectives": objectives_mod.objectives_public(quest),
             "rewards": quest.rewards,
             "status": quest.status,
             "event": "quest_activated",
@@ -291,15 +323,19 @@ def activate_quest(quest_id: str) -> dict:
 
 
 @tool
-def update_quest_objectives(quest_id: str, objectives: list[str]) -> dict:
-    """Update a quest's objectives (e.g., mark some as done).
+def update_quest_objectives(quest_id: str, objectives: list[Any]) -> dict:
+    """Add, reword, or mark a "custom" objective done. The engine completes
+    every other kind itself when it happens — you cannot un-complete one.
 
     Args:
         quest_id: The quest's ID.
-        objectives: Updated list of objectives (use strikethrough or [DONE] prefix for completed ones).
+        objectives: The full list, same shape as create_quest: objects with
+            "text", "kind", "target_id"/"item_name", and "done": true for a
+            custom objective the player has just satisfied. Plain strings
+            still work.
 
     Returns:
-        Updated quest data or error.
+        The merged objectives and whether every one is now met.
     """
     with get_session() as session:
         quest = session.query(Quest).filter(Quest.id == quest_id).first()
@@ -307,12 +343,22 @@ def update_quest_objectives(quest_id: str, objectives: list[str]) -> dict:
         if not quest:
             return {"error": f"Quest {quest_id} not found"}
 
-        quest.objectives = objectives
+        merged = objectives_mod.normalize_objectives(
+            objectives, previous=quest.objectives, session=session
+        )
+        quest.objectives = merged
         session.commit()
 
-        return {
+        result = {
             "id": quest.id,
             "title": quest.title,
-            "objectives": quest.objectives,
+            "objectives": objectives_mod.objectives_public(quest),
+            "all_done": objectives_mod.all_done(merged),
             "message": f"Quest '{quest.title}' objectives updated",
         }
+        if result["all_done"] and quest.status == QuestStatus.ACTIVE:
+            result["message"] += (
+                ". Every objective is met — if the quest is finished, call "
+                "update_quest_status(status=\"completed\")."
+            )
+        return result

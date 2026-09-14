@@ -25,7 +25,7 @@ MAX_PENDING = 12
 # Every kind the ledger understands. `omitted` is the internal cap marker.
 KINDS = (
     "move", "take", "read", "open", "search", "combat",
-    "equip", "consume", "levelup",
+    "equip", "consume", "levelup", "objective",
 )
 
 # player_id -> list of {"kind", "summary", "tools", ...extra}
@@ -47,7 +47,15 @@ _BULLET_LABELS = {
     "read": "Read",
     "open": "Opened",
     "search": "Searched",
+    "objective": "Objective met",
 }
+
+# Every objective on a quest is ticked. Completion is still the DM's call —
+# the engine never pays a quest out on its own.
+QUEST_READY_NOTE = (
+    'Every objective on "{quest}" is now met. The player has done the work. '
+    "Decide whether it is finished — if it is, call update_quest_status."
+)
 
 _HEADER = (
     "[SINCE YOUR LAST TURN the player acted on the canvas. The engine ALREADY\n"
@@ -215,6 +223,8 @@ def format_pending_actions(actions: list[dict[str, Any]]) -> str:
                 lines.append(f"- {summary}")
         elif kind in _BULLET_LABELS and summary:
             lines.append(f"- {_BULLET_LABELS[kind]}: {summary}")
+            if kind == "objective" and action.get("all_done"):
+                lines.append(f"- {QUEST_READY_NOTE.format(quest=action.get('quest_title') or 'the quest')}")
         # `combat` (and anything unknown) contributes tools but no prose
 
     if not lines:

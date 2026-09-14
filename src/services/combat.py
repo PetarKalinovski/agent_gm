@@ -489,6 +489,15 @@ def apply_combat_result(
 
     _record_combat_in_ledger(player_id, changes)
 
+    # The kills complete any "kill" objectives aimed at them (own session:
+    # the deaths are committed above)
+    dead_ids = [d.get("npc_id") for d in changes.get("npc_deaths") or [] if d.get("npc_id")]
+    if dead_ids:
+        from src.services import objectives as objectives_mod
+        ticked = objectives_mod.note_npc_deaths(player_id, dead_ids)
+        if ticked:
+            changes["objectives_done"] = ticked
+
     logger.info(f"Combat result applied: {changes}")
     return changes
 

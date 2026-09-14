@@ -29,7 +29,7 @@ CINEMATIC_LABELS = (
     "countdown_expired", "finale",
 )
 
-BEAT_STATUSES = ("pending", "armed", "fired", "delivered", "skipped")
+BEAT_STATUSES = ("pending", "armed", "fired", "delivered", "skipped", "stalled")
 
 CAMPAIGN_STATUSES = ("pending", "active", "won", "lost", "abandoned", "failed")
 
@@ -123,6 +123,13 @@ class StoryBeat(Base):
     # Short HUD countdown label, deadline beats only ("The Howl returns")
     clock_label: Mapped[str | None] = mapped_column(String(120), nullable=True)
     cinematic: Mapped[str | None] = mapped_column(String(50), nullable=True)
+
+    # The player-facing half of an unfired beat: one spoiler-safe line telling
+    # them what to DO ("Ask around the Drowned Lantern about the howling") and
+    # who/where it points at. Shown on the tracker while the beat is armed;
+    # the directive above stays sealed. NULL = the beat gives no direction.
+    lead: Mapped[str | None] = mapped_column(Text, nullable=True)
+    lead_target: Mapped[dict | None] = mapped_column(JSON, nullable=True)   # {"type": "npc"|"location", "id"}
 
     status: Mapped[str] = mapped_column(String(50), default="pending")
     variant: Mapped[str | None] = mapped_column(String(20), nullable=True)  # "met" | "missed"

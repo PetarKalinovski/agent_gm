@@ -57,6 +57,8 @@ from src.services.scene_exits import compute_exit_doors
 from src.services.scene_objects import normalize_objects, resolve_interaction
 from src.services.travel import check_route, travel_now
 from src.web import pending_actions
+from src.services import objectives as objectives_mod
+from src.services import lead as lead_mod
 from src.web.turn_filters import CodeFenceFilter, DialogueDeduper, JunkLineFilter, SentenceDeduper, speech_events_for_unspoken
 from src.web.tool_rescue import rescue_tool_calls, resolve_npc
 from src.web.turn_audit import audit_turn, format_audit_feedback
@@ -306,6 +308,15 @@ def build_player_state(player_id: str) -> dict[str, Any]:
     if str(location.get("type", "")).lower() in INDOOR_LOCATION_TYPES:
         weather = "clear"
 
+    # The compass: one code-chosen next step (quest objective, else beat lead)
+    lead = None
+    try:
+        with get_session() as db:
+            row = db.get(Player, player_id)
+            lead = lead_mod.compute_lead(db, row) if row else None
+    except Exception as e:
+        logger.debug(f"Lead unavailable: {e}")
+
     # Spoiler-free by construction — never a sealed truth or an unfired beat
     try:
         campaign = campaign_state(player_id)
@@ -333,6 +344,7 @@ def build_player_state(player_id: str) -> dict[str, Any]:
         "combat": combat,
         "appearance": appearance,
         "campaign": campaign,
+        "lead": lead,
         "weather": weather,
     }
 
@@ -561,6 +573,11 @@ def _drain_story_events(player_id: str) -> list[str]:
             frames.append(f"data: {json.dumps(event, ensure_ascii=False, default=str)}\n\n")
     except Exception as e:
         logger.warning(f"Campaign event drain failed: {e}")
+    try:
+        for event in objectives_mod.pop_pending_events(player_id):
+            frames.append(f"data: {json.dumps(event, ensure_ascii=False, default=str)}\n\n")
+    except Exception as e:
+        logger.warning(f"Objective event drain failed: {e}")
     try:
         for cine in drain_pending_cinematics(player_id):
             payload = {"type": "cinematic", **cine}
@@ -855,6 +872,9 @@ async def play_sse(request: GameRequest):
             # the complete event (self-playtests read it as a scoreboard)
             audit_warnings = []
             try:
+                # Objectives the engine ticked during THIS turn are code
+                # actions too — the DM narrating them is not a fabrication
+                code_actions = set(code_actions or ()) | objectives_mod.pop_audit_tools(request.player_id)
                 audit_warnings = audit_turn(
                     turn_text, tool_tracker.snapshot(), state_before, state_after,
                     code_actions=code_actions, campaign=campaign_audit,
@@ -1203,10 +1223,17 @@ async def get_location_assets(location_id: str, player_id: str):
                         "locked": route["blocked"],
                         "requirements": route["requirements"],
                         "door": doors.get(d["id"]),      # None past MAX_DOORS
+                        # Map bearing, so the lead's edge arrow can point at a
+                        # destination that has no door in this scene
+                        "position": d.get("position"),
                     })
+                location_position = (
+                    {"x": loc.position_x, "y": loc.position_y} if loc else None
+                )
         except Exception as e:
             logger.warning(f"Exit enrichment failed for {location_id}: {e}")
             exits = []
+            location_position = None
 
         # Convert paths to URLs
         return {
@@ -1217,6 +1244,7 @@ async def get_location_assets(location_id: str, player_id: str):
             "obstacles": assets.get("obstacles", []),
             "objects": assets.get("objects", []),
             "exits": exits,
+            "location_position": location_position,
             # What to load right now (`serving_*`, guaranteed on disk) and
             # what to aim for (`body_sig`/`action_sig`) — same shape as
             # GET /api/assets/appearance/{player_id}, saves a round-trip
@@ -1445,6 +1473,7 @@ async def combat_result(request: CombatResultRequest):
         "changes": changes,
         "dm_message": combat_outcome_message(changes),
         "state": build_player_state(request.player_id),
+        "objectives_done": objectives_mod.pop_pending_events(request.player_id),
     }
     if changes.get("progression"):
         response["progression"] = changes["progression"]
@@ -1633,7 +1662,11 @@ async def canvas_travel(request: TravelRequest):
         tools=("move_player", "advance_time"),
         minutes=result["minutes"], first_visit=result["first_visit"],
     )
-    return {"success": True, **result, "state": build_player_state(request.player_id)}
+    return {
+        "success": True, **result,
+        "state": build_player_state(request.player_id),
+        "objectives_done": objectives_mod.pop_pending_events(request.player_id),
+    }
 
 
 # HTTP status for each way an interaction can refuse
@@ -1678,7 +1711,11 @@ async def canvas_interact(request: InteractRequest):
         request.player_id, result["kind"], _interact_summary(result),
         tools=("add_to_inventory",) if items else (),
     )
-    return {**result, "state": build_player_state(request.player_id)}
+    return {
+        **result,
+        "state": build_player_state(request.player_id),
+        "objectives_done": objectives_mod.pop_pending_events(request.player_id),
+    }
 
 
 # Poll cadence for the client: a settled pool, and a shorter retry while one
@@ -2597,7 +2634,7 @@ async def get_quest_detail(quest_id: str):
             "title": quest.title,
             "description": quest.description,
             "status": quest.status,
-            "objectives": quest.objectives,
+            "objectives": objectives_mod.objectives_public(quest),
             "rewards": quest.rewards,
             "assigned_by_npc_id": quest.assigned_by_npc_id,
         }
@@ -2622,7 +2659,9 @@ async def update_quest(quest_id: str, update: QuestUpdate):
         if update.status is not None:
             quest.status = update.status
         if update.objectives is not None:
-            quest.objectives = update.objectives
+            quest.objectives = objectives_mod.normalize_objectives(
+                update.objectives, previous=quest.objectives, session=db
+            )
         if update.rewards is not None:
             quest.rewards = update.rewards
         if update.assigned_by_npc_id is not None:
@@ -2648,7 +2687,7 @@ async def get_all_quests():
                 "description": q.description,
                 "status": q.status,
                 "assigned_by_npc_id": q.assigned_by_npc_id,
-                "objectives": q.objectives,
+                "objectives": objectives_mod.objectives_public(q),
                 "rewards": q.rewards,
             }
             for q in quests
@@ -2687,7 +2726,7 @@ async def create_quest(data: QuestCreate):
             id=str(uuid.uuid4()),
             title=data.title,
             description=data.description,
-            objectives=data.objectives,
+            objectives=objectives_mod.normalize_objectives(data.objectives, session=db),
             assigned_by_npc_id=data.assigned_by_npc_id,
             status=quest_status,
             rewards=data.rewards,

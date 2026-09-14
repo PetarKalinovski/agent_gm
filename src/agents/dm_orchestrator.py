@@ -2,7 +2,6 @@
 
 from typing import Any, Callable
 
-from strands_tools import journal
 
 from src.agents.core.base_agent import BaseGameAgent
 from src.core.types import AgentContext
@@ -112,7 +111,7 @@ You are not a passive responder. You are a storyteller with a plan. Before every
    - The story should find the player, not wait for the player to find it — but not in every single response. Quiet moments are what make the loud ones land.
 
 3. **Manage pacing** through the tension level — it controls how often the story intrudes:
-   - **low**: Peaceful exploration, character building, world discovery. Let scenes breathe. At most a distant hint or rumor every few turns — no interruptions.
+   - **low**: Peaceful exploration, character building, world discovery. Let scenes breathe. At most a distant hint or rumor every few turns — no interruptions. But the player must always be able to SEE one concrete next thing: that is the lead, and a lead is not an interruption.
    - **rising**: Hints, rumors, minor incidents woven into roughly every other response. Something is coming.
    - **high**: Active danger, time pressure, difficult choices. Pressure in most responses.
    - **climax**: The arc's pivotal moment. Maximum stakes, every response drives it.
@@ -298,15 +297,26 @@ Never default to success. For every consequential action, weigh:
 
 Your goal is to weave the player's inputs into a seamless, living story where the world moves with or without them.
 
-### JOURNAL USAGE
-Use the `journal` tool to log important narrative developments, world changes, and player progress. Track significant events, NPC relationship shifts, new locations discovered, and major plot developments. Keep journal entries concise but meaningful for future reference and continuity.
+### QUEST TRACKING (objectives are structured; the ENGINE ticks them off)
 
-### QUEST TRACKING
-- When NPCs offer tasks or the player takes on objectives, use `create_quest`, then `activate_quest` once the player accepts.
-- Track quest progress naturally through play - use `update_quest_objectives` as objectives are completed and `show_quest_update` to inform the player.
-- Remind the player of relevant active quests when appropriate (e.g., when they encounter a quest-related NPC or location).
-- Don't spam quest updates - weave them into narration.
+An objective is an object, not a sentence:
+  {"text": "Find Captain Coldiron at the Watch House", "kind": "talk_to", "target_id": "<the real npc id>"}
+kind is one of "go_to" (target_id = a location id) · "talk_to" (an npc id) · "obtain" (item_name) ·
+"kill" (an npc id) · "deliver" (item_name + an npc id) · "custom" (no target — you mark it done yourself).
+
+- When NPCs offer tasks or the player takes on objectives, use `create_quest`, then `activate_quest` once the player accepts. Authored quests already exist for many NPCs: check `get_available_quests_for_npc` before inventing one.
+- ALWAYS give the first objective a real target_id read from the world. That id is what puts a marker on the player's screen and a line under their location chip. An objective with no target is a quest the player cannot see how to start.
+- The engine completes objectives when they actually happen — they arrive, they talk, they pick it up, it dies. You are told in "SINCE YOUR LAST TURN" and in the tool result. Do NOT call `update_quest_objectives` for those; it already happened.
+- `update_quest_objectives` is for adding, rewording, or marking a "custom" objective done ("done": true). You can never un-complete one: that is the engine's to give.
+- When every objective is met you are TOLD so. That is not completion — you still decide, and you still call `update_quest_status` to finish it (rewards and growth are paid then).
+- Don't spam quest updates — weave them into narration. `show_quest_update` is for the moment a quest is given or resolved, not every tick.
 - **Quests can fail.** If the player ignores time-sensitive objectives, update the quest status to "failed" and narrate the consequences.
+
+### THE PLAYER'S LEAD
+Your context carries a [PLAYER'S LEAD] block. That exact sentence is on the player's screen right now, with a marker on the canvas pointing at its target.
+- Never contradict it and never tell them to do something else instead. Other threads can exist beside it; the lead is the one they can see.
+- When they follow it, let it pay off in the same response — the person is there, the place has what it promised, the thing they took matters.
+- If the block says the lead is NONE, the player has nothing to do and knows it. Fix that THIS TURN: offer work through someone present, activate an authored quest, or create one whose first objective names a real npc or location id.
 
 ### WORLD EVENTS
 Use `create_event` to record significant things that happen in the world:
@@ -390,7 +400,6 @@ DM_TOOLS: list[Callable] = [
     prompt_creator_agent,
     prompt_npc_agent,
     # Journal tool
-    journal,
 ]
 
 
@@ -482,9 +491,30 @@ class DMOrchestrator(BaseGameAgent):
             for i in inventory[:15]
         ) or 'Empty'
 
-        quest_names = ', '.join(
-            q.get('title', '?') for q in (quests or []) if isinstance(q, dict)
-        ) or 'None'
+        # Objectives, not titles: the DM sees what the tracker shows (✓ done /
+        # ◦ open), and the lead block below names the one on the screen
+        quest_lines = []
+        for q in (quests or []):
+            if not isinstance(q, dict):
+                continue
+            marks = ' · '.join(
+                ('✓ ' if o.get('done') else '◦ ') + str(o.get('text') or '')
+                for o in (q.get('objectives') or []) if isinstance(o, dict)
+            )
+            quest_lines.append(f"  · {q.get('title', '?')}" + (f" — {marks}" if marks else ""))
+        quest_names = ("\n" + "\n".join(quest_lines)) if quest_lines else 'None'
+
+        from src.models import Player as _Player, get_session as _get_session
+        from src.services.lead import compute_lead, format_lead_context
+        try:
+            with _get_session() as _session:
+                lead_block = format_lead_context(
+                    compute_lead(_session, _session.get(_Player, self.context.player_id))
+                )
+        except Exception as e:  # never let the compass cost the turn
+            import logging
+            logging.getLogger(__name__).warning(f"lead context unavailable: {e}")
+            lead_block = ""
 
         # `get_player` renders these through progression.equipped_labels, so the
         # DM never has to call a tool to know what the character is holding
@@ -524,6 +554,7 @@ class DMOrchestrator(BaseGameAgent):
 - Player carries: {gear}
 {appearance}- Player inventory: {item_names}
 - Active quests: {quest_names}
+{lead_block}
 {briefings}
 
 Player says: {player_input}"""

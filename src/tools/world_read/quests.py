@@ -4,6 +4,7 @@ from strands import tool
 
 from src.models.base import get_session
 from src.models.quests import Quest, QuestStatus
+from src.services.objectives import objectives_public
 
 
 @tool
@@ -23,7 +24,7 @@ def get_active_quests() -> list[dict]:
                 "id": q.id,
                 "title": q.title,
                 "description": q.description,
-                "objectives": q.objectives,
+                "objectives": objectives_public(q),
                 "rewards": q.rewards,
                 "assigned_by_npc_id": q.assigned_by_npc_id,
             }
@@ -54,7 +55,7 @@ def get_available_quests_for_npc(npc_id: str) -> list[dict]:
                 "id": q.id,
                 "title": q.title,
                 "description": q.description,
-                "objectives": q.objectives,
+                "objectives": objectives_public(q),
                 "rewards": q.rewards,
             }
             for q in quests
@@ -82,7 +83,7 @@ def get_quest(quest_id: str) -> dict:
             "title": quest.title,
             "description": quest.description,
             "status": quest.status,
-            "objectives": quest.objectives,
+            "objectives": objectives_public(quest),
             "rewards": quest.rewards,
             "assigned_by_npc_id": quest.assigned_by_npc_id,
         }
@@ -104,7 +105,7 @@ def get_all_quests() -> list[dict]:
                 "title": q.title,
                 "description": q.description,
                 "status": q.status,
-                "objectives": q.objectives,
+                "objectives": objectives_public(q),
                 "rewards": q.rewards,
                 "assigned_by_npc_id": q.assigned_by_npc_id,
             }
