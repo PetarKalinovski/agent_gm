@@ -110,6 +110,9 @@ def rest_now(player_id: str, *, pay: bool = True) -> dict[str, Any]:
         if price:
             player.currency = purse - price
         player.health_status = after
+        # The wounded of the party are back on their feet by morning
+        from src.services import party as party_mod
+        party_healed = party_mod.heal(session, player)
         clock.advance(hours)
         day, hour, time_of_day = clock.day, clock.hour, clock.get_time_of_day()
         location_name = location.name
@@ -132,6 +135,7 @@ def rest_now(player_id: str, *, pay: bool = True) -> dict[str, Any]:
         + (f" for {price} coin" if price else "")
         + f". Day {day}, first light."
         + (f" You wake {after.replace('_', ' ')}." if healed else "")
+        + (f" {', '.join(party_healed)} {'is' if len(party_healed) == 1 else 'are'} on their feet again." if party_healed else "")
     )
     result = {
         "success": True,
@@ -147,13 +151,15 @@ def rest_now(player_id: str, *, pay: bool = True) -> dict[str, Any]:
         "time_of_day": time_of_day,
         "summary": summary,
         "cinematic": cinematic,
+        "party_healed": party_healed,
     }
 
     try:
         from src.web import pending_actions
         pending_actions.record_action(
             player_id, "rest",
-            pending_actions.rest_note(location_name, spec["kind"], before, after, price, day),
+            pending_actions.rest_note(location_name, spec["kind"], before, after, price, day,
+                                      party_healed=party_healed),
         )
     except Exception as e:      # CLI play: no ledger, no harm
         logger.debug(f"rest ledger note skipped: {e}")

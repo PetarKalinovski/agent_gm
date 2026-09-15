@@ -285,6 +285,8 @@ def get_npcs_at_location(location_id: str) -> list[dict[str, Any]]:
             NPC.current_location_id == location_id,
             NPC.status == "alive"
         ).all()
+        from src.services import party as party_mod
+        party_ids = party_mod.all_member_ids(session)
 
         return [
             {
@@ -294,6 +296,9 @@ def get_npcs_at_location(location_id: str) -> list[dict[str, Any]]:
                 "profession": npc.profession,
                 "description_physical": npc.description_physical,
                 "current_mood": npc.current_mood,
+                # Travelling with the player: never a local, never an enemy
+                "in_party": npc.id in party_ids,
+                "condition": npc.condition,
             }
             for npc in npcs
         ]

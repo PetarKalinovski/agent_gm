@@ -967,6 +967,8 @@ class AssetManager:
                 raise ValueError(f"Player {player_id} not found")
 
             npcs = db.query(NPC).filter(NPC.current_location_id == location_id).all()
+            from src.services import party as party_mod
+            party_ids = set(party_mod.member_ids(player))
 
             return {
                 "location_name": location.name,
@@ -997,6 +999,9 @@ class AssetManager:
                         "status": npc.status,
                         "sprite_path": None,
                         "tier": npc.tier.value if hasattr(npc.tier, 'value') else str(npc.tier),
+                        # Party members follow the player on the canvas
+                        "companion": npc.id in party_ids,
+                        "condition": npc.condition,
                     }
                     for npc in npcs
                 ],

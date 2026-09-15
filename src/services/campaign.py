@@ -441,6 +441,16 @@ def execute_ops(session, ops: list | None, campaign: Campaign, player,
                 continue
             npc.current_location_id = location.id
             applied.append(f"{npc.name} arrived at {location.name}")
+            # A companion the story pulls elsewhere leaves the party (the
+            # player's own location is where the party IS, so that is fine)
+            try:
+                from src.services import party as party_mod
+                if (npc.id in party_mod.member_ids(player)
+                        and location.id != getattr(player, "current_location_id", None)):
+                    party_mod.leave(session, player, npc, reason="the story took them elsewhere")
+                    applied.append(f"{npc.name} left the player's party")
+            except Exception as e:
+                logger.warning(f"party update on campaign move skipped: {e}")
 
         elif name == "npc_status":
             npc = _get(session, NPC, op.get("npc_id"))

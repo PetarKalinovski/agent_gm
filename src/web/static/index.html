@@ -1439,6 +1439,7 @@
             <span class="hud-chip" id="hud-health-chip">&#10084; <span id="hud-health" class="healthy">healthy</span></span>
             <span class="hud-chip" id="hud-gold-chip">&#9679; <span id="hud-gold">0</span></span>
             <span class="hud-chip clickable" id="hud-quests-chip" title="Active quests">&#9873; <span id="hud-quests">0</span></span>
+            <span class="hud-chip clickable" id="hud-party-chip" title="Party" style="display:none">&#128101; <span id="hud-party">0</span></span>
             <span class="hud-chip clickable" id="hud-campaign-chip" title="Story" style="display:none">&#9650; <span id="hud-campaign">Act I &middot; 0/0</span></span>
             <span class="hud-chip" id="hud-clock-chip" style="display:none">&#8987; <span id="hud-clock"></span></span>
             <span class="hud-chip clickable" id="hud-bag-chip" title="Inventory">&#128188; <span id="hud-bag">0</span></span>
@@ -1921,7 +1922,7 @@
     <!-- ?v= busts browser caches — bump when these files change, or stale
          clients keep running old code (live bug: combat frames never
          requested because a cached game.js predated them) -->
-    <script src="/static/js/game.js?v=20260915a"></script>
+    <script src="/static/js/game.js?v=20260915b"></script>
     <script src="/static/js/audio.js?v=20260915a"></script>
 
     <script>
@@ -2424,6 +2425,18 @@
                 ? `${Math.min(100, 100 * (state.xp_into_level || 0) / xpSpan)}%`
                 : '100%';
 
+            // The party: who walks with you (chip count, canvas follow + ring)
+            const party = state.party || [];
+            const partyChip = document.getElementById('hud-party-chip');
+            if (partyChip) {
+                partyChip.style.display = party.length ? '' : 'none';
+                document.getElementById('hud-party').textContent = party.length;
+                partyChip.title = party.length
+                    ? 'Party: ' + party.map(m => m.name + (m.condition === 'wounded' ? ' (wounded)' : '')).join(', ')
+                    : 'Party';
+            }
+            if (game && game.setParty) game.setParty(party);
+
             applyCampaignChips(state.campaign);
             applyLead(state.lead);
             renderActionChips(state.suggestions);
@@ -2442,7 +2455,7 @@
                 const cls = [c.kind === 'lead' || i === 0 ? 'lead' : '', c.locked ? 'locked' : ''].filter(Boolean).join(' ');
                 const glyph = c.kind === 'travel' ? (c.locked ? '&#128274; ' : '&#8594; ')
                     : c.kind === 'talk' ? '&#128172; ' : c.kind === 'interact' ? '&#10022; '
-                    : c.kind === 'trade' ? '&#9679; ' : '';
+                    : c.kind === 'trade' ? '&#9679; ' : c.kind === 'party' ? '&#128101; ' : '';
                 return `<button class="${cls}" data-chip="${i}" title="${escapeHtml(c.text || '')}">${glyph}${escapeHtml(c.label || '')}</button>`;
             }).join('');
             box.classList.toggle('busy', !!isProcessing);
@@ -2468,8 +2481,8 @@
                 openShop(chip.npc_id);
                 return;
             }
-            if (chip.kind === 'talk' && chip.npc_id) {
-                const npcName = chip.label.replace(/^(Talk to|Ask) /, '').replace(/ about .*$/, '');
+            if ((chip.kind === 'talk' || chip.kind === 'party') && chip.npc_id) {
+                const npcName = chip.label.replace(/^(Talk to|Ask) /, '').replace(/ (about .*| to come along)$/, '');
                 window.dispatchEvent(new CustomEvent('npc-interact', {
                     detail: { npcId: chip.npc_id, npcName: (game && game.npcs[chip.npc_id] && game.npcs[chip.npc_id].data.name) || npcName }
                 }));
@@ -2598,6 +2611,18 @@
                     (v.stock.length ? v.stock.map(i => row(i, 'buy')).join('') : '<div class="muted">Nothing on the shelf.</div>') +
                     `<div class="muted" style="margin:.6rem 0 .2rem">Your bag</div>` +
                     (v.sellable.length ? v.sellable.map(i => row(i, 'sell')).join('') : '<div class="muted">Nothing to sell.</div>');
+            } else if (hudPanelMode === 'party') {
+                const party = lastPlayerState.party || [];
+                panel.innerHTML = '<h4>Party</h4>' + (party.length
+                    ? party.map(m =>
+                        `<div class="hud-item"><span>${esc(m.name)}` +
+                        (m.profession ? ` <span class="muted">(${esc(m.profession)})</span>` : '') +
+                        (m.condition === 'wounded' ? ' <span style="color:#f87171;">&#10010; wounded</span>' : '') +
+                        (m.here === false ? ' <span class="muted">(elsewhere)</span>' : '') +
+                        `</span><span><button data-act="part" data-npc="${esc(m.id)}" data-name="${esc(m.name)}">Part ways</button></span></div>`
+                      ).join('') +
+                      '<div class="muted" style="margin-top:.45rem">They walk where you walk and fight beside you. The wounded sit out until you rest.</div>'
+                    : '<div class="muted">You travel alone. Someone who trusts you might come along if asked.</div>');
             } else if (hudPanelMode === 'quests') {
                 const quests = lastPlayerState.quests || [];
                 panel.innerHTML = '<h4>Active Quests</h4>' + (quests.length
@@ -2699,6 +2724,13 @@
             const btn = ev.target.closest('button[data-act]');
             if (!btn || !currentPlayerId) return;
             const act = btn.dataset.act;
+            if (act === 'part') {
+                const who = btn.dataset.name || 'my companion';
+                hudPanelMode = null;
+                renderHudPanel();
+                sendMessage(`I tell ${who} it is time we part ways here.`);
+                return;
+            }
             if (act === 'buy' || act === 'sell') {
                 btn.disabled = true;
                 try {
@@ -2893,6 +2925,7 @@
         });
 
         document.getElementById('hud-quests-chip').addEventListener('click', () => toggleHudPanel('quests'));
+        document.getElementById('hud-party-chip').addEventListener('click', () => toggleHudPanel('party'));
         document.getElementById('hud-bag-chip').addEventListener('click', () => toggleHudPanel('inventory'));
         document.getElementById('hud-level-chip').addEventListener('click', () => toggleHudPanel('character'));
         document.getElementById('hud-campaign-chip').addEventListener('click', () => toggleHudPanel('campaign'));
@@ -3408,7 +3441,7 @@
         // A real-time fight ended: apply mechanics server-side (code
         // enforces), then hand the DM an aftermath that is already true
         window.addEventListener('combat-ended', async (e) => {
-            const { outcome, hitsTaken, heartsLost, heartsHealed, defeated, defeatedAt } = e.detail || {};
+            const { outcome, hitsTaken, heartsLost, heartsHealed, defeated, defeatedAt, allies, downedAllies } = e.detail || {};
             if (!currentPlayerId) return;
             try {
                 const res = await fetch('/api/combat/result', {
@@ -3422,6 +3455,8 @@
                         hearts_healed: heartsHealed || 0,
                         defeated_npc_ids: defeated || [],
                         defeated_positions: defeatedAt || {},
+                        ally_npc_ids: allies || [],
+                        downed_allies: downedAllies || [],
                     }),
                 });
                 const data = await res.json();
@@ -3440,6 +3475,8 @@
                 }
                 if (data.state) applyPlayerState(data.state);
                 showObjectivesDone(data.objectives_done);
+                const wounded = (data.changes && data.changes.allies_wounded) || [];
+                if (wounded.length) showToast(`&#10010; ${escapeHtml(wounded.join(', '))} ${wounded.length > 1 ? 'are' : 'is'} wounded &mdash; rest to recover`, '', 5200);
                 // The dead keep what they carried — sparkle their bodies now
                 if (data.bodies && data.bodies.length && game && game.addSceneObjects) game.addSceneObjects(data.bodies);
                 if (data.dm_message) {
@@ -3725,7 +3762,7 @@
                                         // Server-authoritative roster: per-enemy tier/params
                                         // and the boss object travel through untouched
                                         if (game && game.startCombat) {
-                                            game.startCombat(payload.enemies, payload.boss || null);
+                                            game.startCombat(payload.enemies, payload.boss || null, payload.allies || []);
                                         }
                                     } else if (payload.type === 'level_up') {
                                         showLevelUp(payload);

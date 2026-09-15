@@ -259,9 +259,14 @@ def travel_now(player_id: str, destination_id: str) -> dict[str, Any]:
         logger.warning(f"Canvas travel could not advance the clock: {clock['error']}")
 
     arrival = place_at_arrival_door(player_id, destination_id, origin_id)
+    party_followed = result.get("party_followed") or []
+    if party_followed:
+        from src.services import party as party_mod
+        party_mod.settle(player_id)
 
     return {
         "success": True,
+        "party": party_followed,
         "from_id": origin_id,
         "from_name": origin_name,
         "destination_id": destination_id,

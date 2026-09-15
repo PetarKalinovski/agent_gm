@@ -5,7 +5,7 @@ from typing import Any, Callable
 from src.agents.core.base_agent import BaseGameAgent
 from src.core.types import AgentContext
 from src.tools.world_read import get_npc, get_npc_relationship, get_world_clock, get_available_quests_for_npc, get_world_bible, get_active_quests, get_player, get_recent_events
-from src.tools.world_write import update_npc_relationship, update_npc_mood, update_npc, activate_quest, reveal_secret
+from src.tools.world_write import update_npc_relationship, update_npc_mood, update_npc, activate_quest, reveal_secret, join_party, leave_party
 from src.tools.narration import speak, show_quest_update
 
 
@@ -35,6 +35,16 @@ def build_npc_system_prompt(npc: dict[str, Any], relationship: dict[str, Any], s
 {scene_context}
 """
 
+    # The party: whether you walk with them, and the one tool for each door
+    if npc.get("in_party"):
+        party_block = """
+**Travelling with the player:** you are in their party — you walk where they walk and you fight beside them (the engine handles both; never describe travelling or fighting as something you refuse to do because you cannot). You have a stake in where they are going: say so. If you have had enough — they have crossed a line, or your own goals pull you away — call `leave_party(player_id, npc_id, reason)` and say goodbye in your own voice.
+"""
+    else:
+        party_block = """
+**Coming along:** you are NOT travelling with the player. If they ask you to come with them and you WOULD — it fits your goals and you trust them enough — call `join_party(player_id, npc_id)`; the ENGINE decides whether you trust them enough, and a refusal means you say no in your own words. Never agree in words without calling the tool, and never call it unasked.
+"""
+
     prompt = f"""You are roleplaying as {npc['name']}, an NPC in a text-based RPG.
 
 **Your Character:**
@@ -60,6 +70,7 @@ def build_npc_system_prompt(npc: dict[str, Any], relationship: dict[str, Any], s
 **Your most recent exchanges with them (your durable memory — trust this even if the conversation feels new):**
 {chr(10).join(f"- {m.get('role', '?')}: {m.get('content', '')}" for m in relationship.get('recent_messages', [])) if relationship.get('recent_messages') else '- No previous exchanges'}
 
+{party_block}
 **Your Secrets (yours to keep):**
 {chr(10).join(f'- {s}' for s in hidden_secrets) if hidden_secrets else '- None'}
 If you decide to tell them one, call `reveal_secret` FIRST — the engine decides whether you actually trust them enough to get the words out. If it refuses, you swallow the half-sentence and say nothing of it.
@@ -116,6 +127,8 @@ NPC_TOOLS: list[Callable] = [
     show_quest_update,
     get_player,
     get_recent_events,
+    join_party,
+    leave_party,
 ]
 
 
@@ -163,6 +176,7 @@ class NPCAgent(BaseGameAgent):
         """Build system prompt from NPC, relationship, and scene data."""
         prompt = build_npc_system_prompt(self.npc, self.relationship, scene_context=self._scene_context)
         prompt += f"\nThe Player's Name is: {self._player_name}"
+        prompt += f"\nThe Player's ID is: {self.context.player_id}\nYour own NPC ID is: {self.npc_id}"
         return prompt
 
     def start_conversation(

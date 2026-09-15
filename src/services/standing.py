@@ -31,6 +31,7 @@ HOSTILE_DISPOSITIONS = frozenset({"hostile", "furious", "murderous", "enemy", "h
 WARM_DISPOSITIONS = frozenset({"friendly", "warm", "devoted", "loyal", "fond", "grateful", "trusting", "affectionate"})
 
 REFUSAL_TRUST = 30       # hostile AND below this -> no conversation
+JOIN_TRUST = 40          # follows the player only from here up (or when warm)
 SECRET_TRUST = 60        # reveal_secret needs at least this much
 BUYBACK_FRACTION = 0.40  # what a merchant pays for what the player sells
 
@@ -227,6 +228,29 @@ def conversation_refusal(session, player, npc, relationship: Any = None) -> dict
             "and trust is too low). Their one line was ALREADY spoken on the player's screen. "
             "Do NOT put words in their mouth — narrate the cold shoulder and what it costs, "
             "and let the player find another way in."
+        ),
+    }
+
+
+def join_refusal(npc, relationship: Any) -> dict[str, Any] | None:
+    """Why this NPC will not travel with the player, or None when they would.
+
+    Hostile never follows; warm follows regardless of the number; everyone
+    else needs JOIN_TRUST. The number lives here and nowhere else.
+    """
+    band = disposition_band(relationship)
+    if band == "hostile":
+        return {"error": "hostile", "message": f"{getattr(npc, 'name', 'They')} would sooner see the player dead than walk beside them."}
+    if band == "warm":
+        return None
+    trust = trust_of(relationship)
+    if trust >= JOIN_TRUST:
+        return None
+    return {
+        "error": "trust",
+        "message": (
+            f"{getattr(npc, 'name', 'They')} does not trust the player enough to leave "
+            "their life behind and follow a near-stranger. Earn it first."
         ),
     }
 

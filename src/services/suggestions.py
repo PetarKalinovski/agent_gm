@@ -8,7 +8,7 @@ model call. Chips that resolve on the canvas (a door, an object) are
 routed by the client through the same REST paths the canvas uses — no DM
 turn — and the rest just fill the input.
 
-Shape: {"label", "text", "kind": lead|talk|travel|interact|look,
+Shape: {"label", "text", "kind": lead|party|talk|trade|travel|interact|look,
         "npc_id"?, "location_id"?, "object_id"?, "locked"?}
 """
 
@@ -129,11 +129,32 @@ def _suggest(session, player, lead, location_id) -> list[dict[str, Any]]:
     # 1. The lead
     add(_lead_chip(lead, exits_by_id))
 
-    # 2. People here
+    npcs: list = []
     if location is not None:
         npcs = session.query(NPC).filter(
             NPC.current_location_id == location.id, NPC.status == "alive"
         ).all()
+
+    # 1b. Someone here who would come along (the engine's own gate says yes)
+    if location is not None and player is not None:
+        from src.services import party as party_mod, standing
+        member_ids = set(party_mod.member_ids(player))
+        if len(member_ids) < party_mod.MAX_PARTY:
+            for npc in npcs:
+                if npc.id in member_ids:
+                    continue
+                rel = standing.relationship_for(session, getattr(player, "id", None), npc.id)
+                if rel is None or standing.join_refusal(npc, rel):
+                    continue
+                add({
+                    "kind": "party", "npc_id": npc.id,
+                    "label": f"Ask {_first_name(npc.name)} to come along"[:60],
+                    "text": f"I ask {npc.name} to travel with me.",
+                })
+                break
+
+    # 2. People here
+    if location is not None:
         for npc in npcs:
             add({
                 "kind": "talk", "npc_id": npc.id,

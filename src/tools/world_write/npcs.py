@@ -312,17 +312,32 @@ def move_npc(npc_id: str, destination_id: str) -> dict[str, Any]:
         if not destination:
             return {"error": "Destination not found"}
 
+        # A party member sent somewhere the player is not stops being one —
+        # the engine moves companions WITH the player, never apart from them
+        from src.services import party as party_mod
+        left = None
+        owner = party_mod.party_of(session, npc.id)
+        if owner is not None and destination_id != owner.current_location_id:
+            left = party_mod.leave(session, owner, npc, reason="sent elsewhere")
+
         # Update NPC location
         old_location = npc.current_location_id
         npc.current_location_id = destination_id
         session.commit()
 
-        return {
+        result = {
             "success": True,
             "npc_name": npc.name,
             "from_location": old_location,
             "to_location": destination.name,
         }
+        if left and left.get("success"):
+            result["party_left"] = True
+            result["note"] = (
+                f"{npc.name} was in the player's party; sending them away took them out "
+                "of it. They will not follow the player any more unless they join again."
+            )
+        return result
 
 
 @tool

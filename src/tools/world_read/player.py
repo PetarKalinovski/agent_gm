@@ -9,6 +9,7 @@ from src.models import (
     WorldClock,
     get_session,
 )
+from src.services import party as party_mod
 from src.services import progression as prog
 
 
@@ -45,6 +46,11 @@ def get_player(player_id: str) -> dict[str, Any]:
             "inventory": player.inventory,
             "active_quests": player.active_quests,
             "party_members": player.party_members,
+            # Who travels with them, by name — the engine moves and fights them
+            "party": [
+                {"id": n.id, "name": n.name, "profession": n.profession, "condition": n.condition}
+                for n in party_mod.members(session, player)
+            ],
         }
 
 

@@ -23,6 +23,8 @@ from src.tools.world_read import (
     get_campaign,
 )
 from src.tools.world_write import (
+    join_party,
+    leave_party,
     move_player,
     move_npc,
     advance_time,
@@ -217,7 +219,7 @@ Never default to success. For every consequential action, weigh:
 **2. Exploration:**
 - If the player asks "What do I see?", re-issue `describe_location` or use `narrate` for specific details.
 - If the player travels, ALWAYS calculate travel time. Use `move_player` -> `advance_time` -> `describe_location`.
-- If NPCs are traveling with the player (party members, companions), use `move_npc` to move them to the same destination.
+- The player's PARTY travels with them automatically: `move_player` carries every companion through the same door. Never `move_npc` a party member.
 - NPCs can also move independently for world simulation purposes.
 
 **3. Combat & Danger:**
@@ -286,6 +288,13 @@ Never default to success. For every consequential action, weigh:
 - **Bodies.** When someone dies, what they carried stays on them. The engine leaves the body in the scene and the player searches it on the canvas. Never hand over a dead character's gear with `add_to_inventory`, never say what is on the body, and never say it is empty.
 - **Rest.** Some places let a character sleep. `rest(player_id)` takes the night, charges the bed, heals what sleep heals, and wakes them at first light — then open on the MORNING. Never advance the clock for it yourself and never heal them for it with `update_player_health`. If it refuses, there is nowhere safe to sleep here: say so in the fiction, or let the keeper name the price.
 - **Standing has teeth.** A faction the player has wronged closes its doors (move_player comes back blocked with reason "standing"), its merchants charge more, and people who hate them will not speak (prompt_npc_agent comes back refused, their one line already spoken). The engine applies all of it and hands you the refusal in the house's own words. Run the refusal; never overrule it in prose. `update_player_reputation` and `update_npc_relationship` are how the world's opinion moves — use them when the fiction earns it, and the doors and prices follow.
+
+**9. The Party (companions who travel with the player):**
+- A named NPC can join the player's party and walk with them from then on. When the fiction has someone agree to come along, call `join_party(player_id, npc_id)` — the ENGINE decides whether they actually would (alive, present, room for them, and enough trust; someone hostile never follows). A refusal comes back with the reason: play it in their own voice and let the player earn it. Never write "she agrees to come" without the call — an uncalled join is a companion who vanishes at the next door.
+- From then on the engine does the walking and the fighting: companions come through every door with the player (they arrive in your context as "in the party"), and `start_combat` puts every fit companion into the fight at the player's side, at their own tier. Never name a party member in `start_combat` and never `move_npc` one; if a companion turns on the player, `leave_party` first.
+- A companion who goes down in a fight is WOUNDED, not dead — the [COMBAT OUTCOME] tells you. They still travel, they do not fight, and a night's rest (`rest`) puts them back on their feet. Narrate the limp; never kill them for it.
+- Companions talk through `prompt_npc_agent` like anyone else — they have their own memory, opinions, and a way out (`leave_party`). Give them a line when the scene turns; a silent follower is furniture.
+- To part ways, call `leave_party(player_id, npc_id, reason)`: they stay wherever the party stands, and the world remembers why.
 
 ### TONE & STYLE
 
@@ -369,6 +378,8 @@ DM_TOOLS: list[Callable] = [
     kill_npc,
     start_combat,
     rest,
+    join_party,
+    leave_party,
     advance_time,
     create_event,
     # Player consequences
@@ -491,7 +502,36 @@ class DMOrchestrator(BaseGameAgent):
         player = get_player(self.context.player_id) or {}
         quests = get_active_quests()
 
-        npc_names = ', '.join(n['name'] for n in location.get('npcs_present', [])) or 'None'
+        # The party: the engine moves them and fights them; the DM narrates
+        # them. Members are marked in the NPC list so they never read as
+        # locals, and a departure (a beat killed or moved one) is said once.
+        from src.services import party as party_mod
+        party_ids: set[str] = set()
+        party_line = ""
+        party_gone: list[str] = []
+        try:
+            from src.models import Player as _PlayerRow, get_session as _party_session
+            with _party_session() as _ps:
+                _prow = _ps.get(_PlayerRow, self.context.player_id)
+                gone = party_mod.sync(_ps, _prow)
+                if gone:
+                    _ps.commit()
+                party_gone = party_mod.departure_lines(gone)
+                party_ids = set(party_mod.member_ids(_prow))
+                party_line = party_mod.context_line(_ps, _prow)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"party context unavailable: {e}")
+
+        npc_names = ', '.join(
+            n['name'] + (' (in the party)' if n.get('id') in party_ids else '')
+            for n in location.get('npcs_present', [])
+        ) or 'None'
+        party_block = ""
+        if party_line:
+            party_block += f"- Party (travelling with them — the engine moves and fights them, you narrate them): {party_line}\n"
+        for line in party_gone:
+            party_block += f"- Party change: {line}\n"
 
         inventory = player.get('inventory') or []
         item_names = ', '.join(
@@ -557,7 +597,7 @@ class DMOrchestrator(BaseGameAgent):
 - Location: {location.get('name', 'Unknown')} ({location.get('type', 'unknown')})
 - Time: Day {clock.get('day', 1)}, {clock.get('hour', 8)}:00 ({clock.get('time_of_day', 'day')})
 - NPCs here: {npc_names}
-- Player health: {player.get('health_status', 'healthy')}
+{party_block}- Player health: {player.get('health_status', 'healthy')}
 - Player level: {player.get('level', 1)}
 - Player carries: {gear}
 {appearance}- Player inventory: {item_names}

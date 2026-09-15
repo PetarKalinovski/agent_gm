@@ -123,6 +123,12 @@ def sim_move_npc(npc_id: str, destination_id: str) -> dict[str, Any]:
                 "error": "refused: this NPC is staged by the campaign for a scene that "
                          "has not happened yet. Pick a different NPC or skip the move.",
             }
+        from src.services import party as party_mod
+        if party_mod.is_member(session, npc_id):
+            return {
+                "error": "refused: this NPC travels in a player's party. They go where "
+                         "the player goes — pick a different NPC.",
+            }
     return move_npc(npc_id, destination_id)
 
 

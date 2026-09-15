@@ -61,6 +61,7 @@ from src.services import objectives as objectives_mod
 from src.services import lead as lead_mod
 from src.services import opening as opening_mod
 from src.services import suggestions as suggestions_mod
+from src.services import party as party_mod
 from src.services.rest import normalize_rest, rest_now
 from src.services import standing
 from src.tools.world_write.items import _validate_inventory, transfer_item
@@ -318,12 +319,14 @@ def build_player_state(player_id: str) -> dict[str, Any]:
     # one click each
     lead = None
     suggestions: list[dict[str, Any]] = []
+    party: list[dict[str, Any]] = []
     try:
         with get_session() as db:
             row = db.get(Player, player_id)
             lead = lead_mod.compute_lead(db, row) if row else None
             if row is not None:
                 suggestions = suggestions_mod.suggest_actions(db, row, lead, row.current_location_id)
+                party = party_mod.party_payload(db, row)
     except Exception as e:
         logger.debug(f"Lead unavailable: {e}")
 
@@ -356,6 +359,7 @@ def build_player_state(player_id: str) -> dict[str, Any]:
         "campaign": campaign,
         "lead": lead,
         "suggestions": suggestions,
+        "party": party,
         "weather": weather,
     }
 
@@ -1302,7 +1306,9 @@ async def get_location_assets(location_id: str, player_id: str):
                     "scale": npc.get("scale", 1.0),
                     "status": npc.get("status", "alive"),
                     "sprite_url": _url(npc["sprite_path"]),
-                    "tier": npc["tier"]
+                    "tier": npc["tier"],
+                    "companion": bool(npc.get("companion")),
+                    "condition": npc.get("condition"),
                 }
                 for npc in assets["npcs"]
             ]
@@ -1463,6 +1469,9 @@ class CombatResultRequest(BaseModel):
     hits_taken: int = 0
     hearts_lost: int = 0
     hearts_healed: int = 0
+    # The party: who fought beside them, who went down (wounded, never killed here)
+    ally_npc_ids: list[str] = []
+    downed_allies: list[str] = []
     defeated_npc_ids: list[str] = []
     defeated_positions: dict[str, dict[str, float]] = {}   # where each enemy fell
 
@@ -1489,6 +1498,8 @@ async def combat_result(request: CombatResultRequest):
         hearts_healed=request.hearts_healed,
         defeated_npc_ids=request.defeated_npc_ids,
         defeated_positions=request.defeated_positions,
+        downed_allies=request.downed_allies,
+        ally_npc_ids=request.ally_npc_ids,
     )
     if "error" in changes:
         return JSONResponse(changes, status_code=400)

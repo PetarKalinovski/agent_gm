@@ -21,7 +21,9 @@ def start_combat(player_id: str, npc_ids: list[str]) -> dict[str, Any]:
     Args:
         player_id: The player's ID.
         npc_ids: The NPC(s) attacking or being attacked. They must be alive
-            and at the player's current location.
+            and at the player's current location. Never a party member —
+            the player's companions are added to the fight automatically,
+            on the player's side.
 
     Returns:
         Dictionary with the combat roster, or an error explaining what to fix.

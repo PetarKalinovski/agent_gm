@@ -287,6 +287,7 @@ class ToolUsageTracker:
                 self._notifications.append({
                     "type": "combat_start",
                     "enemies": output_data.get("enemies") or [],
+                    "allies": output_data.get("allies") or [],
                     "boss": output_data.get("boss"),
                 })
 

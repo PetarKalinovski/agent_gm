@@ -10,6 +10,7 @@ from src.models import (
     Player,
     get_session,
 )
+from src.services import party as party_mod
 from src.services import perception
 from src.services import progression as prog
 from src.services.travel import check_route, clear_route_for, place_at_arrival_door
@@ -115,6 +116,10 @@ def move_player(player_id: str, destination_id: str, requirements_met: bool = Fa
         if route["blocked"] and requirements_met and route["reason"] in ("route", "gate"):
             clear_route_for(session, origin_id, destination_id, player_id)
 
+        # The party walks through the same door in the same transaction —
+        # a companion is never a move_npc the DM has to remember
+        followed = [npc.name for npc in party_mod.follow(session, player, destination_id, origin_id)]
+
         # Update player location and mark destination visited — one transaction
         player.current_location_id = destination_id
         destination.visited = True
@@ -124,6 +129,8 @@ def move_player(player_id: str, destination_id: str, requirements_met: bool = Fa
 
     # Stand them just inside the door they came through (never blocks a move)
     place_at_arrival_door(player_id, destination_id, origin_id)
+    if followed:
+        party_mod.settle(player_id)
 
     result: dict[str, Any] = {
         "success": True,
@@ -131,6 +138,11 @@ def move_player(player_id: str, destination_id: str, requirements_met: bool = Fa
         "travel_time_hours": travel_time,
         "reminder": f"Advance time by ~{travel_time}h and describe the new location.",
     }
+    if followed:
+        result["party_followed"] = followed
+        result["party_note"] = (
+            f"{', '.join(followed)} came with them (already moved — do NOT call move_npc for them)."
+        )
     # Arriving completes any "go_to" objective aimed here — code, not prose
     from src.services import objectives as objectives_mod
     ticked = objectives_mod.note_arrival(player_id, destination_id)

@@ -87,6 +87,10 @@ class NPC(Base):
 
     # State
     status: Mapped[str] = mapped_column(String(50), default="alive")  # alive, dead, missing, imprisoned
+    # A companion who went down fighting beside the player is "wounded": they
+    # still travel, they do not fight, and a night's rest clears it. NULL =
+    # fine. Never a status — the world still sees them as alive.
+    condition: Mapped[str | None] = mapped_column(String(30), nullable=True)
     current_mood: Mapped[str] = mapped_column(String(50), default="neutral")
 
     # Relationships with other NPCs

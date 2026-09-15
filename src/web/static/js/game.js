@@ -21,6 +21,7 @@ class GameRenderer {
         this.locationId = null;
         this.player = null;
         this.npcs = {};
+        this.partyIds = new Set();   // companions (state.party) — follow, ring, fight beside
         this.walkableBounds = null;
         this.isLoading = false;
         this.sceneReady = true;     // false = buffering overlay holds a half-built scene
@@ -539,7 +540,7 @@ class GameRenderer {
         if (!queued) return;
         this._queuedForReady = null;
         if (queued.cinematic) this.playCinematic(queued.cinematic);
-        if (queued.combat) this.startCombat(queued.combat.enemies, queued.combat.boss);
+        if (queued.combat) this.startCombat(queued.combat.enemies, queued.combat.boss, queued.combat.allies);
     }
 
     _queueForReady(key, value) {
@@ -935,6 +936,7 @@ class GameRenderer {
         this._updateDoors(deltaTime);
         this._updateObjects();
         this._updateLeadMarkers();
+        this._updateCompanionMarkers();
         this._updateBarks(deltaTime);
         if (this.combat) this._updateCombat(deltaTime);
         // A texture swap deferred past an attack/dodge lands the frame after
@@ -1924,10 +1926,13 @@ class GameRenderer {
 
     _updateNpcWander(dt) {
         if (this.editorMode || this.combat) return;
+        let slot = 0;
         for (const id in this.npcs) {
             const npc = this.npcs[id];
             if (npc.status === 'dead') continue;
             if (this.editingNpc && this.editingNpc.data.id === id) continue;
+            // Party members keep step with the player instead of wandering
+            if (npc.data && npc.data.companion) { this._followPlayer(npc, dt, slot++); continue; }
 
             let w = npc.wander;
             if (!w) {
@@ -1990,6 +1995,92 @@ class GameRenderer {
             npc.sprite.y = gy + bob;
             npc.sprite.zIndex = gy;
             this._fitShadow(npc.shadow, npc.sprite, gy);
+        }
+    }
+
+    /** A companion keeps to their slot beside the player: catches up fast
+     *  when far, settles when close, bobs while walking. NPCs have no walk
+     *  strips, so this is the wander's stroll idiom at the player's pace. */
+    _followPlayer(npc, dt, slot) {
+        let w = npc.wander;
+        if (!w) {
+            w = npc.wander = {
+                homeX: npc.data.x, homeY: npc.data.y,
+                nx: npc.data.x, ny: npc.data.y,
+                tx: 0, ty: 0, state: 'idle', wait: 0,
+                phase: Math.random() * Math.PI * 2,
+            };
+        }
+        const p = this.player;
+        const off = GameRenderer.FOLLOW_OFFSETS[slot % GameRenderer.FOLLOW_OFFSETS.length];
+        // Fall in on the side the player is walking away from
+        const side = p.direction === 'left' ? 1 : (p.direction === 'right' ? -1 : 1);
+        const tx = Math.max(2, Math.min(98, p.normalizedX + off[0] * side));
+        const ty = Math.max(2, Math.min(98, p.normalizedY + off[1]));
+        const dx = tx - w.nx, dy = ty - w.ny;
+        const dist = Math.hypot(dx, dy);
+        if (dist > 2.2) {
+            const speed = Math.min(this.moveSpeed * 0.95, 6 + dist * 1.6);
+            const step = Math.min(dist, speed * dt / 1000);
+            const nx2 = w.nx + (dx / dist) * step;
+            const ny2 = w.ny + (dy / dist) * step;
+            if (this.isWalkable(nx2, ny2)) { w.nx = nx2; w.ny = ny2; }
+            else if (this.isWalkable(nx2, w.ny)) w.nx = nx2;
+            else if (this.isWalkable(w.nx, ny2)) w.ny = ny2;
+            if (Math.abs(dx) > 0.3) {
+                npc.sprite.scale.x = Math.abs(npc.sprite.scale.x) * (dx < 0 ? -1 : 1);
+            }
+            w.phase += dt * 0.014;
+            w.state = 'walk';
+        } else {
+            w.state = 'idle';
+        }
+        const gx = this.normalizedToWorldX(w.nx);
+        const gy = this.normalizedToWorldY(w.ny);
+        const bob = w.state === 'walk'
+            ? -Math.abs(Math.sin(w.phase)) * npc.sprite.height * 0.012 : 0;
+        npc.sprite.x = gx;
+        npc.sprite.y = gy + bob;
+        npc.sprite.zIndex = gy;
+        this._fitShadow(npc.shadow, npc.sprite, gy);
+    }
+
+    /** state.party → which NPC sprites are companions (a join mid-scene
+     *  flips them without a reload). Members carry `condition`. */
+    setParty(members) {
+        const list = Array.isArray(members) ? members : [];
+        const ids = new Set(list.map(m => (typeof m === 'string' ? m : m && m.id)).filter(Boolean));
+        this.partyIds = ids;
+        for (const id in this.npcs) {
+            const npc = this.npcs[id];
+            if (!npc || !npc.data) continue;
+            const was = !!npc.data.companion;
+            npc.data.companion = ids.has(id);
+            if (was !== npc.data.companion) npc.wander = null;   // re-home either way
+            const m = list.find(x => x && typeof x === 'object' && x.id === id);
+            if (m) npc.data.condition = m.condition || null;
+            if (npc.sprite && npc.status !== 'dead' && !this.combat) {
+                npc.sprite.tint = npc.data.condition === 'wounded' ? 0xb8bcc8 : 0xffffff;
+            }
+        }
+    }
+
+    /** A faint ring under each companion's feet (red when wounded). */
+    _updateCompanionMarkers() {
+        if (!this._partyRing) this._partyRing = new PIXI.Graphics();
+        const g = this._partyRing;
+        if (g.parent !== this.doorLayer) this.doorLayer.addChild(g);
+        g.clear();
+        if (this.combat || this.editorMode || !this.sceneReady) return;
+        const pulse = 0.5 + 0.5 * Math.sin(performance.now() * 0.003);
+        for (const id in this.npcs) {
+            const npc = this.npcs[id];
+            if (!npc || !npc.data || !npc.data.companion) continue;
+            if (npc.status === 'dead' || !npc.sprite || npc.sprite.destroyed) continue;
+            const wounded = npc.data.condition === 'wounded';
+            const r = 16 + 2 * pulse;
+            g.ellipse(npc.sprite.x, npc.sprite.y + 2, r, r * 0.38);
+            g.stroke({ color: wounded ? 0xf87171 : 0x93c5fd, width: 1.5, alpha: 0.35 + 0.25 * pulse });
         }
     }
 
@@ -2488,6 +2579,10 @@ class GameRenderer {
     // test enemy. Space = dodge-roll (i-frames), J = melee arc. Outcomes of
     // real fights are reported through the 'combat-ended' event → server.
 
+    // Where companions stand relative to the player (normalized units):
+    // flanking a step behind, the third at their back. Mirrors party.py.
+    static FOLLOW_OFFSETS = [[-6, 2.5], [6, 2.5], [0, 6]];
+
     static ARCHETYPES = {
         // FALLBACK ONLY: authoritative params arrive resolved server-side in
         // combat_start.enemies[].params (tier x archetype tables live in
@@ -2551,7 +2646,7 @@ class GameRenderer {
         const st = this._playerCombatStats();
         this._jEdge = false;
         this.combat = {
-            enemies: [], playerHp: st.hearts, playerMaxHp: st.maxHearts,
+            enemies: [], allies: [], playerHp: st.hearts, playerMaxHp: st.maxHearts,
             stats: st, heartsLost: 0, heartsHealed: 0, buffDamage: 0, buffUntil: 0,
             hitsTaken: 0, reported: false,
             iframes: 0, dodge: 0, dodgeVec: [0, 1], dodgeCd: 0,
@@ -2567,14 +2662,14 @@ class GameRenderer {
     /** DM-initiated combat: spawn each named NPC as a combatant.
      *  While a combat-blocking cinematic (boss_intro) plays, the roster is
      *  parked in _pendingCombat and spawns when the entrance ends. */
-    startCombat(enemies, boss) {
+    startCombat(enemies, boss, allies) {
         if (this.playerDead) return;
         if (!this.player || this.isLoading || !this.sceneReady) {
-            this._queueForReady('combat', { enemies: enemies || [], boss: boss || null });
+            this._queueForReady('combat', { enemies: enemies || [], boss: boss || null, allies: allies || [] });
             return;
         }
         if (this.cine && GameRenderer.CINE[this.cine.kind]?.blocksCombat) {
-            this._pendingCombat = { enemies: enemies || [], boss: boss || null };
+            this._pendingCombat = { enemies: enemies || [], boss: boss || null, allies: allies || [] };
             window.dispatchEvent(new CustomEvent('combat-active', { detail: { active: true } }));
             return;
         }
@@ -2595,6 +2690,11 @@ class GameRenderer {
                 !!(en.boss || (en.params && en.params.boss)),
             );
         }
+        // The party fights beside the player, at their own tier (server-resolved)
+        for (const al of (allies || [])) {
+            if (!al || !al.npc_id) continue;
+            this._spawnCombatant(al.npc_id, al.archetype || 'skirmisher', al.name, al.params || null, false, true);
+        }
         if (this.combat.boss) this._drawBossBar();
         // Real fight: the chat locks — the canvas resolves this, not prose
         window.dispatchEvent(new CustomEvent('combat-active', { detail: { active: true } }));
@@ -2608,7 +2708,7 @@ class GameRenderer {
         console.log('Gray-box enemy spawned (Space = dodge, J = attack)');
     }
 
-    _spawnCombatant(npcId, archetype, name, params, isBoss) {
+    _spawnCombatant(npcId, archetype, name, params, isBoss, isAlly) {
         // Server-resolved params are authoritative; the local table is only
         // the Ctrl+K gray-box / old-server fallback.
         params = params || GameRenderer.ARCHETYPES[archetype] || GameRenderer.ARCHETYPES.skirmisher;
@@ -2661,11 +2761,12 @@ class GameRenderer {
         const telegraph = new PIXI.Graphics();
         this.particleLayer.addChild(telegraph);
 
-        const bossEnemy = !!(isBoss || params.boss);
+        const bossEnemy = !!(isBoss || params.boss) && !isAlly;
         const enemy = {
             g, hpBar, shadow, telegraph, h, params, isSprite,
             npcId: npcId || null, name: name || null,
             tier: params.tier || null,
+            ally: !!isAlly, down: false, downT: 0, aimAt: null, faceDx: 1,
             isBoss: bossEnemy,
             bossPattern: bossEnemy ? (params.bossPattern || GameRenderer.BOSS_FALLBACK) : null,
             nx: ex, ny: ey, hp: params.hp, maxHp: params.hp,
@@ -2695,7 +2796,8 @@ class GameRenderer {
             }
         }
         this._drawEnemyHp(enemy);
-        this.combat.enemies.push(enemy);
+        if (isAlly) this.combat.allies.push(enemy);
+        else this.combat.enemies.push(enemy);
     }
 
     _drawEnemyHp(enemy) {
@@ -2709,7 +2811,7 @@ class GameRenderer {
         const frac = Math.max(0, enemy.hp / enemy.maxHp);
         if (frac > 0) {
             bar.rect(-w / 2, 0, w * frac, 5);
-            bar.fill({ color: GameRenderer.TIER_COLORS[enemy.tier] || 0xef4444 });
+            bar.fill({ color: enemy.ally ? 0x4ade80 : (GameRenderer.TIER_COLORS[enemy.tier] || 0xef4444) });
         }
     }
 
@@ -2825,6 +2927,32 @@ class GameRenderer {
             e.telegraph.destroy();
             e.hpBar.destroy();
         }
+        for (const a of (this.combat.allies || [])) {
+            // A companion who went down is wounded (the server marks it) — they
+            // stand back up greyed until the party rests; never a corpse
+            const npc = a.npcId ? this.npcs[a.npcId] : null;
+            if (npc && npc.sprite) {
+                npc.data.x = a.nx; npc.data.y = a.ny;
+                npc.wander = null;
+                npc.sprite.x = this.normalizedToWorldX(a.nx);
+                npc.sprite.y = this.normalizedToWorldY(a.ny);
+                npc.sprite.zIndex = npc.sprite.y;
+                npc.sprite.rotation = 0;
+                npc.sprite.alpha = 1;
+                if (a.down) npc.data.condition = 'wounded';
+                npc.sprite.tint = npc.data.condition === 'wounded' ? 0xb8bcc8 : 0xffffff;
+                npc.sprite.visible = true;
+                if (npc.shadow) { npc.shadow.visible = true; npc.shadow.alpha = 1; this._fitShadow(npc.shadow, npc.sprite); }
+            }
+            this.entityLayer.removeChild(a.g);
+            this.shadowLayer.removeChild(a.shadow);
+            this.particleLayer.removeChild(a.telegraph);
+            this.particleLayer.removeChild(a.hpBar);
+            a.g.destroy({ children: true });
+            a.shadow.destroy();
+            a.telegraph.destroy();
+            a.hpBar.destroy();
+        }
         const hearts = this.uiLayer.getChildByName('combat-hearts');
         if (hearts) this.uiLayer.removeChild(hearts);
         this.combat = null;
@@ -2850,6 +2978,9 @@ class GameRenderer {
             defeatedAt: Object.fromEntries(c.enemies.filter(e => e.dead && e.npcId)
                 .map(e => [e.npcId, { x: e.nx, y: e.ny }])),
             playerHp: Math.max(0, c.playerHp),
+            // The party: who fought, who went down (wounded server-side, never killed)
+            allies: (c.allies || []).map(a => a.npcId).filter(Boolean),
+            downedAllies: (c.allies || []).filter(a => a.down && a.npcId).map(a => a.npcId),
         };
         this._endCombat(false);
         window.dispatchEvent(new CustomEvent('combat-ended', { detail }));
@@ -2933,40 +3064,49 @@ class GameRenderer {
             const dot = (dx * fx + dy * fy) / (dist || 1);
             if (dot < profile.dotMin) continue; // outside the frontal arc
             if (e.invuln) continue;             // phase roar: untouchable
-            const dmg = Math.max(1, Math.round(profile.damage * (e.vulnMul || 1)));
-            e.hp -= dmg;
-            e.flash = 90;
-            c.hitstop = profile.hitstop;
-            c.shake = Math.max(c.shake, profile.shake);
-            window.forgeAudio?.playSfx('hit', { volume: 0.9 });
-            // Heavies rock non-boss enemies back on their heels
-            if (profile.staggerMs > 0 && !e.isBoss && e.hp > 0) {
-                this._staggerEnemy(e, profile.staggerMs);
+            this._hitEnemy(e, profile, dx, dy, dist);
+        }
+    }
+
+    /** One landed blow on an enemy: damage, stagger, knockback (along dx/dy
+     *  from the attacker), boss phase, death. The player's swing and a
+     *  companion's strike share it, so a kill is a kill whoever lands it. */
+    _hitEnemy(e, profile, dx, dy, dist) {
+        const c = this.combat;
+        if (!c || e.dead || e.invuln) return;
+        const dmg = Math.max(1, Math.round(profile.damage * (e.vulnMul || 1)));
+        e.hp -= dmg;
+        e.flash = 90;
+        c.hitstop = Math.max(c.hitstop || 0, profile.hitstop);
+        c.shake = Math.max(c.shake, profile.shake);
+        window.forgeAudio?.playSfx('hit', { volume: profile.ally ? 0.55 : 0.9 });
+        // Heavies rock non-boss enemies back on their heels
+        if (profile.staggerMs > 0 && !e.isBoss && e.hp > 0) {
+            this._staggerEnemy(e, profile.staggerMs);
+        }
+        // Knockback away from the attacker (bosses don't move: knockMul 0)
+        const kn = profile.knock * (e.params.knockMul ?? 1);
+        if (kn > 0) {
+            const kx = e.nx + (dx / (dist || 1)) * kn;
+            const ky = e.ny + (dy / (dist || 1)) * kn;
+            if (this.isWalkable(kx, ky)) { e.nx = kx; e.ny = ky; }
+        }
+        this._drawEnemyHp(e);
+        if (e.isBoss) {
+            if (e.hp > 0 && e.phase === 1 && e.bossPattern &&
+                e.hp <= e.maxHp * (e.bossPattern.phase2_at || 0.5)) {
+                this._enterBossPhase2(e);
             }
-            // Knockback away from the player (bosses don't move: knockMul 0)
-            const kn = profile.knock * (e.params.knockMul ?? 1);
-            if (kn > 0) {
-                const kx = e.nx + (dx / (dist || 1)) * kn;
-                const ky = e.ny + (dy / (dist || 1)) * kn;
-                if (this.isWalkable(kx, ky)) { e.nx = kx; e.ny = ky; }
-            }
-            this._drawEnemyHp(e);
+            this._drawBossBar();
+        }
+        if (e.hp <= 0) {
+            e.dead = true; e.deathT = 0; e.staggerT = 0;
+            e.telegraph.clear(); e.hpBar.clear();
+            window.forgeAudio?.playSfx('death', { volume: 0.9 });
             if (e.isBoss) {
-                if (e.hp > 0 && e.phase === 1 && e.bossPattern &&
-                    e.hp <= e.maxHp * (e.bossPattern.phase2_at || 0.5)) {
-                    this._enterBossPhase2(e);
-                }
                 this._drawBossBar();
-            }
-            if (e.hp <= 0) {
-                e.dead = true; e.deathT = 0; e.staggerT = 0;
-                e.telegraph.clear(); e.hpBar.clear();
-                window.forgeAudio?.playSfx('death', { volume: 0.9 });
-                if (e.isBoss) {
-                    this._drawBossBar();
-                    // The last boss standing goes down in slow motion
-                    if (c.enemies.every(o => o === e || o.dead)) this._startKillCam(e);
-                }
+                // The last boss standing goes down in slow motion
+                if (c.enemies.every(o => o === e || o.dead)) this._startKillCam(e);
             }
         }
     }
@@ -3202,6 +3342,166 @@ class GameRenderer {
         this._drawBossBar();
     }
 
+    /** Who this enemy goes for: the player, or a standing companion who is
+     *  clearly closer (companions need a margin to draw aggro — the player
+     *  stays the centre of the fight). With no party this is the player. */
+    _enemyTarget(e) {
+        const p = this.player;
+        const player = { x: p.normalizedX, y: p.normalizedY, ally: null };
+        const c = this.combat;
+        if (!c || !c.allies || !c.allies.length) return player;
+        let best = player;
+        let bestD = this.playerDead ? Infinity : Math.hypot(player.x - e.nx, player.y - e.ny);
+        for (const a of c.allies) {
+            if (a.down) continue;
+            const d = Math.hypot(a.nx - e.nx, a.ny - e.ny) * 1.25;
+            if (d < bestD) { bestD = d; best = { x: a.nx, y: a.ny, ally: a }; }
+        }
+        return best;
+    }
+
+    /** Attack/recover frames follow the AI state — enemies and allies alike. */
+    _applyCombatantFrame(e) {
+        if (!(e.isSprite && e.attackReady)) return;
+        let frame = null;
+        if (e.state === 'windup') {
+            frame = e.t > e.params.windup * 0.45 ? 1 : 2;   // coil as t runs DOWN
+        } else if (e.state === 'strike') {
+            frame = e.t > e.params.lungeMs * 0.5 ? 3 : 4;
+        } else if (e.state === 'recover') {
+            frame = e.t > e.params.recover * 0.5 ? 5 : 6;
+        } else if (e.state === 'slam' || e.state === 'roar') {
+            frame = 1;   // coiled — the threat pose
+        }
+        const want = frame ? e.attackFrames[frame] : e.baseTexture;
+        if (want && e.g.texture !== want) e.g.texture = want;
+    }
+
+    /** A companion takes a hit. At zero they go DOWN (wounded), never dead:
+     *  the server marks them, the DM narrates the limp, rest heals it. */
+    _hurtAlly(a, dmg, aim) {
+        if (!a || a.down) return;
+        a.hp -= dmg;
+        a.flash = 120;
+        const kx = a.nx + (aim ? aim[0] : 0) * 5;
+        const ky = a.ny + (aim ? aim[1] : 0) * 5;
+        if (this.isWalkable(kx, ky)) { a.nx = kx; a.ny = ky; }
+        window.forgeAudio?.playSfx('hurt', { volume: 0.45 });
+        this._drawEnemyHp(a);
+        if (a.hp <= 0) {
+            a.hp = 0;
+            a.down = true;
+            a.downT = 0;
+            a.state = 'down';
+            a.telegraph.clear();
+            a.hpBar.clear();
+            this.spawnFloater(`${a.name || 'Your companion'} is down!`, 0xf87171);
+            window.forgeAudio?.playSfx('death', { volume: 0.5 });
+        }
+    }
+
+    _allyProfile(P) {
+        return {
+            damage: Math.max(1, P.damage ?? 1), knock: 4, hitstop: 30, shake: 2,
+            staggerMs: 0, heavy: false, ally: true,
+        };
+    }
+
+    /** The party's own little AI: chase the nearest standing enemy, wind up,
+     *  lunge, recover — the enemy rhythm, a beat slower, on the other side. */
+    _updateAllies(dt) {
+        const c = this.combat;
+        if (!c || !c.allies || !c.allies.length) return;
+        const clamp = v => Math.max(0, Math.min(100, v));
+        for (const a of c.allies) {
+            const P = a.params || GameRenderer.ARCHETYPES.skirmisher;
+            a.flash = Math.max(0, a.flash - dt);
+            if (a.down) {
+                a.downT += dt;
+                const t = Math.min(1, a.downT / 450);
+                a.g.rotation = 1.15 * t;
+                a.g.alpha = 1 - 0.35 * t;
+                a.g.tint = 0xb8bcc8;
+            } else {
+                a.g.tint = a.flash > 0 ? 0xffb0b0 : 0xffffff;
+                let target = null, best = Infinity;
+                for (const e of c.enemies) {
+                    if (e.dead) continue;
+                    const d = Math.hypot(e.nx - a.nx, e.ny - a.ny);
+                    if (d < best) { best = d; target = e; }
+                }
+                if (target) {
+                    const dx = target.nx - a.nx, dy = target.ny - a.ny;
+                    const dist = Math.hypot(dx, dy) || 1;
+                    a.faceDx = dx;
+                    if (a.state === 'chase' || a.state === 'down') {
+                        a.state = 'chase';
+                        if (dist > P.engage) {
+                            const step = P.speed * dt / 1000;
+                            const nx2 = a.nx + (dx / dist) * step;
+                            const ny2 = a.ny + (dy / dist) * step;
+                            if (this.isWalkable(nx2, a.ny)) a.nx = nx2;
+                            if (this.isWalkable(a.nx, ny2)) a.ny = ny2;
+                        } else {
+                            a.state = 'windup';
+                            a.t = Math.max(P.windup, 320) * 1.2;
+                            a.aim = [dx / dist, dy / dist];
+                        }
+                    } else if (a.state === 'windup') {
+                        a.t -= dt;
+                        if (a.t <= 0) {
+                            a.state = 'strike';
+                            a.t = P.lungeMs;
+                            a.lungeFrom = [a.nx, a.ny];
+                            a.hitDone = false;
+                        }
+                    } else if (a.state === 'strike') {
+                        a.t -= dt;
+                        const prog = 1 - Math.max(0, a.t) / P.lungeMs;
+                        a.nx = clamp(a.lungeFrom[0] + a.aim[0] * P.lungeDist * prog);
+                        a.ny = clamp(a.lungeFrom[1] + a.aim[1] * P.lungeDist * prog);
+                        if (!a.hitDone) {
+                            const ed = Math.hypot(target.nx - a.nx, target.ny - a.ny);
+                            if (ed < 5 && !target.invuln) {
+                                a.hitDone = true;
+                                this._hitEnemy(target, this._allyProfile(P),
+                                               target.nx - a.nx, target.ny - a.ny, ed || 1);
+                                if (!this.combat) return;   // a kill cam may end the fight
+                            }
+                        }
+                        if (a.t <= 0) { a.state = 'recover'; a.t = P.recover * 1.3; }
+                    } else if (a.state === 'recover') {
+                        a.t -= dt;
+                        if (a.t <= 0) a.state = 'chase';
+                    }
+                } else {
+                    // Nobody left standing: drift back to the player's side
+                    a.state = 'chase';
+                    const p = this.player;
+                    const dx = p.normalizedX - a.nx, dy = p.normalizedY - a.ny;
+                    const dist = Math.hypot(dx, dy);
+                    if (dist > 8) {
+                        const step = P.speed * 0.6 * dt / 1000;
+                        const nx2 = a.nx + (dx / dist) * step, ny2 = a.ny + (dy / dist) * step;
+                        if (this.isWalkable(nx2, ny2)) { a.nx = nx2; a.ny = ny2; }
+                        a.faceDx = dx;
+                    }
+                }
+                a.telegraph.clear();
+            }
+            this._applyCombatantFrame(a);
+            a.g.x = this.normalizedToWorldX(a.nx);
+            a.g.y = this.normalizedToWorldY(a.ny);
+            a.g.zIndex = a.g.y;
+            if (a.isSprite && Math.abs(a.faceDx) > 0.5) {
+                a.g.scale.x = Math.abs(a.g.scale.x) * (a.faceDx < 0 ? -1 : 1);
+            }
+            a.hpBar.x = a.g.x;
+            a.hpBar.y = a.g.y - a.h - 14;
+            this._fitShadow(a.shadow, a.g, a.g.y);
+        }
+    }
+
     _updateCombat(dt) {
         const c = this.combat;
         c.iframes = Math.max(0, c.iframes - dt);
@@ -3310,7 +3610,10 @@ class GameRenderer {
             else if (e.invuln) e.g.tint = (Math.floor(e.t / 110) % 2 === 0) ? 0xff9d9d : 0xffffff;
             else e.g.tint = 0xffffff;
 
-            const dx = p.normalizedX - e.nx, dy = p.normalizedY - e.ny;
+            // Every player-position read below goes through the target: with
+            // no party it IS the player, so a solo fight is the old fight
+            const tgt = this._enemyTarget(e);
+            const dx = tgt.x - e.nx, dy = tgt.y - e.ny;
             const dist = Math.hypot(dx, dy);
             const BP = e.bossPattern;
 
@@ -3376,7 +3679,8 @@ class GameRenderer {
                         e.state = 'windup';
                         e.t = P.windup;
                         e.aim = [dx / (dist || 1), dy / (dist || 1)];
-                        this._spawnGroundRing(p.normalizedX, p.normalizedY,
+                        e.aimAt = tgt.ally || null;
+                        this._spawnGroundRing(tgt.x, tgt.y,
                                               P.ringRadius || 8, P.windup, P.damage ?? 1);
                         window.forgeAudio?.playSfx('windup', { volume: 0.55, throttleMs: 200 });
                     }
@@ -3402,6 +3706,7 @@ class GameRenderer {
                         e.t = P.windup;
                         e.circleT = 0;
                         e.aim = [dx / (dist || 1), dy / (dist || 1)];
+                        e.aimAt = tgt.ally || null;
                         // Phase-2 bosses chain their basic into a 3-lunge combo
                         e.comboLeft = (BP && e.phase >= 2) ? (e.comboCount || 3) - 1 : 0;
                         // Audio telegraph alongside the red wedge
@@ -3440,8 +3745,15 @@ class GameRenderer {
                 const ly = e.lungeFrom[1] + e.aim[1] * P.lungeDist * prog;
                 e.nx = Math.max(0, Math.min(100, lx));
                 e.ny = Math.max(0, Math.min(100, ly));
-                // One hit chance per lunge
-                if (!e.hitDone) {
+                // One hit chance per lunge — at the companion it went for,
+                // else at the player
+                if (!e.hitDone && e.aimAt && !e.aimAt.down) {
+                    const a = e.aimAt;
+                    if (Math.hypot(a.nx - e.nx, a.ny - e.ny) < 4.5) {
+                        e.hitDone = true;
+                        this._hurtAlly(a, P.damage ?? 1, e.aim);
+                    }
+                } else if (!e.hitDone) {
                     const pd = Math.hypot(p.normalizedX - e.nx, p.normalizedY - e.ny);
                     if (pd < 4.5 && c.iframes <= 0 && c.dodge <= 0) {
                         e.hitDone = true;
@@ -3505,8 +3817,10 @@ class GameRenderer {
             } else if (e.state === 'combo') {
                 e.t -= dt;
                 if (e.t <= 0) {
-                    const d2 = Math.hypot(p.normalizedX - e.nx, p.normalizedY - e.ny) || 1;
-                    e.aim = [(p.normalizedX - e.nx) / d2, (p.normalizedY - e.ny) / d2];
+                    const t2 = this._enemyTarget(e);
+                    const d2 = Math.hypot(t2.x - e.nx, t2.y - e.ny) || 1;
+                    e.aim = [(t2.x - e.nx) / d2, (t2.y - e.ny) / d2];
+                    e.aimAt = t2.ally || null;
                     e.state = 'strike';
                     e.t = P.lungeMs;
                     e.lungeFrom = [e.nx, e.ny];
@@ -3518,20 +3832,7 @@ class GameRenderer {
             }
 
             // Enemy attack animation: texture follows the AI state
-            if (e.isSprite && e.attackReady) {
-                let frame = null;
-                if (e.state === 'windup') {
-                    frame = e.t > e.params.windup * 0.45 ? 1 : 2;   // coil as t runs DOWN
-                } else if (e.state === 'strike') {
-                    frame = e.t > e.params.lungeMs * 0.5 ? 3 : 4;
-                } else if (e.state === 'recover') {
-                    frame = e.t > e.params.recover * 0.5 ? 5 : 6;
-                } else if (e.state === 'slam' || e.state === 'roar') {
-                    frame = 1;   // coiled — the threat pose
-                }
-                const want = frame ? e.attackFrames[frame] : e.baseTexture;
-                if (want && e.g.texture !== want) e.g.texture = want;
-            }
+            this._applyCombatantFrame(e);
 
             // Apply enemy position; sprites face the player
             e.g.x = this.normalizedToWorldX(e.nx);
@@ -3544,6 +3845,10 @@ class GameRenderer {
             e.hpBar.y = e.g.y - e.h - 14;
             this._fitShadow(e.shadow, e.g, e.g.y);
         }
+
+        // The party fights the same enemies the player does
+        this._updateAllies(dt);
+        if (!this.combat) return;
 
         // Fizzle guard: a "fight" where everyone flees ends on its own —
         // 4 s of not chasing beggars is mercy, not stalemate
@@ -3786,7 +4091,7 @@ class GameRenderer {
         if (this._pendingCombat) {
             const pc = this._pendingCombat;
             this._pendingCombat = null;
-            this.startCombat(pc.enemies, pc.boss);
+            this.startCombat(pc.enemies, pc.boss, pc.allies);
         }
         if (!silent) console.log('Cinematic skipped');
     }

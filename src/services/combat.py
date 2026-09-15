@@ -277,6 +277,9 @@ def build_combat_start(npc_ids: list[str], player_id: str) -> dict[str, Any]:
         if not player:
             return {"error": "Player not found"}
 
+        from src.services import party as party_mod
+        party_ids = set(party_mod.member_ids(player))
+
         enemies = []
         for npc_id in npc_ids:
             npc = _resolve_npc(session, npc_id, player.current_location_id)
@@ -284,6 +287,14 @@ def build_combat_start(npc_ids: list[str], player_id: str) -> dict[str, Any]:
                 return {"error": f"NPC {npc_id!r} not found (pass the npc_id from get_npcs_at_location)"}
             if npc.status != "alive":
                 return {"error": f"{npc.name} is not alive — they can't fight."}
+            if npc.id in party_ids:
+                return {
+                    "error": (
+                        f"{npc.name} is in the player's party — they fight BESIDE the player, "
+                        "never against them. If they have turned on the player, call "
+                        "leave_party first, then start_combat."
+                    )
+                }
             if npc.current_location_id != player.current_location_id:
                 return {
                     "error": (
@@ -315,6 +326,10 @@ def build_combat_start(npc_ids: list[str], player_id: str) -> dict[str, Any]:
                 "title": boss_npc.boss_title or boss_npc.profession or "",
             }
 
+        # The fit members of the party fight at the player's side, at their
+        # own tier — the engine runs them on the canvas like any combatant
+        allies = party_mod.ally_roster(session, player)
+
     if not enemies:
         return {"error": "No combatants given."}
 
@@ -345,11 +360,17 @@ def build_combat_start(npc_ids: list[str], player_id: str) -> dict[str, Any]:
             f"{boss['name']} — your one sentence is the moment before it lands, "
             "not the fight. Stop after it."
         )
+    if allies:
+        instruction += (
+            f" Fighting BESIDE the player: {', '.join(a['name'] for a in allies)} — the "
+            "engine runs them too; their blows are as off-limits to you as the player's."
+        )
 
     result: dict[str, Any] = {
         "success": True,
         "event": "combat_start",
         "enemies": enemies,
+        "allies": allies,           # the party, fit to fight, at their own tier
         "boss": boss,               # None when no boss-tier combatant
         "roster": roster,
         "instruction": instruction,
@@ -392,8 +413,14 @@ def apply_combat_result(
     hearts_healed: int = 0,
     defeated_npc_ids: list[str] | None = None,
     defeated_positions: dict[str, dict[str, Any]] | None = None,
+    downed_allies: list[str] | None = None,
+    ally_npc_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     """Apply a finished fight to the database. Returns what changed.
+
+    downed_allies / ally_npc_ids: party members who went down / who fought.
+    A downed companion is WOUNDED (sits out until the party rests), never
+    killed here — their death is a narrative call the DM makes with context.
 
     defeated_positions: {npc_id: {"x", "y"}} in normalized scene coordinates,
     where each enemy actually fell — their body is left there.
@@ -479,6 +506,15 @@ def apply_combat_result(
                 consequences=[f"{npc.name} is dead — their faction and friends will react."],
             ))
             changes["npc_deaths"].append({"npc_id": npc.id, "npc_name": npc.name})
+
+        # --- Companions: who stood with them, who went down (wounded, never dead) ---
+        from src.services import party as party_mod
+        party_ids = set(party_mod.member_ids(player))
+        fought = [session.get(NPC, i) for i in (ally_npc_ids or []) if i in party_ids]
+        changes["allies_fought"] = [n.name for n in fought if n is not None]
+        wounded = party_mod.wound(session, [i for i in (downed_allies or []) if i in party_ids])
+        if wounded:
+            changes["allies_wounded"] = wounded
 
         # --- Growth, in the same transaction as the kills that earned it ---
         changes["xp_awarded"] = xp_total
@@ -569,6 +605,17 @@ def combat_outcome_message(changes: dict[str, Any], fled: bool = False) -> str:
         )
     if changes.get("health"):
         parts.append(f"Player health is now '{changes['health']}' (already applied — do NOT call update_player_health for these wounds).")
+    if changes.get("allies_fought"):
+        parts.append(
+            f"Fought beside the player: {', '.join(changes['allies_fought'])} — give them their "
+            "moment in the aftermath (a look, a line, a wound dressed)."
+        )
+    if changes.get("allies_wounded"):
+        parts.append(
+            f"WOUNDED (already applied): {', '.join(changes['allies_wounded'])} went down in the "
+            "fight. They still travel with the player but will not fight again until the party "
+            "rests. Narrate them hurt — never dead — and do NOT call kill_npc or update_npc for it."
+        )
     if changes.get("level_up"):
         parts.append(
             "The character has grown from what they survived (the engine already "

@@ -206,6 +206,17 @@ def _build_world_snapshot(player_id: str) -> str:
         else:
             parts.append("NPCs here: None")
 
+        # The player's party (the engine moves them with the player)
+        try:
+            from src.models import Player as _Player, get_session as _gs
+            from src.services import party as _party
+            with _gs() as _s:
+                party_names = _party.names(_s, _s.get(_Player, player_id))
+            if party_names:
+                parts.append(f"Travelling with the player: {', '.join(party_names)}")
+        except Exception:
+            pass
+
         # Available destinations
         if loc_id:
             destinations = get_available_destinations(loc_id)
@@ -335,6 +346,8 @@ def prompt_npc_agent(player_id: str, npc_id: str, player_input: str, is_first_in
             return {"text_response": npc_result.error, "error": npc_result.error_code}
 
         npc_data = uow.npcs.to_dict(npc_result.data)
+        from src.services import party as _party
+        npc_data["in_party"] = _party.is_member_of(uow.session, player_id, npc_id)
 
         # Who this NPC is actually looking at — clothes vs identity, decided in
         # code. It rides the SYSTEM prompt (see below), not the narrative blob,

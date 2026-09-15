@@ -265,6 +265,23 @@ World generation uses separate agents:
   `prompt_npc_agent` returns a code-authored, voiced refusal (no model call)
   when the NPC is hostile and trust < `REFUSAL_TRUST`; `reveal_secret` (now in
   `NPC_TOOLS`) needs `SECRET_TRUST`.
+- **Party** (`src/services/party.py`): `Player.party_members` is now moved
+  by the engine. `join_party`/`leave_party` are shared by the DM and the NPC
+  agent (`NPC_TOOLS`); joining is gated in code (alive, present, room under
+  `MAX_PARTY`, and `standing.join_refusal` — hostile never, warm always,
+  else `JOIN_TRUST`). `move_player` carries members through the same door in
+  the same transaction (`follow` + `settle` beside the arrival door);
+  `sim_move_npc` refuses members, the DM's `move_npc` elsewhere parts them,
+  a campaign `move_npc` op parts them, and `sync` (run in `_build_context`)
+  drops the dead/moved with a `Party change:` context line. `start_combat`
+  refuses a member as an enemy and adds `allies` (fit members at their OWN
+  tier) to the roster; the client fights them (`_updateAllies`, enemies pick
+  targets through `_enemyTarget` so a solo fight is unchanged); a downed
+  companion is `NPC.condition = "wounded"` (never killed by code), reported
+  via `downed_allies` on `/api/combat/result`, excluded from fights until
+  `rest_now` heals the party. Scene rows carry `companion`/`condition`;
+  `state.party` drives the HUD chip/panel and the canvas follow + ring;
+  a "come along" chip appears when the gate would say yes.
 - **Stalled beats**: a fired beat the DM fails to narrate three times becomes
   `stalled` (never silently delivered): it stops blocking, its lead goes on
   the tracker, it is delivered when its keywords or `met_condition` show up,

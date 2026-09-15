@@ -99,7 +99,8 @@ def equip_note(name: str, slot: str = "weapon", *, automatic: bool = False,
     return note
 
 
-def rest_note(location_name: str, kind: str, before: str, after: str, price: int, day: int) -> str:
+def rest_note(location_name: str, kind: str, before: str, after: str, price: int, day: int,
+              party_healed: list[str] | None = None) -> str:
     """`They slept the night at The Drowned Lantern (paid 8) ...` + the morning order."""
     where = f"the {kind} at {location_name}" if kind == "camp" else location_name
     note = f"They slept the night at {where}"
@@ -107,6 +108,8 @@ def rest_note(location_name: str, kind: str, before: str, after: str, price: int
     note += f". It is now first light on Day {day}"
     if before != after:
         note += f"; they woke {after.replace('_', ' ')} (were {before.replace('_', ' ')})"
+    if party_healed:
+        note += f"; {', '.join(party_healed)} of their party {'is' if len(party_healed) == 1 else 'are'} no longer wounded"
     note += (
         ". The clock, their coin and their health are ALREADY moved. Open on the MORNING: "
         "never re-narrate the night, never advance_time or update_player_health for it."
