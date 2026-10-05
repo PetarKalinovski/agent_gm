@@ -71,6 +71,16 @@ LEVEL_TABLE = {
 QUEST_XP = {"errand": 60, "job": 120, "mission": 220, "saga": 400}
 DEFAULT_QUEST_SCALE = "job"
 
+# A quest pays part of its XP step by step. fleet10 (all three runs): 21
+# turns of investigation — three of four main-quest steps done — moved the
+# bar 0 XP; bram's 15 came from three weak wolves. The slices come OUT of the
+# quest's own total, never on top: a quest still pays exactly QUEST_XP[scale]
+# all told (the level curve stays the one tuned above, and the DM's step
+# count clamps the scale as before), it just pays half of it as the steps
+# are met and the rest on completion (`quest_completion_xp`). A failed or
+# abandoned quest keeps what its met steps paid — the work happened.
+STEP_XP_SHARE = 0.5
+
 # ---------------------------------------------------------------------------
 # Gear — one ladder, three effect tables
 # ---------------------------------------------------------------------------
@@ -461,21 +471,43 @@ def unequip(session, p, slot: str) -> dict[str, Any]:
     }
 
 
-def auto_equip(session, p, item_id: str) -> dict[str, Any] | None:
+def auto_equip(session, p, item_id: str, *, upgrade: bool = False) -> dict[str, Any] | None:
     """Equip a just-acquired item IF its slot is empty and the level allows it.
 
     A sword that sits in the bag doing nothing is a bug report — most players
     will never open the character panel. Returns the `equip` result when it
     fired, None otherwise. The caller commits.
+
+    `upgrade` (a purchase): a strictly better tier also replaces what they
+    wear there — buying it was the choice (fleet9-tamsin: a bought hatchet
+    would have sat in the bag behind the Worn Knife the fight used). Never a
+    uniform or a hood: what those cost is who the wearer becomes.
     """
     item = find_item(p, item_id)
     if not item:
         return None
+    # A clue or a key is carried, never worn, whatever slot its author gave
+    # it (fleet4-tamsin T15: "Piper's Howl Notes | kind: trinket" went on as
+    # her combat trinket while the quest's charm sat in the bag)
+    if str(item.get("type") or "").strip().lower() == "quest_item":
+        return None
     mech = mechanize_item(item)
     if not mech or not mech["slot"]:
         return None
-    if resolve_loadout(p).get(mech["slot"]):
-        return None  # they already wear something there — never silently swap
+    worn = resolve_loadout(p).get(mech["slot"])
+    if worn:
+        # they already wear something there — never silently swap, unless
+        # they paid for something strictly better
+        attire = item.get("attire") if isinstance(item.get("attire"), dict) else {}
+        if not upgrade or attire.get("uniform_faction_id") or attire.get("concealing"):
+            return None
+        # ...nor off one: a disguise they put on stays on until they take it
+        # off (a better jerkin bought in a Watch coat would unmask them)
+        on = worn.get("attire") if isinstance(worn, dict) and isinstance(worn.get("attire"), dict) else {}
+        if on.get("uniform_faction_id") or on.get("concealing"):
+            return None
+        if (mech.get("tier") or 0) <= ((mechanize_item(worn) or {}).get("tier") or 0):
+            return None
     ok, _reason = can_equip(p, item)
     if not ok:
         return None
@@ -597,6 +629,19 @@ def coin_drop(tier: str | None) -> int:
     if high <= 0:
         return 0
     return _RNG.randint(low, high)
+
+
+# What a beast's body is worth at the counter, by danger tier: the base value
+# of the fang or pelt it leaves (a merchant pays standing.BUYBACK_FRACTION of
+# it). fleet10-bram T13/T17 and -tamsin: every wolf "carried nothing worth
+# taking" — a predator paid nothing but its tier XP. Harmless game and the
+# story's boss leave no trophy (a boss is never a pelt on a market stall).
+BEAST_TROPHY_VALUE: dict[str, int] = {"weak": 10, "standard": 25, "dangerous": 60, "deadly": 150}
+
+
+def beast_trophy_value(tier: str | None) -> int:
+    """The base value of a beast's trophy; 0 when its tier leaves none."""
+    return BEAST_TROPHY_VALUE.get(str(tier or ""), 0)
 
 
 # Sleep heals by the quality of the bed: health-ladder steps toward healthy
@@ -726,8 +771,37 @@ def quest_scale(quest) -> str:
 
 
 def xp_for_quest(quest) -> int:
-    """XP a completed quest pays, from its `scale` label."""
+    """XP a quest pays all told, from its `scale` label."""
     return QUEST_XP[quest_scale(quest)]
+
+
+def step_xp_paid(quest) -> int:
+    """What the quest's met steps already paid. NULL reads as 0."""
+    try:
+        return max(0, int(getattr(quest, "step_xp_paid", None) or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def step_xp(quest, steps: int, met: int) -> int:
+    """XP for `met` steps of a quest with `steps` steps in all, just met:
+    an even slice of its step share each, never past the share (a list the
+    DM grew or shrank after a slice was paid cannot overpay)."""
+    try:
+        steps, met = int(steps), int(met)
+    except (TypeError, ValueError):
+        return 0
+    if steps <= 0 or met <= 0:
+        return 0
+    pool = int(xp_for_quest(quest) * STEP_XP_SHARE)
+    piece = max(1, pool // steps)
+    return max(0, min(piece * met, pool - step_xp_paid(quest)))
+
+
+def quest_completion_xp(quest) -> int:
+    """What completing the quest still pays: its total less what its steps
+    already paid (a quest whose steps paid nothing pays it all, as before)."""
+    return max(0, xp_for_quest(quest) - step_xp_paid(quest))
 
 
 def strip_authored_xp(rewards: dict | None) -> dict:

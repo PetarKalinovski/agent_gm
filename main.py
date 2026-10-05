@@ -16,8 +16,15 @@ def main():
         "command",
         nargs="?",
         default="play",
-        choices=["play", "seed", "playtest", "clear", "web"],
-        help="Command to run: play (default), seed (create test world), playtest (create Emberfall playtest world), clear (reset world), web (start web frontend)"
+        choices=["play", "seed", "playtest", "clear", "web", "memory-export", "memory-import"],
+        help="Command to run: play (default), seed (create test world), playtest (create Emberfall playtest world), clear (reset world), web (start web frontend), "
+             "memory-export (write the world's NPC memories, journals and chronicles out as markdown files), "
+             "memory-import (read those files back into the world, replacing what it holds)"
+    )
+    parser.add_argument(
+        "--dir",
+        default=None,
+        help="Folder for memory-export/memory-import (default: data/memory/<world>)"
     )
     parser.add_argument(
         "--db",
@@ -43,6 +50,24 @@ def main():
     elif args.command == "clear":
         from src.data.seed import clear_world
         clear_world(args.db)
+    elif args.command in ("memory-export", "memory-import"):
+        # Memory lives inside the world's .db; these files are a copy to read or fix
+        from pathlib import Path
+        if not Path(args.db).exists():
+            print(f"No world at {args.db}")
+            sys.exit(1)
+        from src.config import set_runtime_db_path
+        from src.models import init_db
+        from src.services import memory_files
+        set_runtime_db_path(args.db)
+        init_db(args.db)
+        folder = Path(args.dir) if args.dir else memory_files.memory_root()
+        if args.command == "memory-export":
+            count = memory_files.export_memory(folder)
+            print(f"Wrote {count} memory file(s) to {folder}")
+        else:
+            count = memory_files.import_memory(folder)
+            print(f"Stored {count} memory document(s) from {folder} in {args.db}")
     elif args.command == "play":
         # Check if world exists
         from pathlib import Path

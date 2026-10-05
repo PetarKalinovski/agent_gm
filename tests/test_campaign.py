@@ -594,7 +594,10 @@ def test_beat_delivery_by_keyword_reveals_truths(world):
     _set_clock(1, 14)
     camp.run_campaign_tick(world["player"])
 
-    result = camp.mark_beat_delivery(world["player"], "The brand on the crate is fresh.")
+    # Round 5: a beat that reveals a truth is told only with a term of that
+    # truth said — the brand alone is not "Kestrel breeds the howlers"
+    assert camp.mark_beat_delivery(world["player"], "The brand on the crate is fresh.")["delivered"] is False
+    result = camp.mark_beat_delivery(world["player"], "The brand on the crate is fresh. She breeds them.")
     assert result["delivered"] is True
 
     assert _beat_row("Beat b1").status == "delivered"
@@ -746,7 +749,7 @@ def test_context_block_marks_sealed_truths(world):
     camp.persist_campaign(world["player"], _payload(world, beats))
     _set_clock(1, 14)
     camp.run_campaign_tick(world["player"])
-    camp.mark_beat_delivery(world["player"], "the kennel burns")
+    camp.mark_beat_delivery(world["player"], "the kennel burns where she breeds them")
 
     block = camp.format_campaign_context(camp.run_campaign_tick(world["player"]))
     assert "[KNOWN]  villain_identity: Kestrel Vane breeds" in block
@@ -794,7 +797,7 @@ def test_public_view_redacts_sealed_truths(world):
     camp.persist_campaign(world["player"], _payload(world))
     _set_clock(1, 14)
     camp.run_campaign_tick(world["player"])
-    camp.mark_beat_delivery(world["player"], "the kennel brand")
+    camp.mark_beat_delivery(world["player"], "the kennel brand: she breeds them")
 
     view = camp.campaign_public_view(world["player"])
     blob = str(view)
@@ -812,7 +815,7 @@ def test_dm_view_shows_sealed_truths_the_player_may_not_see(world):
     camp.persist_campaign(world["player"], _payload(world))
     _set_clock(1, 14)
     camp.run_campaign_tick(world["player"])
-    camp.mark_beat_delivery(world["player"], "the kennel brand")
+    camp.mark_beat_delivery(world["player"], "the kennel brand: she breeds them")
 
     view = camp.campaign_dm_view(world["player"])
     kinds = {t["kind"]: t for t in view["truths"]}
@@ -845,7 +848,7 @@ def test_campaign_cinematic_labels_are_deferred_to_cinematics(world, monkeypatch
     assert calls == []                               # carried by toast + prose in v1
 
     _set_clock(1 + camp.DEADLINE_DAYS["short"], 8)
-    camp.mark_beat_delivery(world["player"], "kennel brand")
+    camp.mark_beat_delivery(world["player"], "kennel brand: she breeds them")
     camp.run_campaign_tick(world["player"])          # the missed deadline
 
     assert calls, "a countdown_expired beat must queue a title card"
@@ -1140,3 +1143,168 @@ def test_dangling_key_before_a_closer_is_dropped():
     data = _parse_payload(raw)
     assert data["title"] == "The Long Howl"
     assert data["beats"] == [{"key": "b1", "act": 1}]
+
+
+# ----------------------------------------------------------------------
+# Loose delivery and lived-through beats (playtest 2026-10-04)
+# ----------------------------------------------------------------------
+
+HOLLOW_KEYWORDS = ["Wolf's Hollow", "whistle-note", "Vex Marrow"]
+
+
+def test_a_paraphrased_beat_is_delivered():
+    """The beat "Into the Hollow" was told almost verbatim in other words —
+    "the hollow", never "Wolf's Hollow" — and still flagged three turns running."""
+    told = ("Drag-marks lead deeper into the hollow. A mark is cut into the bark: "
+            "three notches, the shape of the whistle you heard on the road.")
+    assert camp.beat_keywords_delivered({"delivery_keywords": HOLLOW_KEYWORDS}, told)
+    assert camp.mentioned_keywords(HOLLOW_KEYWORDS, told) == ["Wolf's Hollow", "whistle-note"]
+
+
+def test_loose_matching_still_needs_half_the_keywords():
+    beat = {"delivery_keywords": HOLLOW_KEYWORDS}
+    assert not camp.beat_keywords_delivered(beat, "A wolf howls somewhere down in the hollow.")
+    assert camp.mentioned_keywords(["Wolf's Hollow"], "A wolf pads past.") == [], \
+        "the possessive is a modifier: in a wolf story every wolf would name the place"
+    assert camp.beat_keywords_delivered({"delivery_keywords": []}, "anything at all")
+
+
+def test_words_match_through_plurals_tenses_and_possessives():
+    assert camp.mentioned_keywords(["drilled wolves"], "the wolf was drilled") == ["drilled wolves"]
+    assert camp.mentioned_keywords(["evening howl"], "the howling starts") == ["evening howl"]
+    assert camp.mentioned_keywords(["Coldiron"], "Coldiron's men wait") == ["Coldiron"]
+    assert camp.mentioned_keywords(["Captain Coldiron"], "the captain nods") == [], "titles name nobody"
+    assert camp.mentioned_keywords(["gate"], "you investigate") == [], "whole words, not substrings"
+
+
+def test_a_speaker_line_names_its_npc(world):
+    """A beat that only brings someone on stage (its keywords are names) is
+    told when they speak, named in the prose or not."""
+    beats = [_beat("b1", 1, 1, delivery_keywords=["Kestrel Vane"])] + _filler(5)
+    camp.persist_campaign(world["player"], _payload(world, beats))
+    _set_clock(1, 14)
+    camp.run_campaign_tick(world["player"])
+
+    text = '"You took your time," she says, turning the brand over in her hands.'
+    assert camp.mark_beat_delivery(world["player"], text)["delivered"] is False
+    result = camp.mark_beat_delivery(world["player"], text, speakers=["Kestrel Vane"])
+    assert result["delivered"] is True and result["beat_ids"] == [result["beat_id"]]
+    assert _beat_row("Beat b1").status == "delivered"
+
+
+def test_a_name_is_no_evidence_on_its_own(world):
+    """Round 5, fleet6-bram T14: a speaker label told "The Fence's Ledger"
+    with nothing it was there to say. With evidence keywords to say, the
+    speaker only seconds one of them."""
+    beats = [_beat("b1", 1, 1, delivery_keywords=["Kestrel Vane", "brand", "ledger"])] + _filler(5)
+    camp.persist_campaign(world["player"], _payload(world, beats))
+    _set_clock(1, 14)
+    camp.run_campaign_tick(world["player"])
+
+    text = '"You took your time," she says, looking you over.'
+    assert camp.mark_beat_delivery(world["player"], text, speakers=["Kestrel Vane"])["delivered"] is False
+    result = camp.mark_beat_delivery(world["player"], text + " She turns the brand over in her hands.",
+                                     speakers=["Kestrel Vane"])
+    assert result["delivered"] is True
+
+
+def test_a_beat_whose_quest_the_opening_started_is_never_fired(world):
+    """The beat "A Captain Who Needs Hands" only activated the quest the
+    opening had already started; it fired anyway, was nagged as undelivered,
+    and the DM pitched the job a second time."""
+    beats = [
+        _beat("b1", 1, 1, title="A Captain Who Needs Hands", delivery_keywords=["Coldiron"],
+              consequence_met=[{"op": "activate_quest", "quest_id": world["quest"]},
+                               {"op": "tension_floor", "level": "rising"}]),
+        _beat("b2", 1, 2, trigger_type="after_beat",
+              trigger_data={"beat_id": "b1", "delay": "immediate"}, delivery_keywords=["gate"]),
+    ] + _filler(4)
+    camp.persist_campaign(world["player"], _payload(world, beats))
+    with get_session() as session:
+        session.get(Quest, world["quest"]).status = QuestStatus.ACTIVE
+        session.commit()
+
+    _set_clock(1, 14)
+    tick = camp.run_campaign_tick(world["player"])
+    assert _beat_row("A Captain Who Needs Hands").status == "delivered"
+    assert not any(e.get("title") == "A Captain Who Needs Hands" for e in tick["events"])
+    assert tick["fired_beat"]["title"] == "Beat b2", "what waited on it arms and fires instead"
+    with get_session() as session:
+        assert "A Captain Who Needs Hands" in session.query(DMState).first().completed_beats
+
+
+@pytest.mark.parametrize("extra", [
+    {"reveals_truth_ids": ["truth_villain"]},                         # a truth is still to be told
+    {"consequence_met": [{"op": "world_event", "name": "Word spreads"}]},  # news the world has not had
+])
+def test_a_satisfied_quest_op_does_not_retire_a_beat_with_more_to_say(world, extra):
+    ops = [{"op": "activate_quest", "quest_id": world["quest"]}] + extra.get("consequence_met", [])
+    fields = {**extra, "consequence_met": ops}
+    camp.persist_campaign(world["player"], _payload(world, [_beat("b1", 1, 1, **fields)] + _filler(5)))
+    with get_session() as session:
+        session.get(Quest, world["quest"]).status = QuestStatus.ACTIVE
+        session.commit()
+    _set_clock(1, 14)
+    assert camp.run_campaign_tick(world["player"])["fired_beat"]["title"] == "Beat b1"
+
+
+def test_a_beat_fired_before_the_check_existed_is_retired_not_resurfaced(world):
+    beats = [_beat("b1", 1, 1, consequence_met=[{"op": "activate_quest", "quest_id": world["quest"]}])]
+    camp.persist_campaign(world["player"], _payload(world, beats + _filler(5)))
+    with get_session() as session:   # as the old tick left it: fired, nothing applied
+        session.get(Quest, world["quest"]).status = QuestStatus.ACTIVE
+        beat = session.query(StoryBeat).filter(StoryBeat.title == "Beat b1").one()
+        beat.status, beat.fired_day, beat.fired_hour = "fired", 1, 14
+        beat.delivery_attempts, beat.applied_effects = 1, []
+        session.commit()
+    _set_clock(1, 15)
+    assert camp.run_campaign_tick(world["player"])["fired_beat"] is None
+    assert _beat_row("Beat b1").status == "delivered"
+
+
+def test_a_beat_that_started_its_own_quest_still_owes_its_scene(world):
+    beats = [_beat("b1", 1, 1, consequence_met=[{"op": "activate_quest", "quest_id": world["quest"]}])]
+    camp.persist_campaign(world["player"], _payload(world, beats + _filler(5)))
+    _set_clock(1, 14)
+    assert camp.run_campaign_tick(world["player"])["fired_beat"]["attempt"] == 1
+    _set_clock(1, 15)
+    assert camp.run_campaign_tick(world["player"])["fired_beat"]["attempt"] == 2, \
+        "its own op made the world match — the scene is still undelivered"
+    assert _beat_row("Beat b1").status == "fired"
+
+
+def test_a_stem_never_turns_a_keyword_into_a_function_word():
+    """Fleet transcripts: "shed" met every "she", "thing" every "the", and
+    "notes" every "not" when a stripped ending was kept as a word."""
+    assert camp.mentioned_keywords(["the old shed"], "She waits by the door.") == []
+    assert camp.mentioned_keywords(["Piper's notes"], "It is not here, not yet.") == []
+    assert camp.mentioned_keywords(["Fenwick's wares"], "The war is coming north.") == []
+    assert camp.mentioned_keywords(["thing"], "The gate is barred.") == []
+    # ...while the real plurals and tenses still meet their stems
+    assert camp.mentioned_keywords(["Piper's notes"], "She hands you a note.") == ["Piper's notes"]
+    assert camp.mentioned_keywords(["supply boxes"], "a split box") == ["supply boxes"]
+    assert camp.mentioned_keywords(["the old stories"], "an old story") == ["the old stories"]
+    assert camp.mentioned_keywords(["buried"], "where they bury the dead") == ["buried"]
+
+
+def test_a_look_alike_item_does_not_retire_a_give_item_beat(world):
+    """Retiring a beat unfired needs its item held by name: a beat's "Letter"
+    is not satisfied by some other letter in the pack."""
+    beats = [_beat("b1", 1, 1, consequence_met=[{"op": "give_item", "item_name": "Letter"}])]
+    camp.persist_campaign(world["player"], _payload(world, beats + _filler(5)))
+    with get_session() as session:
+        session.get(Player, world["player"]).inventory = [{"name": "Sealed Letter", "quantity": 1}]
+        session.commit()
+    _set_clock(1, 14)
+    assert camp.run_campaign_tick(world["player"])["fired_beat"]["title"] == "Beat b1"
+
+
+def test_the_very_item_held_retires_a_give_item_beat(world):
+    beats = [_beat("b1", 1, 1, consequence_met=[{"op": "give_item", "item_name": "Piper's Howl Chart"}])]
+    camp.persist_campaign(world["player"], _payload(world, beats + _filler(5)))
+    with get_session() as session:
+        session.get(Player, world["player"]).inventory = [{"name": "piper's howl chart", "quantity": 1}]
+        session.commit()
+    _set_clock(1, 14)
+    assert camp.run_campaign_tick(world["player"])["fired_beat"] is None
+    assert _beat_row("Beat b1").status == "delivered"

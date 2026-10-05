@@ -12,19 +12,27 @@ test surface:
 - Walk-cycle filmstrips     -> no Player seeded; character creation is prefilled
                                from pc_suggested_* and generates fresh sprites
 - NPC wandering             -> three NPCs share the starting scene
-- Day/night tint            -> clock starts at 17:30 (evening amber); night at 21:00
+- Day/night tint            -> clock starts at 15:00 (afternoon); evening amber at
+                               17:00, night at 21:00
 - Scheduled events          -> "The Evening Howl" fires at 20:00 on day 1
 - Tension / danger music    -> Wolf's Hollow + the Ashen Fangs arc in DMState
-- Connection requirements   -> the North Gate route is locked behind a gate pass
+- Connection requirements   -> the north road (North Gatehouse -> Wolf's Hollow)
+                               is locked behind a gate pass
 - Quest activation/rewards  -> "Teeth on the North Road" (NOT_STARTED, has
-                               currency/item/reputation rewards)
+                               currency/trinket/reputation rewards; its proof is
+                               the Hollow's whistle, delivered); two follow-on
+                               jobs from Maera and Piper
 - Combat gray-box           -> Ctrl+K anywhere; Vex Marrow at Wolf's Hollow is
                                the natural in-fiction fight
 - Enemy tier ladder         -> harmless townsfolk, weak wolves, dangerous
                                named fighters (Vex/Brann), one authored boss
                                (Aldric Vane, "The Whistler of Wolf's Hollow")
 - Canvas objects            -> 3 per location (read/take/open/search spread;
-                               the tavern satchel is lock-gated to chat)
+                               the tavern satchel is lock-gated to chat; its
+                               letter carries its own text, `reads`)
+- Places off the square     -> Stable Yard (Sorrel's, at his horses) and North
+                               Gatehouse (the north road leaves from it), so the
+                               yard fence and the Watch post are somewhere to @move
 - Quest XP                  -> "Teeth on the North Road" is scale="mission"
 - Attire & dress codes      -> The Drowned Lantern bans hoods and mudflat
                                filth at the door; three garments on three
@@ -56,6 +64,54 @@ from src.services.rest import normalize_rest
 from src.services.scene_objects import normalize_objects
 
 PLAYTEST_DB_PATH = "data/emberfall.db"
+
+
+def _ware(
+    name: str,
+    slot: str | None = None,
+    tier: str | None = None,
+    *,
+    description: str,
+    effect_tag: str | None = None,
+    visual_desc: str | None = None,
+    quantity: int = 1,
+) -> dict:
+    """One thing on a merchant's table — a weapon, a trinket, a draught —
+    priced by the catalog like everything the engine sells."""
+    item = {
+        "id": prog._slug(name),
+        "name": name,
+        "type": "consumable" if effect_tag else ("armor" if slot == "armor" else ("weapon" if slot == "weapon" else "misc")),
+        "description": description,
+        "effects": {},
+        "stackable": bool(effect_tag),
+        "quantity": quantity,
+        "slot": slot,
+        "tier": tier,
+        "effect_tag": effect_tag,
+        "visual_desc": visual_desc,
+        "attire": None,
+    }
+    item["value"] = prog.catalog_price(item) or 0
+    return item
+
+
+# The main quest's first step is this pass, and the Captain carries it: the
+# brief says who holds it and `@give Gate Pass` takes it out of his keeping.
+# fleet9-wenna T1-T6: with no holder, the DM sent her to "get my pass at the
+# gatehouse", a watchman there sent her back, and the Captain handed it over
+# himself — three turns of walking for an item that never reached the pack.
+# A clue or key, never stock: the counter does not sell it.
+_GATE_PASS = {
+    "id": "gate_pass",
+    "name": "Gate Pass",
+    "type": "quest_item",
+    "value": 0,
+    "description": "Stamped leather under the Watch's brass lantern seal. The North Gate opens to it by daylight.",
+    "effects": {},
+    "stackable": False,
+    "quantity": 1,
+}
 
 
 def _garment(
@@ -144,7 +200,7 @@ def create_playtest_world(db_path: str = PLAYTEST_DB_PATH) -> None:
                 "Ashen Fangs, a bandit pack in the hills, run with wolves that "
                 "answer to whistles."
             ),
-            narration_style="Third person, close and sensory. Firelight, cold air, small sounds.",
+            narration_style="Second person, close and sensory. Firelight, cold air, small sounds.",
             dialogue_style="Plain and regional for townsfolk; clipped for the Watch; unhurried menace for the Fangs.",
             violence_level="moderate",
             excluded_elements=["high magic", "undead", "royalty plots", "time travel"],
@@ -159,7 +215,7 @@ def create_playtest_world(db_path: str = PLAYTEST_DB_PATH) -> None:
             color_palette=["lantern amber", "dusk blue", "birch white", "ash gray", "ember red"],
             pc_guidelines="An outsider with a mundane reason to be here and no special powers.",
             pc_starting_situation=(
-                "You are a courier. You arrived at dusk with one letter left to "
+                "You are a courier. You arrived this afternoon with one letter left to "
                 "deliver — addressed to a man who, you are told, was buried three "
                 "weeks ago. Your return cart doesn't leave until the Greywater "
                 "cart arrives, and it is late."
@@ -242,16 +298,19 @@ def create_playtest_world(db_path: str = PLAYTEST_DB_PATH) -> None:
             depth=1,
             position_x=50,
             position_y=50,
+            # No hour in it: the day opens at 15:00 now (see the clock below),
+            # and "lantern posts being lit as the light goes blue" was read
+            # back to the player at every hour
             description=(
-                "Emberfall's cobbled market square at dusk. A round stone well "
+                "Emberfall's cobbled market square. A round stone well "
                 "with a peaked wooden roof stands at the center. Market stalls "
                 "with canvas awnings line the edges, their tables still laid with "
                 "root vegetables and wool. Stacked crates and barrels crowd the "
                 "gaps between stalls. A notice board stands near the north side, "
-                "and iron lantern posts are being lit one by one as the light "
-                "goes blue."
+                "and iron lantern posts wait at the corners for the town's dusk "
+                "lighting."
             ),
-            atmosphere_tags=["dusky", "busy", "lantern-lit", "watchful"],
+            atmosphere_tags=["chill", "busy", "lantern-lit", "watchful"],
             economic_function="trade",
             population_level="moderate",
             current_state="peaceful",
@@ -279,7 +338,7 @@ def create_playtest_world(db_path: str = PLAYTEST_DB_PATH) -> None:
                     "payload": {"item": {
                         "name": "Sweetroot Bundle",
                         "type": "consumable",
-                        "description": "Chewing it steadies the hands. Piper swears by it.",
+                        "description": "Chewing it steadies the hands. It smells of the herb stall.",
                         "value": 2,
                     }},
                 },
@@ -359,7 +418,20 @@ def create_playtest_world(db_path: str = PLAYTEST_DB_PATH) -> None:
                         "item": {
                             "name": "Water-Stained Letter",
                             "type": "quest_item",
-                            "description": "Addressed in the same hand as the letter you carry.",
+                            "description": "Addressed to a man the town buried three weeks ago.",
+                            # Its own words, so nobody writes them for it:
+                            # fleet6-wenna T17's DM invented the letter and
+                            # spilled three sealed truths. A dead carter's
+                            # plain worry, a name, a debt — no clue the
+                            # campaign authors (the drinking debt fits
+                            # Maera's secret: his last night was here)
+                            "reads": (
+                                "Tobin — your last letter frightened me. If the north road is as "
+                                "bad as you say, sell the cart and come home by the south road "
+                                "before the frost. Settle what you owe at the Lantern first; nine "
+                                "coin is not worth a name for leaving debts. The children ask "
+                                "after you every market day. — Nell"
+                            ),
                         },
                     },
                 },
@@ -413,9 +485,14 @@ def create_playtest_world(db_path: str = PLAYTEST_DB_PATH) -> None:
                     "payload": {"item": {
                         "name": "Cracked Bone Whistle",
                         "type": "quest_item",
+                        # What the eye sees, nothing more. It once read "The same
+                        # make as the one Captain Coldiron never mentions": the
+                        # pack showed an unheard name and hinted at his secret,
+                        # and the DM invented a twin whistle to explain it
+                        # (fleet8-tamsin, fleet8-bram T7)
                         "description": (
-                            "Split down the barrel — silent now. The same make "
-                            "as the one Captain Coldiron never mentions."
+                            "Split down the barrel — silent now. Old bone worn "
+                            "smooth by a thumb; finer work than any shepherd's."
                         ),
                     }},
                 },
@@ -435,6 +512,49 @@ def create_playtest_world(db_path: str = PLAYTEST_DB_PATH) -> None:
         session.add(hollow)
         session.flush()
 
+        # Corners of the square the story keeps walking to. fleet6-wenna toured
+        # the stable yard fence (T6-T8) and the gatehouse (T19-T20) on three
+        # no-op `@move Market Square`s; the canvas never left the square. The
+        # player never starts here: the opening is staged on the square with
+        # its people (Sorrel keeps the yard; the north road leaves the gatehouse)
+        stable_yard = Location(
+            name="Stable Yard",
+            type=LocationType.POI,
+            parent_id=square.id,
+            depth=2,
+            position_x=74,
+            position_y=56,
+            description=(
+                "A muddy yard behind the market stalls: a row of horse stalls under a "
+                "sagging roof, a stone water trough, and the north paddock fence where "
+                "the horses stand with their ears turned toward the hills."
+            ),
+            atmosphere_tags=["muddy", "horse-warm", "quiet"],
+            current_state="peaceful",
+            genre_type="fantasy",
+            discovered=True,
+        )
+        gatehouse = Location(
+            name="North Gatehouse",
+            type=LocationType.BUILDING,
+            parent_id=square.id,
+            depth=2,
+            position_x=64,
+            position_y=36,
+            description=(
+                "The Watch's post beside the North Gate: a cramped stone room with a "
+                "brazier, a bench for whoever has the night watch, the gate's iron bar "
+                "leaning by the door, and a slit window onto the north road."
+            ),
+            atmosphere_tags=["cramped", "cold", "watchful"],
+            current_state="peaceful",
+            controlling_faction_id=watch.id,
+            genre_type="fantasy",
+            discovered=True,
+        )
+        session.add_all([stable_yard, gatehouse])
+        session.flush()
+
         # ----- Connections ---------------------------------------------------
         session.add(Connection(
             from_location_id=square.id,
@@ -445,17 +565,31 @@ def create_playtest_world(db_path: str = PLAYTEST_DB_PATH) -> None:
             bidirectional=True,
             discovered=True,
         ))
+        for corner, how in ((stable_yard, "Through the gap between the last stalls, behind the market."),
+                            (gatehouse, "Across the square to the Watch's post at the North Gate.")):
+            session.add(Connection(
+                from_location_id=square.id,
+                to_location_id=corner.id,
+                travel_type="walk",
+                travel_time_hours=0.05,
+                description=how,
+                bidirectional=True,
+                discovered=True,
+            ))
 
         # Requirements-locked route: tests move_player blocking until the DM
-        # confirms requirements_met=True (Brann can issue a gate pass).
+        # confirms requirements_met=True (Brann can issue a gate pass). It
+        # runs from the gatehouse it is guarded by: fleet7-tamsin T9 `@move
+        # North Gatehouse | through` put her in a bare dead end, and the road
+        # beyond lived only in prose. From the square the way is the gatehouse.
         session.add(Connection(
-            from_location_id=square.id,
+            from_location_id=gatehouse.id,
             to_location_id=hollow.id,
             travel_type="walk",
             travel_time_hours=0.75,
             description=(
-                "The north road out of town, through the North Gate and up into "
-                "the birches. The gate is barred after the evening howl."
+                "The north road out through the North Gate and up into the "
+                "birches. The gate is barred after the evening howl."
             ),
             requirements=[
                 "The North Gate must be open, or the player needs a gate pass "
@@ -491,9 +625,13 @@ def create_playtest_world(db_path: str = PLAYTEST_DB_PATH) -> None:
                 "would cause panic. Counts his people twice. Hates owing favors."
             ),
             voice_pattern=(
-                "Low, gravelly, unhurried. Short declarative sentences. Calls "
-                "everyone 'courier', 'keeper', by trade rather than name until "
-                "they've earned otherwise. 'Road's shut. Ask me why.'"
+                # No example trades: the DM copied 'carter' onto every player,
+                # a folklorist investigating a dead carter included (fleet5-wenna
+                # T0/T2/T10, every round before it)
+                "Low, gravelly, unhurried. Short declarative sentences. Calls a "
+                "stranger by the trade they look to have — their own, never a "
+                "stock word — rather than by name until they've earned otherwise. "
+                "'Road's shut. Ask me why.'"
             ),
             goals=[
                 "Keep the north road open without losing anyone",
@@ -513,7 +651,7 @@ def create_playtest_world(db_path: str = PLAYTEST_DB_PATH) -> None:
                 uniform_faction_id=watch.id,
                 description="Watch issue. Nobody hands one of these over lightly.",
                 visual_desc="a boiled-leather Watch coat with the brass lantern badge",
-            )],
+            ), dict(_GATE_PASS)],
         )
         session.add(brann)
 
@@ -543,7 +681,7 @@ def create_playtest_world(db_path: str = PLAYTEST_DB_PATH) -> None:
             goals=["Keep the tavern full and the peace unbroken under her roof"],
             secrets=[
                 "She buys 'wolf-taken' goods cheap from a fence for the Ashen Fangs",
-                "The dead man the player's letter is addressed to drank here his last night",
+                "The carter found dead on the north road three weeks ago drank here his last night",
             ],
             current_mood="composed",
             danger_tier="harmless",
@@ -581,14 +719,17 @@ def create_playtest_world(db_path: str = PLAYTEST_DB_PATH) -> None:
         )
         session.add(piper)
 
+        # At his horses: fleet7-bram T6-T10 the DM voiced a nameless "Stable
+        # Boy" in the Stable Yard while Sorrel stood in the square, and Piper's
+        # "ask Sorrel" step could never tick
         sorrel = NPC(
             name="Sorrel Tack",
             tier=NPCTier.AMBIENT,
             species="human",
             age=16,
             profession="Stable hand",
-            current_location_id=square.id,
-            home_location_id=square.id,
+            current_location_id=stable_yard.id,
+            home_location_id=stable_yard.id,
             position_x=55,
             position_y=72,
             description_physical=(
@@ -599,7 +740,11 @@ def create_playtest_world(db_path: str = PLAYTEST_DB_PATH) -> None:
                 "Cheerful, guileless, names every horse after weather. Wants "
                 "desperately to be taken seriously by the Watch."
             ),
-            voice_pattern="Eager and open. 'Mister! Hey, mister — you came up the north road, didn't you?'",
+            # No "mister": copied onto every player, women too (fleet5-tamsin
+            # T5, fleet5-wenna T6 "Mister — missus, sorry"). Not even as a
+            # "never": a word in the dossier is a word in the DM's mouth
+            voice_pattern=("Eager and open; hails a stranger with a plain 'Hey —', never a title, "
+                           "and asks the next question before the last one's answered."),
             goals=["Join the Lantern Watch when he's of age"],
             secrets=["He saw a man in an ash-gray cloak crouched by the north wall two nights ago, and told no one because no one asks Sorrel"],
             current_mood="excited",
@@ -607,11 +752,58 @@ def create_playtest_world(db_path: str = PLAYTEST_DB_PATH) -> None:
             # The cheap end of the ladder: warm, free, and banned at the tavern
             inventory_notable=[_garment(
                 "Mucker's Oilskin", "crude", "filthy",
-                description="Sorrel's spare. He'll hand it over for a kind word.",
+                description="A stable spare, stiff with muck. Its owner would part with it for a kind word.",
                 visual_desc="a stable oilskin gone black with muck",
             )],
         )
         session.add(sorrel)
+
+        # The market's one real counter. Playtest 2026-10-04: a market square
+        # with nothing for sale meant a new character could never arm
+        # themselves, and every fight was fought bare-handed.
+        hesk = NPC(
+            name="Hesk Bramble",
+            tier=NPCTier.MINOR,
+            species="human",
+            age=58,
+            profession="Hawker of blades, tools and remedies",
+            current_location_id=square.id,
+            home_location_id=square.id,
+            position_x=28,
+            position_y=60,
+            description_physical=(
+                "A stooped, wiry hawker with a leather apron hung with knives and "
+                "twine, a grey stubble beard, and a fur hat pulled low; his stall "
+                "is a cart under a patched red awning."
+            ),
+            description_personality=(
+                "Shrewd, talkative, honest about prices and dishonest about "
+                "everything else. Sells to anyone; remembers who paid."
+            ),
+            voice_pattern="Fast patter, prices first. 'Ten for the knife and it'll outlast you.'",
+            goals=["Sell out before the north road closes for good", "Get his cousin's cart back from the wolves"],
+            secrets=["He buys from the same fence Maera does, and knows the goods come off dead carters"],
+            current_mood="hopeful",
+            danger_tier="weak",
+            currency=140,
+            inventory_notable=[
+                _ware("Gutting Knife", "weapon", "crude",
+                      description="Short, ugly, sharp. It has opened more fish than men.",
+                      visual_desc="a short single-edged gutting knife"),
+                _ware("Woodsman's Hatchet", "weapon", "common",
+                      description="A good iron head on an ash haft.",
+                      visual_desc="a short iron hatchet on an ash haft"),
+                _ware("Padded Jerkin", "armor", "common",
+                      description="Quilted wool over boiled leather. Warm, and it turns a tooth.",
+                      visual_desc="a quilted brown jerkin over boiled leather"),
+                _ware("Willow-Bark Draught", effect_tag="heal_light", quantity=3,
+                      description="Bitter, cloudy, and it works."),
+                _ware("Lamp-Oil Flask", "trinket", "crude",
+                      description="Thrown, it makes a wolf think twice.",
+                      visual_desc="a stoppered clay flask of lamp oil on a cord"),
+            ],
+        )
+        session.add(hesk)
 
         vex = NPC(
             name="Vex Marrow",
@@ -634,8 +826,8 @@ def create_playtest_world(db_path: str = PLAYTEST_DB_PATH) -> None:
                 "the wolves to circle. Not loyal to the Fangs — loyal to the pay."
             ),
             voice_pattern=(
-                "Soft, amused menace. Never hurried. 'Long way from the "
-                "lanterns, courier.'"
+                "Soft, amused menace. Never hurried. Names people for what they "
+                "carry. 'Long way from the lanterns.'"
             ),
             goals=["Keep travelers off the north road", "Get paid"],
             secrets=["His pay is minted Greywater silver — he can name the counting-house on it"],
@@ -647,7 +839,7 @@ def create_playtest_world(db_path: str = PLAYTEST_DB_PATH) -> None:
             inventory_notable=[_garment(
                 "Ashfall Hood", "common", "rough",
                 concealing=True,
-                description="Fangs work. Nobody who wears one wants to be counted.",
+                description="Soot-dark wool, cut deep. Nobody who wears one wants to be counted.",
                 visual_desc="a soot-grey hood that swallows the face",
             )],
         )
@@ -722,6 +914,20 @@ def create_playtest_world(db_path: str = PLAYTEST_DB_PATH) -> None:
                 danger_tier="weak",
                 combat_archetype=wolf_arch,
             ))
+        # The dead carter the town talks about, as a person: he lived only in
+        # Nell's letter, so the DM named him itself ("Fenwick", fleet7-wenna
+        # T1-T2; "Hollis", round 5) and made a second dead carter. With a row,
+        # "People the story has lost" gives every telling his name.
+        session.add(NPC(
+            name="Tobin",
+            tier=NPCTier.AMBIENT,
+            species="human",
+            profession="Carter",
+            status="dead",
+            description_physical="A Greywater carter, weathered and broad, buried three weeks ago.",
+            description_personality="Worried, by his wife's letter; owed the Lantern nine coin.",
+            danger_tier="harmless",
+        ))
         session.flush()
 
         # ----- Quest (NOT_STARTED: tests activate_quest + reward application) --
@@ -733,27 +939,114 @@ def create_playtest_world(db_path: str = PLAYTEST_DB_PATH) -> None:
                 "wild, and bring back proof before the next Greywater cart is due."
             ),
             status=QuestStatus.NOT_STARTED,
+            # Structured, so the ENGINE ticks them (getting the pass, reaching
+            # the Hollow, reporting back). As plain strings they loaded as
+            # "custom" steps only the DM could tick, and a playtest carried
+            # the pass for an hour under "Get Captain Coldiron's gate pass"
+            # Arriving is not discovering: reaching the Hollow is its own step
+            # (a marker to follow), finding out is the DM's custom step
+            # The proof is a real thing handed over, and it is the Hollow's own
+            # authored whistle. As a talk_to it ticked on hearsay (fleet4
+            # tamsin T10, wenna T13) and the whistle stayed in the bracken.
+            # Its words never name it: "Bring the cracked bone whistle back"
+            # sat on the quest log from T1 and the Captain said "Find the
+            # whistle" before any witness had (fleet10-bram T1, -tamsin T2).
+            # The engine still ticks it on the item; the DM's quest block
+            # names it, and the brief says nobody does until it is found
             objectives=[
-                "Get Captain Coldiron's gate pass for the north road",
-                "Find out what is organizing the wolves at Wolf's Hollow",
-                "Bring proof back to Captain Coldiron",
+                {"text": "Get Captain Coldiron's gate pass for the north road",
+                 "kind": "obtain", "item_name": "Gate Pass"},
+                {"text": "Reach Wolf's Hollow", "kind": "go_to", "target_id": hollow.id},
+                {"text": "Find out what is organizing the wolves", "kind": "custom"},
+                {"text": "Bring proof back to Captain Coldiron",
+                 "kind": "deliver", "item_name": "Cracked Bone Whistle", "target_id": brann.id},
             ],
+            # The charm is gear, said the way @give says it: as a bare name it
+            # landed as inert misc in all three fleet4 sessions
             rewards={
                 "currency": 60,
-                "items": ["Wolf-Tooth Charm"],
+                "items": [{
+                    "name": "Wolf-Tooth Charm", "kind": "trinket", "tier": "common",
+                    "about": ("A wolf's fang bound in brass wire on a Watch cord. Watch "
+                              "patrols know it on sight, and wolves give its wearer half a "
+                              "breath more room."),
+                }],
                 "reputation": {watch.id: 10},
             },
             assigned_by_npc_id=brann.id,
             scale="mission",
         ))
 
+        # ----- Follow-on work (NOT_STARTED): a quest turned in must leave the
+        # player something to pick up. fleet4-tamsin/-wenna: after the payout,
+        # nine turns with no quest and no NPC with work to offer. Each is
+        # built from its giver's own dossier and the world's authored props.
+        session.add(Quest(
+            title="A Letter for a Buried Man",
+            # Says what the job is, never what the letter says: the satchel's
+            # payload stays the reveal, and prose that paraphrased a quest
+            # restating it ("addressed to a man the town buried") would read
+            # to the audit as the unopened satchel's contents leaking
+            description=(
+                "Maera has kept a lost traveler's satchel under her roof since before "
+                "the roads went bad, and wants it gone before anyone asks whose it was. "
+                "Something in it was never delivered. The Watch keeps the affairs of "
+                "the dead."
+            ),
+            status=QuestStatus.NOT_STARTED,
+            # The satchel in the Lantern is lock-gated to asking her: when she
+            # says yes the DM writes `@interact Lost traveler's satchel |
+            # through`, the engine hands over the letter, and the obtain ticks
+            objectives=[
+                {"text": "Take the letter from the lost traveler's satchel, with Maera's leave",
+                 "kind": "obtain", "item_name": "Water-Stained Letter"},
+                {"text": "Learn who the letter was meant for, and how he died", "kind": "custom"},
+                {"text": "Put the letter in Captain Coldiron's hands",
+                 "kind": "deliver", "item_name": "Water-Stained Letter", "target_id": brann.id},
+            ],
+            rewards={"currency": 20, "reputation": {watch.id: 5}},
+            assigned_by_npc_id=maera.id,
+            scale="job",
+        ))
+        session.add(Quest(
+            title="Counting the Howls",
+            description=(
+                "Piper swears the howls keep a schedule, and nobody with a badge will "
+                "listen to an herbalist's apprentice. Find who else is awake when they "
+                "start, stand out the next one, mark where it rises, and bring her what "
+                "you heard."
+            ),
+            status=QuestStatus.NOT_STARTED,
+            # The last step goes back to Piper (her own talk_to waits for the
+            # steps before it); a talk_to Coldiron would tick the first time
+            # the player spoke to him, done or not
+            objectives=[
+                {"text": "Ask Sorrel Tack what the stable yard hears after dark",
+                 "kind": "talk_to", "target_id": sorrel.id},
+                {"text": "Stand out the next howl and mark where it rises", "kind": "custom"},
+                {"text": "Bring what you heard back to Piper", "kind": "talk_to", "target_id": piper.id},
+            ],
+            rewards={
+                "currency": 10,
+                "items": [{
+                    "name": "Yarrow Tincture", "kind": "potion",
+                    "about": "An herbalist's own: green, bitter, and it closes a cut faster than it has any right to.",
+                }],
+            },
+            assigned_by_npc_id=piper.id,
+            scale="job",
+        ))
+
         # ----- Scheduled events (fire deterministically on the world tick) ----
+        # The howl is at eight in every mouth; its text once said the gate was
+        # barred "early", and the DM told it shutting "well ahead of its usual
+        # hour" at 20:15 (fleet5-wenna T10)
         session.add(Event(
             name="The Evening Howl",
             description=(
                 "At the stroke of eight, howling rises from the northern hills — "
                 "layered, answering itself, closer than last night. The North "
-                "Gate is barred early and the square empties fast."
+                "Gate is barred behind it and the square empties fast."
             ),
             event_type="meso",
             scheduled_day=1,
@@ -782,17 +1075,27 @@ def create_playtest_world(db_path: str = PLAYTEST_DB_PATH) -> None:
         ))
 
         # ----- Clock & DM state ------------------------------------------------
-        # 17:30 = evening (amber tint immediately); night tint lands at 21:00.
-        # The Evening Howl is 2.5 game-hours out — a few conversations away.
-        session.add(WorldClock(day=1, hour=17, minute=30))
+        # 15:00 = afternoon; evening amber at 17:00, night blue at 21:00. It
+        # opened at 17:30 until fleet9: the 20:00 howl barred the north gate
+        # (and the pass is void after dark) ten replies in, so no session of
+        # 21 reached Wolf's Hollow and the main quest stalled on its first
+        # step (fleet9-tamsin, -wenna). Five game-hours of open road: the
+        # Hollow is ~4 replies away by day (pass, gatehouse, 45 minutes of
+        # road). The howl still lands inside a 21-reply session: the fleet
+        # runs that did not sleep spent 5h06m-6h28m in 21 replies (fleet9's
+        # town-bound three exactly the 15-minute floor, 5h15m), so from 14:00
+        # a town-bound session ended at 19:15 without it — the set piece the
+        # critics called the best scene of fleet7 and fleet9-bram, and a step
+        # of "Counting the Howls".
+        session.add(WorldClock(day=1, hour=15, minute=0))
 
         session.add(DMState(
             current_arc=(
                 "Someone is using trained wolves to strangle the north road. "
-                "The player's undeliverable letter is the loose thread."
+                "A carter dead on the north road three weeks ago is the loose thread."
             ),
             planned_beats=[
-                "The letter's recipient is dead — Maera knew him and deflects",
+                "The dead carter drank at the Lantern — Maera knew him and deflects",
                 "Coldiron offers the Wolf's Hollow job (activate the seeded quest)",
                 "The Evening Howl fires at 20:00 and empties the square",
                 "A gate pass unlocks the north road connection",
@@ -809,14 +1112,15 @@ def create_playtest_world(db_path: str = PLAYTEST_DB_PATH) -> None:
         print()
         print("Playtest checklist (systems -> where to poke them):")
         print("  Music palette   First click in-world starts Suno generation; tracks fade in (2-5 min each).")
-        print("  Day/night tint  It's 17:30 — evening amber now, night blue after 21:00.")
+        print("  Day/night tint  It's 15:00 — afternoon now, evening amber at 17:00, night blue after 21:00.")
         print("  Walk cycles     Character creation is prefilled (Rook Fennick); sprites + 6-frame strips generate.")
         print("  Obstacles       Market Square bg auto-detects stalls/crates/well; Ctrl+E, C to inspect, G to redo.")
-        print("  NPC wandering   Brann, Piper, and Sorrel share the square; watch them stroll and pause near you.")
+        print("  NPC wandering   Brann, Piper, and Hesk share the square; watch them stroll and pause near you.")
         print("  TTS voices      Talk to Brann (old gruff) then Piper (young bright) — distinct voices, music ducks.")
-        print("  Scheduled event 'The Evening Howl' fires at 20:00 day 1 (2.5 game-hours out).")
-        print("  Locked travel   North road to Wolf's Hollow needs a gate pass from Brann.")
+        print("  Scheduled event 'The Evening Howl' fires at 20:00 day 1 (5 game-hours out).")
+        print("  Locked travel   North road from the gatehouse to Wolf's Hollow needs a gate pass from Brann.")
         print("  Quest flow      'Teeth on the North Road' is seeded NOT_STARTED with rewards; Brann offers it.")
+        print("                  Follow-ons: Maera's satchel letter, Piper's howl count.")
         print("  Combat          Ctrl+K anywhere for the gray-box; Vex Marrow at the Hollow is the story fight.")
         print("  Attire          Buy Vex's Ashfall Hood -> the Lantern's door refuses you; wear Brann's")
         print("                  Watch Coat -> strangers treat you as the Watch, Brann does not.")

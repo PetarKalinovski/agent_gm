@@ -143,6 +143,52 @@ class VoiceGenerator:
         idx = int(hashlib.sha1(npc.id.encode()).hexdigest(), 16) % len(candidates)
         return candidates[idx].voice_id
 
+    def ambient_voice(self, label: str) -> str:
+        """A stable pool voice for an unnamed speaker ("Gate Guard").
+
+        Ambient folk have no NPC row, so they had no voice at all — the guard
+        who dragged the gate open spoke in silence. Same label, same voice,
+        every time; the label's own words ("old", "girl", "woman") steer it.
+        """
+        pool = self.audio_cfg.voice_pool
+        if not pool or not (label or "").strip():
+            return ""
+        desc = _words(label)
+
+        def score(entry) -> int:
+            tags = _words(entry.tags)
+            s = 0
+            if "female" in tags and desc & _FEMALE_WORDS:
+                s += 10
+            if "male" in tags and desc & _MALE_WORDS:
+                s += 10
+            if "old" in tags and desc & _OLD_WORDS:
+                s += 3
+            if "young" in tags and desc & _YOUNG_WORDS:
+                s += 3
+            return s
+
+        best = max(score(e) for e in pool)
+        candidates = [e for e in pool if score(e) == best]
+        idx = int(hashlib.sha1(label.strip().lower().encode()).hexdigest(), 16) % len(candidates)
+        return candidates[idx].voice_id
+
+    async def generate_line_for_voice(self, voice_id: str, text: str, tone: str, audio_id: str) -> str | None:
+        """TTS for a speaker with no NPC row (ambient), straight from a voice id."""
+        cached = self.line_path(audio_id)
+        if cached:
+            return str(cached)
+        text = (text or "").strip()
+        if not voice_id or not text or len(text) > self.audio_cfg.max_tts_chars:
+            return None
+        async with httpx.AsyncClient() as client:
+            audio = await self._generate_elevenlabs(client, voice_id, text, tone)
+        if audio:
+            dest = self.voices_dir / f"{audio_id}.mp3"
+            dest.write_bytes(audio)
+            return str(dest)
+        return None
+
     def ensure_voice_assigned(self, npc_id: str) -> str | None:
         """Return the NPC's voice_id, assigning and persisting one if missing."""
         with get_session() as db:
@@ -193,11 +239,30 @@ class VoiceGenerator:
             logger.warning(f"Qwen3-TTS request failed: {str(e)[:100]}")
         return None
 
+    # A conversation turn speaks five or six lines at once; ElevenLabs answers
+    # a burst like that with 429 Too Many Requests (seen 2026-10-04 — three
+    # failed attempts, a silent Coldiron). Lines queue behind this gate in the
+    # order they were spoken, which is also the order the client plays them.
+    ELEVENLABS_CONCURRENCY = 2
+    _elevenlabs_gate: asyncio.Semaphore | None = None
+
+    @classmethod
+    def _gate(cls) -> asyncio.Semaphore:
+        if cls._elevenlabs_gate is None:
+            cls._elevenlabs_gate = asyncio.Semaphore(cls.ELEVENLABS_CONCURRENCY)
+        return cls._elevenlabs_gate
+
     async def _generate_elevenlabs(
         self, client: httpx.AsyncClient, voice_id: str, text: str, tone: str
     ) -> bytes | None:
         if not self.api_key:
             return None
+        async with self._gate():
+            return await self._elevenlabs_request(client, voice_id, text, tone)
+
+    async def _elevenlabs_request(
+        self, client: httpx.AsyncClient, voice_id: str, text: str, tone: str
+    ) -> bytes | None:
         settings = TONE_SETTINGS.get(tone, DEFAULT_TONE_SETTINGS)
         delays = [1, 3, 5]
         for attempt in range(3):
@@ -213,6 +278,11 @@ class VoiceGenerator:
                     },
                     timeout=120,
                 )
+                if resp.status_code == 429 and attempt < 2:
+                    # Rate limited: wait what the service asks, at least our step
+                    wait = max(delays[attempt], float(resp.headers.get("retry-after") or 0))
+                    await asyncio.sleep(min(wait, 15))
+                    continue
                 resp.raise_for_status()
                 return resp.content
             except Exception as e:

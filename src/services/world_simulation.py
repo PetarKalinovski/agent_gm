@@ -9,6 +9,7 @@ as changed world state the player discovers.
 Runs in the background after a player turn (never blocks the turn itself).
 """
 
+import re
 from typing import Any
 
 from loguru import logger
@@ -37,6 +38,13 @@ Rules:
 - Record what happened with create_event (event_type "macro" for faction-level,
   "meso" for local). Set player_visible=True only for things the player could
   plausibly hear about.
+- locations_involved takes ids from the PLACES list you are given, and only
+  those — a place that is not on it does not exist. An event that names one
+  is refused.
+- The FIXED TRUTHS you are given are the story's: no event may contradict
+  them, and no event may reveal, hint at, or restate them. Do not explain the
+  world's central mystery (no rituals, no cults, no culprits) — that story is
+  told elsewhere.
 - Do NOT touch the player, their inventory, or their location. Do NOT kill
   named NPCs. Do NOT create new locations or NPCs. Small moves, big world.
 
@@ -132,13 +140,172 @@ def sim_move_npc(npc_id: str, destination_id: str) -> dict[str, Any]:
     return move_npc(npc_id, destination_id)
 
 
+# ----------------------------------------------------------------------
+# Events the simulator writes: real places, the story's truths intact
+# ----------------------------------------------------------------------
+# fleet5-wenna T18 (a night's rest ran the day tick): "Northern Howl
+# Investigation" sent Captain Coldiron — kept in the square by the campaign —
+# on a patrol to 'northern_hills', and "Third Night of the Calling" had the
+# Fangs finish a "three-night ritual" at 'north_gate' and 'town_square'. None
+# of those places exists; the truth is whistle and scent-marker training.
+# The model now gets the real places and the campaign's fixed truths, and an
+# event that names a place that does not resolve, or puts a staged person
+# somewhere they are not, is refused.
+
+def _norm_place(text: str) -> str:
+    words = re.findall(r"[a-z0-9]+", str(text or "").lower().replace("'", "").replace("’", ""))
+    return " ".join(w for w in words if w not in ("the", "a", "an"))
+
+
+def _resolve_places(session, labels: list[str] | None) -> tuple[list[str], list[str]]:
+    """(location ids, labels that name no place). An id or a place's name
+    ("Market Square", "market_square") resolves; nothing else does."""
+    from src.models import Location
+
+    rows = session.query(Location).all()
+    by_id = {row.id: row.id for row in rows}
+    by_name = {_norm_place(row.name): row.id for row in rows}
+    resolved: list[str] = []
+    unknown: list[str] = []
+    for label in labels or []:
+        place = by_id.get(str(label).strip()) or by_name.get(_norm_place(label))
+        if place:
+            if place not in resolved:
+                resolved.append(place)
+        else:
+            unknown.append(str(label))
+    return resolved, unknown
+
+
+def _event_refusal(session, locations: list[str] | None,
+                   npcs: list[str] | None) -> tuple[str | None, list[str]]:
+    """(why the event is refused, or None; its resolved location ids)."""
+    from src.models import NPC
+
+    resolved, unknown = _resolve_places(session, locations)
+    if unknown:
+        verdict = "is not a place" if len(unknown) == 1 else "are not places"
+        return (f"refused: {', '.join(repr(u) for u in unknown[:3])} {verdict} in this world. "
+                "locations_involved takes ids from the PLACES list only — pick one of those or leave it "
+                "empty."), resolved
+    staged = staged_npc_ids(session)
+    for npc_id in npcs or []:
+        npc = session.get(NPC, npc_id) if npc_id in staged else None
+        if npc is None or not resolved:
+            continue
+        # Where they stand, and every place that holds it (the town's event
+        # still has the captain in its square)
+        around, place = set(), npc.current_location
+        while place is not None and place.id not in around:
+            around.add(place.id)
+            place = place.parent
+        if around & set(resolved):
+            continue
+        where = npc.current_location.name if npc.current_location is not None else "where they are"
+        return (f"refused: {npc.name} is staged by the campaign at {where}; an event cannot send them "
+                "anywhere else. Set it where they are, or leave them out of npcs_involved."), resolved
+    return None, resolved
+
+
+def sim_create_event(name: str, description: str, event_type: str = "meso",
+                     factions_involved: list[str] | None = None,
+                     locations_involved: list[str] | None = None,
+                     npcs_involved: list[str] | None = None,
+                     consequences: list[str] | None = None,
+                     player_visible: bool = True) -> dict[str, Any]:
+    """Record something that happened offscreen today.
+
+    Args:
+        name: Event name.
+        description: What happened (never a fixed truth, never a revelation).
+        event_type: "macro" (faction-level) or "meso" (local).
+        factions_involved: Faction IDs involved.
+        locations_involved: Location ids from the PLACES list — nothing else.
+        npcs_involved: NPC IDs involved.
+        consequences: What changed.
+        player_visible: Whether the player could plausibly hear of it.
+
+    Returns:
+        The created event, or an "error" explaining the refusal.
+    """
+    from src.tools.world_write import create_event
+
+    with get_session() as session:
+        refusal, places = _event_refusal(session, locations_involved, npcs_involved)
+    if refusal:
+        return {"error": refusal}
+    return create_event(name=name, description=description, event_type=event_type,
+                        factions_involved=factions_involved, locations_involved=places,
+                        npcs_involved=npcs_involved, consequences=consequences,
+                        player_visible=player_visible)
+
+
+def sim_schedule_world_event(name: str, description: str, event_type: str, scheduled_day: int,
+                             scheduled_hour: int, factions_involved: list[str] | None = None,
+                             locations_involved: list[str] | None = None,
+                             npcs_involved: list[str] | None = None,
+                             consequences: list[str] | None = None,
+                             player_visible: bool = True) -> dict[str, Any]:
+    """Schedule a future world event to fire at a game time.
+
+    Args:
+        name: Event name.
+        description: What happens when it fires (never a fixed truth).
+        event_type: "macro" (faction-level) or "meso" (local).
+        scheduled_day: Game day it fires.
+        scheduled_hour: Game hour (0-23) it fires.
+        factions_involved: Faction IDs involved.
+        locations_involved: Location ids from the PLACES list — nothing else.
+        npcs_involved: NPC IDs involved.
+        consequences: What should change when it fires.
+        player_visible: Whether the player can learn about it.
+
+    Returns:
+        The scheduled event, or an "error" explaining the refusal.
+    """
+    from src.tools.world_write import schedule_world_event
+
+    with get_session() as session:
+        refusal, places = _event_refusal(session, locations_involved, npcs_involved)
+    if refusal:
+        return {"error": refusal}
+    return schedule_world_event(name=name, description=description, event_type=event_type,
+                                scheduled_day=scheduled_day, scheduled_hour=scheduled_hour,
+                                factions_involved=factions_involved, locations_involved=places,
+                                npcs_involved=npcs_involved, consequences=consequences,
+                                player_visible=player_visible)
+
+
+def world_facts(session) -> str:
+    """What the simulator must hold to: every real place (id — name), the
+    people the campaign has staged, and the campaign's fixed truths as
+    constraints it may never contradict or reveal."""
+    from src.models import NPC, Location
+    from src.models.campaign import Campaign
+
+    lines = ["PLACES (the only ones that exist — locations_involved takes these ids):"]
+    lines += [f"- {row.id} — {row.name}" for row in session.query(Location).order_by(Location.name).all()]
+    staged = sorted(staged_npc_ids(session))
+    if staged:
+        names = [f"{npc.name} (at {npc.current_location.name if npc.current_location else 'nowhere'})"
+                 for npc in session.query(NPC).filter(NPC.id.in_(staged)).all()]
+        lines.append("STAGED BY THE STORY (never moved, never sent anywhere by an event): " + "; ".join(names))
+    truths = []
+    for campaign in session.query(Campaign).filter(Campaign.status.in_(("pending", "active"))).all():
+        truths += [str(t.get("statement") or "").strip() for t in campaign.fixed_truths or []
+                   if isinstance(t, dict) and str(t.get("statement") or "").strip()]
+    if truths:
+        lines.append("FIXED TRUTHS (constraints — no event contradicts them; none reveals, hints at or "
+                     "restates them):")
+        lines += [f"- {statement}" for statement in dict.fromkeys(truths)]
+    return "\n".join(lines)
+
+
 def _get_sim_tools() -> list:
     from strands import tool
 
     from src.tools.world_read import get_world_state_summary, get_recent_events, get_all_npcs
     from src.tools.world_write import (
-        create_event,
-        schedule_world_event,
         update_faction,
         update_dm_state,
     )
@@ -147,9 +314,9 @@ def _get_sim_tools() -> list:
         get_world_state_summary,
         get_recent_events,
         get_all_npcs,
-        create_event,
+        tool(name="create_event")(sim_create_event),
         tool(name="move_npc")(sim_move_npc),
-        schedule_world_event,
+        tool(name="schedule_world_event")(sim_schedule_world_event),
         update_faction,
         update_dm_state,
     ]
@@ -159,13 +326,15 @@ def _run_sim_agent() -> str:
     """Run one world-simulation turn. Returns the agent's summary."""
     from src.agents.base import create_agent
 
+    with get_session() as session:
+        facts = world_facts(session)
     agent = create_agent(
         agent_name="world_sim",
         system_prompt=WORLD_SIM_PROMPT,
         tools=_get_sim_tools(),
         callback_handler=None,
     )
-    result = agent("One in-game day has passed. Advance the world.")
+    result = agent(f"One in-game day has passed. Advance the world.\n\n{facts}")
     return str(result)
 
 

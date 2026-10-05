@@ -286,19 +286,68 @@ def _item_matches(wanted: str | None, names: Iterable[str]) -> bool:
     return False
 
 
-def tick_in_session(session, player, matcher: Callable[[dict[str, Any]], bool]) -> list[dict[str, Any]]:
-    """Mark every matching undone objective on the player's ACTIVE quests.
+_RETURN_KINDS = ("talk_to", "deliver")
+
+# A custom step that asks a question ("Find out what is organizing the
+# wolves", "Learn who the letter was meant for") is answered by the story,
+# not by the proof changing hands. fleet8-bram T7: the whistle in the
+# Captain's hand ticked it while he said "You want the whole of it, you'll
+# have to give me more than one night in the Hollow. Go back." — the job was
+# paid in full at T8, and the act-3 beat waiting on it being under way could
+# never come. The DM rules it (@step-done) when the story answers it.
+_INVESTIGATES = re.compile(
+    r"^\s*(?:find\s+out|learn|discover|uncover|work\s+out|figure\s+out|determine|identify|investigate"
+    r"|who|why|what|how|where|whose)\b",
+    re.IGNORECASE,
+)
+
+
+def investigates(obj: dict[str, Any]) -> bool:
+    """Is this a custom step that asks a question (see above)?"""
+    return obj.get("kind") == "custom" and bool(_INVESTIGATES.match(str(obj.get("text") or "")))
+
+
+def _is_return_step(obj: dict[str, Any], earlier: list[dict[str, Any]], giver_id: str | None) -> bool:
+    """A step that closes a loop, so it waits for the steps before it.
+
+    Two shapes: a target an earlier objective already named ("Report back to
+    Coldiron" after "Talk to Coldiron"), and a talk/hand-over aimed at the
+    quest's GIVER. The giver one is the playtest 2026-10-04 bug: "Bring proof
+    back to Captain Coldiron" ticked on turn 0 because Coldiron speaks while
+    offering the job, and the quest paid out before any proof existed.
+
+    A `kill` step never waits: a death happens once, so a held-back kill
+    ("Kill Vex" after an unmet "Talk to Vex") could never tick again.
+    """
+    target = obj.get("target_id")
+    if not target or obj.get("kind") == "kill":
+        return False
+    if any(prev.get("target_id") == target for prev in earlier):
+        return True
+    return bool(giver_id) and target == giver_id and obj.get("kind") in _RETURN_KINDS
+
+
+def tick_in_session(session, player, matcher: Callable[[dict[str, Any]], bool],
+                    *, quest_id: str | None = None, skip_quest_ids: Iterable[str] = ()) -> list[dict[str, Any]]:
+    """Mark every matching undone objective on the player's ACTIVE quests
+    (only on `quest_id` when given).
 
     Runs inside the caller's transaction and never commits. Returns one
     record per objective completed; call `publish` once the caller has
     committed so the client and the ledger hear about it.
+
+    A return step (`_is_return_step`) completes only when every objective
+    before it was done BEFORE this event — one conversation never both
+    opens and closes a loop.
     """
     if player is None:
         return []
     # Quests are world-global (one story per database); the player's own list
     # is an ordering hint, not a filter — a quest an NPC agent activated for
     # "the" player is still theirs even when the list never caught it
-    quests = active_quests_for(session, player)
+    skip = set(skip_quest_ids or ())
+    quests = [q for q in active_quests_for(session, player)
+              if (quest_id is None or q.id == quest_id) and q.id not in skip]
     if not quests:
         return []
     clock = session.query(WorldClock).first()
@@ -307,9 +356,21 @@ def tick_in_session(session, player, matcher: Callable[[dict[str, Any]], bool]) 
     records: list[dict[str, Any]] = []
     for quest in quests:
         objectives = normalize_objectives(quest.objectives)
+        done_before = [bool(o["done"]) for o in objectives]
+        giver_id = getattr(quest, "assigned_by_npc_id", None)
         hits: list[dict[str, Any]] = []
-        for obj in objectives:
+        for index, obj in enumerate(objectives):
             if obj["done"]:
+                continue
+            # The real item in the giver's hand closes the loop by itself: a
+            # custom step only the DM can tick never holds back a delivery
+            # (fleet5-tamsin: "Find out what is organizing the wolves" was
+            # never ticked, and the lead sends them on to the proof — see
+            # lead._proof_lead)
+            returning = _is_return_step(obj, objectives[:index], giver_id)
+            waiting = [done or (obj["kind"] == "deliver" and objectives[i]["kind"] == "custom")
+                       for i, done in enumerate(done_before[:index])]
+            if returning and not all(waiting):
                 continue
             try:
                 if not matcher(obj):
@@ -317,6 +378,17 @@ def tick_in_session(session, player, matcher: Callable[[dict[str, Any]], bool]) 
             except Exception as e:
                 logger.warning(f"objective matcher failed: {e}")
                 continue
+            if returning and obj["kind"] == "deliver":
+                # ...and settles them, or the tracker falls back onto the
+                # frozen step the moment the proof is handed over (a hand-over
+                # to someone else mid-quest closes no loop: its customs stay)
+                # — but never a question the story has not answered yet
+                # (`investigates`, fleet8-bram T7)
+                for prev in objectives[:index]:
+                    if not prev["done"] and prev["kind"] == "custom" and not investigates(prev):
+                        prev["done"] = True
+                        prev["done_day"] = day
+                        hits.append(prev)
             obj["done"] = True
             obj["done_day"] = day
             hits.append(obj)
@@ -333,7 +405,32 @@ def tick_in_session(session, player, matcher: Callable[[dict[str, Any]], bool]) 
                 "kind": obj["kind"],
                 "all_done": finished,
             })
+        pay_step_xp(session, player, quest, len(objectives), records[-len(hits):])
     return records
+
+
+def pay_step_xp(session, player, quest, steps: int, records: list[dict[str, Any]]) -> dict[str, Any]:
+    """The quest's XP slice for the steps just met (`records`, all of this
+    quest), granted in the caller's transaction; its progression block
+    rides the last record, so the toast moves the bar (fleet10: a whole
+    session of investigation moved it 0). {} when nothing was paid. Never
+    raises — a step met is never undone by its XP."""
+    if player is None or not records:
+        return {}
+    try:
+        from src.services import progression
+
+        amount = progression.step_xp(quest, steps, len(records))
+        if amount <= 0:
+            return {}
+        quest.step_xp_paid = progression.step_xp_paid(quest) + amount
+        block = progression.grant_xp(session, player, amount, "quest_step")
+        if block:
+            records[-1]["progression"] = block
+        return block
+    except Exception as e:
+        logger.warning(f"step XP not paid for {getattr(quest, 'id', '?')}: {e}")
+        return {}
 
 
 def publish(player_id: str | None, records: list[dict[str, Any]]) -> None:
@@ -346,7 +443,7 @@ def publish(player_id: str | None, records: list[dict[str, Any]]) -> None:
     with _lock:
         queue = _pending_events.setdefault(pid, [])
         for r in records:
-            queue.append({
+            event = {
                 "type": "objective_done",
                 "quest_id": r["quest_id"],
                 "quest_title": r["quest_title"],
@@ -354,7 +451,11 @@ def publish(player_id: str | None, records: list[dict[str, Any]]) -> None:
                 "text": r["text"],
                 "kind": r["kind"],
                 "all_done": bool(r.get("all_done")),
-            })
+            }
+            # The step's XP rides its toast: the bar moves, never a number in chat
+            if r.get("progression"):
+                event["progression"] = r["progression"]
+            queue.append(event)
         _audit_tools.setdefault(pid, set()).add("update_quest_objectives")
     for r in records:
         try:
@@ -366,14 +467,21 @@ def publish(player_id: str | None, records: list[dict[str, Any]]) -> None:
         except Exception as e:
             logger.debug(f"objective ledger line skipped: {e}")
         logger.info(f"Objective met: {r['text']!r} ({r['quest_title']}, all_done={r.get('all_done')})")
+        # A level a step earned is acknowledged once, obliquely, as a fight's is
+        if (r.get("progression") or {}).get("leveled_up"):
+            try:
+                pending_actions.record_action(pid, "levelup", "")
+            except Exception as e:
+                logger.debug(f"level-up ledger line skipped: {e}")
 
 
-def _tick(player_id: str | None, matcher: Callable[[dict[str, Any]], bool]) -> list[dict[str, Any]]:
+def _tick(player_id: str | None, matcher: Callable[[dict[str, Any]], bool],
+          skip_quest_ids: Iterable[str] = ()) -> list[dict[str, Any]]:
     """Own-session variant for callers that have already committed."""
     try:
         with get_session() as session:
             player = _player(session, player_id)
-            records = tick_in_session(session, player, matcher)
+            records = tick_in_session(session, player, matcher, skip_quest_ids=skip_quest_ids)
             if records:
                 session.commit()
             resolved_id = player.id if player else player_id
@@ -381,7 +489,22 @@ def _tick(player_id: str | None, matcher: Callable[[dict[str, Any]], bool]) -> l
         logger.warning(f"objective tick failed: {e}")
         return []
     publish(resolved_id, records)
+    _note_offered(resolved_id, matcher)
     return records
+
+
+def _note_offered(player_id: str | None, matcher: Callable[[dict[str, Any]], bool]) -> None:
+    """The same event, for a job its giver offered that nobody has started
+    yet: remembered, so the start credits it (src/services/job_offers.py;
+    fleet7-wenna T4-T7 asked Sorrel for four turns of a job never started)."""
+    if not player_id:
+        return
+    try:
+        from src.services import job_offers
+
+        job_offers.note_play(player_id, matcher)
+    except Exception as e:     # the tick itself already landed
+        logger.debug(f"offered job's step not noted: {e}")
 
 
 def note_arrival(player_id: str | None, location_id: str | None) -> list[dict[str, Any]]:
@@ -390,10 +513,63 @@ def note_arrival(player_id: str | None, location_id: str | None) -> list[dict[st
     return _tick(player_id, lambda o: o["kind"] == "go_to" and o["target_id"] == location_id)
 
 
-def note_conversation(player_id: str | None, npc_id: str | None) -> list[dict[str, Any]]:
+def note_conversation(player_id: str | None, npc_id: str | None,
+                      started_quest_ids: Iterable[str] = ()) -> list[dict[str, Any]]:
+    """The player talked to `npc_id`: their talk_to steps tick.
+
+    Not on a quest taken in this same reply (`started_quest_ids`): the
+    player's words came before the job. fleet6-tamsin T4: "the straw-haired
+    boy" was asked about the ash-gray man, then Piper offered "Ask Sorrel
+    Tack what the stable yard hears after dark" — the asking was T5.
+
+    A job offered in an EARLIER reply and started in this one is not held
+    back: the words came after the offer (fleet7-wenna: Piper pitched at
+    T2, Sorrel was asked at T4)."""
     if not npc_id:
         return []
-    return _tick(player_id, lambda o: o["kind"] == "talk_to" and o["target_id"] == npc_id)
+    held = list(started_quest_ids or ())
+    if held:
+        try:
+            from src.services import job_offers
+
+            held = [q for q in held if not job_offers.offered_before(player_id, q)]
+        except Exception as e:      # unreadable offers: hold them all, as before
+            logger.debug(f"offer bookkeeping unreadable: {e}")
+    return _tick(player_id, lambda o: o["kind"] == "talk_to" and o["target_id"] == npc_id,
+                 skip_quest_ids=held)
+
+
+def close_giver_talk(session, quest, player) -> list[dict[str, Any]]:
+    """At a quest's completion, the open talk_to steps aimed at its giver
+    close when the giver is there to pay out: that payday IS the report.
+
+    fleet6-tamsin T11: the player laid it all out for Piper, "@quest-done
+    Counting the Howls" paid, and "Bring what you heard back to Piper" stayed
+    open on a finished quest — the player's words that turn were to Sorrel.
+    A giver who is elsewhere (fleet6-wenna T20: Maera's coin arrived at the
+    gatehouse) closes nothing. In the caller's transaction; returns the steps
+    closed (no toast: the completion banner says it)."""
+    giver_id = getattr(quest, "assigned_by_npc_id", None)
+    if player is None or not giver_id:
+        return []
+    giver = session.get(NPC, giver_id)
+    here = getattr(player, "current_location_id", None)
+    party = player.party_members if isinstance(getattr(player, "party_members", None), list) else []
+    if giver is None or giver.status != "alive":
+        return []
+    if giver_id not in party and not (here and giver.current_location_id == here):
+        return []
+    objectives = normalize_objectives(quest.objectives)
+    clock = session.query(WorldClock).first()
+    closed = []
+    for obj in objectives:
+        if not obj["done"] and obj["kind"] == "talk_to" and obj.get("target_id") == giver_id:
+            obj["done"] = True
+            obj["done_day"] = clock.day if clock else 1
+            closed.append(obj)
+    if closed:
+        quest.objectives = objectives      # reassign: in-place JSON edits are not persisted
+    return closed
 
 
 def note_items_gained(player_id: str | None, item_names: Iterable[str]) -> list[dict[str, Any]]:
@@ -441,11 +617,10 @@ def note_custom_done(player_id: str | None, quest_id: str, objective_id: str) ->
             quest = session.get(Quest, quest_id)
             if player is None or quest is None or quest.status != QuestStatus.ACTIVE:
                 return []
-            # Scope the tick to this one quest
-            keep = list(player.active_quests or [])
-            player.active_quests = [quest_id]
-            records = tick_in_session(session, player, matcher)
-            player.active_quests = keep
+            # Scoped by id: narrowing `player.active_quests` (the old way)
+            # scoped nothing, since that list only orders the quests — "o2"
+            # ticked the second step of every active quest at once
+            records = tick_in_session(session, player, matcher, quest_id=quest_id)
             if records:
                 session.commit()
             resolved_id = player.id
@@ -457,8 +632,123 @@ def note_custom_done(player_id: str | None, quest_id: str, objective_id: str) ->
 
 
 # ----------------------------------------------------------------------
+# Work only told
+# ----------------------------------------------------------------------
+# fleet7-tamsin T9-T14: the trip to Wolf's Hollow was prose (the DB had her
+# at the North Gatehouse), `@give Cracked Bone Whistle` was refused, `@hand`
+# of it failed — and `@quest-done Teeth on the North Road` paid 60 coin, the
+# charm and 220 XP with "Reach Wolf's Hollow" and the whistle undone. Act 2
+# then opened on a prop she never held.
+
+def _stood_in(session, player, location_id: str) -> bool:
+    """Has the player ever stood at this place (or somewhere inside it)?"""
+    location = session.get(Location, location_id)
+    if location is None or location.visited:
+        return True                    # an unknown place proves nothing either way
+    here = session.get(Location, player.current_location_id) if player.current_location_id else None
+    hops = 0
+    while here is not None and hops < 12:
+        if here.id == location_id:
+            return True
+        here = session.get(Location, here.parent_id) if here.parent_id else None
+        hops += 1
+    inside = [location_id]
+    for _ in range(6):
+        inside = [row[0] for row in session.query(Location.id).filter(Location.parent_id.in_(inside)).all()]
+        if not inside:
+            return False
+        if session.query(Location.id).filter(Location.id.in_(inside), Location.visited == True).first():  # noqa: E712
+            return True
+    return False
+
+
+_PLAIN_HEADS = frozenset({"piece", "pieces", "coin", "coins", "bundle", "bit", "scrap", "item", "thing", "set"})
+
+
+def _head_noun(name: str) -> str:
+    """"North Road Pass" -> "pass"; "" for a head that names nothing ("piece")."""
+    words = re.findall(r"[a-z]+", re.split(r"\s+of\s+", str(name or "").lower())[0])
+    head = words[-1] if words else ""
+    return head if len(head) >= 3 and head not in _PLAIN_HEADS else ""
+
+
+def _where_item_is(session, item_name: str) -> tuple[str, bool]:
+    """("it still lies at Wolf's Hollow (Cracked bone whistle)", True) for an
+    item an authored Thing still holds; ("Captain Coldiron has it", False) for
+    one a person holds; ("", False) when it is nowhere. The flag: a Thing
+    still holding it means nobody ever took it."""
+    from src.services.lead import holding_things, same_item
+
+    for location in session.query(Location).all():
+        for thing in holding_things(location):
+            if same_item(item_name, thing["payload"]["item"]["name"]):
+                return f"it still lies at {location.name} ({thing['label']})", True
+    for npc in session.query(NPC).filter(NPC.status == "alive").all():
+        names = [str((e.get("name") if isinstance(e, dict) else e) or "") for e in (npc.inventory_notable or [])]
+        if any(same_item(item_name, n) for n in names if n):
+            return f"{npc.name} has it", False
+    return "", False
+
+
+def undone_in_play(session, quest, player) -> list[dict[str, Any]]:
+    """The quest's place and item steps play never did and could not have:
+    a go_to place the player has never stood in, an obtain or deliver item
+    they have never held. Rows {"id", "text", "kind", "why", "where"} in
+    step order; [] when each such step is done or was possible — they stood
+    there, or hold the item (a tick the name matching missed is not this).
+    Custom, talk_to and kill steps are the DM's or the engine's own.
+
+    "Never held": not in the pack, named by no done step of the quest, not
+    in the deliver target's hands, and either an authored Thing still
+    holds it or nobody has it at all."""
+    from src.services.lead import same_item
+
+    if quest is None or player is None:
+        return []
+    objectives = normalize_objectives(quest.objectives)
+    pack = [str(e.get("name") or "") for e in (player.inventory or []) if isinstance(e, dict)]
+    # The same thing by another name is held: fleet-bram T13 carried the
+    # "North Road Pass" the DM gave for the step's "Gate Pass"
+    pack_heads = {_head_noun(n) for n in pack} - {""}
+    done_items = [o["item_name"] for o in objectives if o["done"] and o.get("item_name")]
+    rows: list[dict[str, Any]] = []
+    for obj in objectives:
+        if obj["done"]:
+            continue
+        why = where = ""
+        if obj["kind"] == "go_to" and obj.get("target_id"):
+            if not _stood_in(session, player, obj["target_id"]):
+                place = session.get(Location, obj["target_id"])
+                why = f"the player has never stood at {place.name if place else 'that place'}"
+        elif obj["kind"] in ("obtain", "deliver") and obj.get("item_name"):
+            item = obj["item_name"]
+            held = any(same_item(item, n) for n in pack if n) or any(same_item(item, d) for d in done_items) \
+                or _head_noun(item) in pack_heads
+            target = session.get(NPC, obj["target_id"]) if obj["kind"] == "deliver" and obj.get("target_id") else None
+            if not held and target is not None:
+                names = [str((e.get("name") if isinstance(e, dict) else e) or "")
+                         for e in (target.inventory_notable or [])]
+                held = any(same_item(item, n) for n in names if n)
+            if not held:
+                where, untouched = _where_item_is(session, item)
+                if untouched or not where:
+                    why = f"they have never held the {item}"
+                else:
+                    where = ""
+        if why:
+            rows.append({"id": obj["id"], "text": obj["text"], "kind": obj["kind"], "why": why, "where": where})
+    return rows
+
+
+# ----------------------------------------------------------------------
 # Drains
 # ----------------------------------------------------------------------
+
+def queue_event(player_id: str | None, event: dict[str, Any]) -> None:
+    """One more client frame for the next drain (a quest the engine started)."""
+    with _lock:
+        _pending_events.setdefault(player_id or "", []).append(event)
+
 
 def pop_pending_events(player_id: str | None) -> list[dict[str, Any]]:
     with _lock:

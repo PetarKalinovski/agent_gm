@@ -27,6 +27,11 @@ agents:
     model: "openrouter/anthropic/claude-sonnet-5"
     temperature: 0.7
     max_tokens: 4096
+    # 2026-10-04: thinking OFF. The DM writes one reply per turn (commands,
+    # speaker lines, prose); with reasoning on, OpenRouter's Sonnet 5 thought
+    # for ~9 s before every round-trip and the opening turn took 7.5 min
+    # across 30+ round-trips. Measured first-token latency without it: 1-2 s.
+    reasoning: {enabled: false}
     description: "Main dungeon master agent that narrates the world"
 
   npc_agent:

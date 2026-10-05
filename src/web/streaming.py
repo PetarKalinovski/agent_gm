@@ -49,12 +49,17 @@ class ToolUsageTracker:
         self._spoken_keys: set[tuple[str, str]] = set()
         self._snapshots: dict[str, str] = {}
         self._result_seen = False
+        # Tool results whose game events were already emitted. The LiteLLM
+        # path delivers the same result message twice; a roll then showed
+        # its outcome twice on the canvas (2026-10-04)
+        self._events_emitted: set[str] = set()
 
     def reset(self) -> None:
         """Clear all accumulated tool usage state."""
         self._tools.clear()
         self._notifications.clear()
         self._snapshots.clear()
+        self._events_emitted.clear()
         self._result_seen = False
 
     def __call__(self, **payload: Any) -> None:
@@ -191,7 +196,10 @@ class ToolUsageTracker:
 
             self._enqueue_notification(entry)
 
-            # Check for special game events in tool output
+            # Check for special game events in tool output — once per result
+            if tool_id in self._events_emitted:
+                continue
+            self._events_emitted.add(tool_id)
             tool_content = result.get("content", [])
             for content_block in tool_content:
                 # Content blocks may be {'text': "..."} or {'type': 'text', 'text': "..."}

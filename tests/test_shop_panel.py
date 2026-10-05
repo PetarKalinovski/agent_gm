@@ -131,3 +131,16 @@ def test_buying_charges_the_standing_price_end_to_end(shop):
                            from_type="npc", to_type="player", is_purchase=True)
     assert result["cost"] == price == result["unit_price"]
     assert _player(shop["player"])["coin"] == 100 - price
+
+
+def test_a_bought_upgrade_goes_on_at_the_counter_and_the_dm_hears_it(shop):
+    """fleet9-tamsin: a bought blade sat in the bag behind the knife she wore.
+    The counter puts a strictly better one in her hand, and the next reply's
+    context says so — the prose never reaches into the bag for it."""
+    add_to_inventory(shop["player"], "Worn Knife", item_type="weapon", slot="weapon", tier="crude")
+    status, data = _trade(shop["npc"], shop["player"], "iron_sword", selling=False)
+    assert status == 200 and data["auto_equipped"] == "Iron Sword"
+    assert data["state"]["equipment"]["weapon"]["name"] == "Iron Sword"
+    block = pending_actions.format_pending_actions(pending_actions.drain(shop["player"]))
+    assert "They bought Iron Sword from Sorrel Tack" in block
+    assert "They immediately wield the Iron Sword they just got." in block

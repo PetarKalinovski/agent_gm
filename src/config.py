@@ -208,10 +208,17 @@ def load_settings(config_path: Path | None = None) -> Settings:
     if settings_file.exists():
         with open(settings_file) as f:
             data = yaml.safe_load(f) or {}
-        _settings = Settings(**data)
+        settings = Settings(**data)
     else:
-        _settings = Settings()
+        settings = Settings()
 
+    # FORGE_TTS=0 silences voice generation for one process — automated
+    # playtests (scripts/autoplay.py) have nobody listening and would spend
+    # TTS quota on every line
+    if os.environ.get("FORGE_TTS", "").strip() in ("0", "false", "off"):
+        settings.audio.tts_enabled = False
+
+    _settings = settings  # published only when finished (see load_agents_config)
     return _settings
 
 
@@ -234,7 +241,10 @@ def load_agents_config(config_path: Path | None = None) -> dict[str, AgentConfig
 
     agents_file = config_path / "agents.yaml"
 
-    _agents_config = {}
+    # Build locally, publish once: the campaign author starts on its own thread
+    # at character creation, and a half-built global read as "no agents"
+    # (round-3 playtest: "Agent 'campaign_forge' not found. Available: []")
+    configs: dict[str, AgentConfig] = {}
     if agents_file.exists():
         with open(agents_file) as f:
             data = yaml.safe_load(f) or {}
@@ -245,8 +255,9 @@ def load_agents_config(config_path: Path | None = None) -> dict[str, AgentConfig
             override = os.environ.get(f"FORGE_MODEL_{name.upper()}")
             if override:
                 config = {**config, "model": override}
-            _agents_config[name] = AgentConfig(**config)
+            configs[name] = AgentConfig(**config)
 
+    _agents_config = configs
     return _agents_config
 
 

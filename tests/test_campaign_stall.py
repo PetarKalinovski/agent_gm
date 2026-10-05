@@ -110,6 +110,10 @@ def test_a_stalled_beat_is_skipped_after_the_grace_days_and_the_act_closes(db):
 def test_a_fired_beat_still_under_the_limit_is_resurfaced(db):
     with get_session() as session:
         world = _world(session, attempts=0)
+        # ...where it happens: one whose place the player left waits there
+        # (round 6, tests/test_campaign_round6.py)
+        session.get(Player, world["player"]).current_location_id = world["hollow"]
+        session.commit()
     tick = run_campaign_tick(world["player"])
     assert tick.get("fired_beat") and tick["fired_beat"]["title"] == "The kennel"
     assert _beat(world)[0] == "fired"

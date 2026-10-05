@@ -31,9 +31,14 @@ HOSTILE_DISPOSITIONS = frozenset({"hostile", "furious", "murderous", "enemy", "h
 WARM_DISPOSITIONS = frozenset({"friendly", "warm", "devoted", "loyal", "fond", "grateful", "trusting", "affectionate"})
 
 REFUSAL_TRUST = 30       # hostile AND below this -> no conversation
-JOIN_TRUST = 40          # follows the player only from here up (or when warm)
+JOIN_TRUST = 60          # follows the player only from here up (or when warm).
+                         # Above the stranger default (50): one conversation must not
+                         # recruit anyone — the 2026-10-04 playtest was offered the villain
 SECRET_TRUST = 60        # reveal_secret needs at least this much
 BUYBACK_FRACTION = 0.40  # what a merchant pays for what the player sells
+GIFT_TRUST = 5           # a gift given in the player's own words (commands._gift_trust),
+                         # once a game-day per person: two days' kindness opens a secret
+GIFT_TRUST_CAP = 70      # ...and gifts alone never buy more trust than this
 
 STANDING_PRICE_MUL = {"honoured": 0.80, "liked": 0.90, "neutral": 1.00, "disliked": 1.15, "hostile": 1.40}
 DISPOSITION_PRICE_MUL = {"warm": 0.90, "neutral": 1.00, "hostile": 1.25}

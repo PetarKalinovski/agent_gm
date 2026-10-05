@@ -176,7 +176,7 @@ def test_move_player_refuses_then_yields_to_requirements_met(db):
         "The Drowned Lantern will not take them dressed as they are: "
     )
     assert LANTERN_REASON in blocked["message"]
-    assert "requirements_met=True" in blocked["message"]
+    assert "@move <place> | through" in blocked["message"]
 
     with get_session() as session:
         assert session.get(Player, ids["player"]).current_location_id == ids["square"]

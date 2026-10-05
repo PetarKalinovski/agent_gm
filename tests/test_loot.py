@@ -43,7 +43,9 @@ def test_kill_npc_leaves_a_body_with_the_notables_and_tier_coin(db):
     with get_session() as session:
         world = _world(session)
     result = kill_npc(world["vex"], "a knife in the dark")
-    assert result["body"]["kind"] == "body" and result["body"]["label"] == "Vex Marrow's body"
+    # Nobody ever learned her name, so the body does not give it away
+    assert result["body"]["kind"] == "body" and result["body"]["label"].endswith("'s body")
+    assert "Vex" not in result["body"]["label"]
     assert "do not say what is on it" in result["instruction"]
     bodies = [o for o in _objects(world["hollow"]) if o["kind"] == "body"]
     assert len(bodies) == 1
@@ -145,6 +147,30 @@ def test_legacy_location_with_null_objects_still_gets_a_body(db):
     assert [o["kind"] for o in _objects(world["hollow"])] == ["body"]
 
 
+def test_a_beast_carries_no_purse_but_keeps_what_it_wore(db):
+    """fleet6-bram: the two dead wolves held 2 and 1 coin."""
+    from src.services.loot import body_payload
+
+    progression.set_seed(7)
+    with get_session() as session:
+        world = _world(session)
+        wolf = NPC(name="Gray-Flank Wolf", species="wolf", danger_tier="standard",
+                   current_location_id=world["hollow"])
+        collared = NPC(name="Hollow Wolf", species="wolf", danger_tier="weak", current_location_id=world["hollow"],
+                       inventory_notable=[{"id": "drill_collar", "name": "Drill Collar", "type": "misc"}])
+        session.add_all([wolf, collared])
+        session.commit()
+        assert body_payload(wolf)["coin"] == 0
+        assert body_payload(collared)["coin"] == 0
+        # What it wore, then its trophy (fleet10: a beast's fang or pelt sells)
+        assert [i["name"] for i in body_payload(collared)["items"]] == ["Drill Collar", "Wolf Fang"]
+        assert [i["name"] for i in body_payload(collared, story_cast=True)["items"]] == ["Drill Collar"]
+        assert body_payload(session.get(NPC, world["vex"]))["coin"] > 0      # a person still does
+        wolf_id = wolf.id
+    body = kill_npc(wolf_id, "a knife").get("body")
+    assert body is not None and body["kind"] == "body"                     # its pelt, nothing else
+
+
 def test_public_view_never_leaks_the_payload(db):
     with get_session() as session:
         world = _world(session)
@@ -152,3 +178,15 @@ def test_public_view_never_leaks_the_payload(db):
     with get_session() as session:
         rows = scene_objects.public_objects(session.get(Location, world["hollow"]).objects)
     assert rows and set(rows[0]) == {"id", "kind", "label", "x", "y", "consumed", "locked"}
+
+
+
+def test_a_body_carries_the_name_once_someone_knew_it(db):
+    from src.models import NPCRelationship
+
+    with get_session() as session:
+        world = _world(session)
+        session.add(NPCRelationship(npc_id=world["vex"], player_id=world["player"]))
+        session.commit()
+    result = kill_npc(world["vex"], "a knife in the dark")
+    assert result["body"]["label"] == "Vex Marrow's body"

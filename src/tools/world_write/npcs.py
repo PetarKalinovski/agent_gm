@@ -184,8 +184,7 @@ def update_npc(
             if str(danger_tier).strip().lower() == "boss":
                 return {"error": (
                     "danger_tier 'boss' cannot be set here — a boss is an authored "
-                    "set-piece. Create the character through prompt_creator_agent with "
-                    "danger_tier='boss', or set it in the world editor."
+                    "set-piece, set only in the world editor."
                 )}
             if _clean_label(danger_tier, DANGER_TIERS) is None:
                 return {"error": f"danger_tier must be one of {list(DANGER_TIERS)}"}

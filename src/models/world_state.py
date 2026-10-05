@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.sqlite import JSON
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -71,6 +71,16 @@ class NPCRelationship(Base):
 
     # Last interaction
     last_interaction_day: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    # Who knows whom (fleet6, all three runs). The row is the RELATIONSHIP —
+    # written on the first real exchange — and these say what each side
+    # knows of the other's name. NULL is a row from before the split, when
+    # the row itself meant both: known, as it was then.
+    name_known: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=None)  # the player knows the NPC's
+    knows_player_name: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=None)  # the NPC knows the player's
+    # The game-day the player's last gift to them counted (commands: a
+    # kindness raises trust once a day). NULL = never: the old game.
+    last_gift_day: Mapped[int | None] = mapped_column(Integer, nullable=True, default=None)
 
     def __repr__(self) -> str:
         return f"<NPCRelationship(npc={self.npc_id}, trust={self.trust_level})>"

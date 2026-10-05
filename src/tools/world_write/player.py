@@ -84,24 +84,24 @@ def move_player(player_id: str, destination_id: str, requirements_met: bool = Fa
                     "The engine decided this from their standing with the faction that holds "
                     "the place. Run the refusal in the house's own voice — a guard, a shut "
                     "gate, a crowd that turns. Only if the fiction genuinely gets them past it "
-                    "(a disguise, a bribe, a friend inside) call move_player again with "
-                    "requirements_met=True; it is never a permanent pass."
+                    "(a disguise, a bribe, a friend inside) write `@move <place> | through`; "
+                    "it is never a permanent pass."
                 )
             elif route["reason"] == "dress":
                 message = (
                     f"{destination.name} will not take them dressed as they are: "
                     f"{', '.join(str(r) for r in requirements)} "
                     "You decide whether that stands. If they talk their way past, "
-                    "bribe the door, borrow a coat, or are simply known here, call "
-                    "move_player again with requirements_met=True. Otherwise narrate "
-                    "the refusal — and let it cost them something."
+                    "bribe the door, borrow a coat, or are simply known here, write "
+                    "`@move <place> | through`. Otherwise narrate the refusal — and "
+                    "let it cost them something."
                 )
             else:
                 message = (
                     "This route has requirements the player must satisfy: "
                     f"{', '.join(str(r) for r in requirements)}. "
-                    "Check the player's inventory/state; if satisfied, call move_player "
-                    "again with requirements_met=True. Otherwise narrate why they can't pass."
+                    "Check the player's inventory/state; if satisfied, write "
+                    "`@move <place> | through`. Otherwise narrate why they can't pass."
                 )
             return {
                 "blocked": True,
@@ -141,7 +141,7 @@ def move_player(player_id: str, destination_id: str, requirements_met: bool = Fa
     if followed:
         result["party_followed"] = followed
         result["party_note"] = (
-            f"{', '.join(followed)} came with them (already moved — do NOT call move_npc for them)."
+            f"{', '.join(followed)} came with them (already moved — never @npc-move them)."
         )
     # Arriving completes any "go_to" objective aimed here — code, not prose
     from src.services import objectives as objectives_mod
@@ -360,6 +360,58 @@ def add_to_inventory(
     ticked = objectives_mod.note_items_gained(player_id, [item_name])
     if ticked:
         result["objectives_done"] = objectives_mod.done_lines(ticked)
+    return result
+
+
+def regrade_inventory_item(
+    player_id: str,
+    item_name: str,
+    *,
+    item_type: str,
+    slot: str | None = None,
+    tier: str | None = None,
+    effect_tag: str | None = None,
+    description: str = "",
+    visual_desc: str | None = None,
+    attire: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Make a PLAIN pack entry what a later, fuller @give says it is — the
+    same entry, no second one.
+
+    fleet4-bram/wenna: the quest paid 'Wolf-Tooth Charm' as plain stuff, the
+    DM's `@give Wolf-Tooth Charm | kind: trinket | tier: common` stacked onto
+    it, and the kind and tier were dropped: two inert charms, none to wear.
+    The caller decides the entry IS plain; this rewrites its mechanics, keeps
+    an authored description unless it had none, re-prices it from the catalog
+    and puts it on if its slot is empty (same as any gear that arrives).
+    """
+    with get_session() as session:
+        player = session.get(Player, player_id)
+        if not player:
+            return {"error": "Player not found"}
+        inventory = _normalize_inventory(player.inventory)
+        item_id = item_name.lower().replace(" ", "_")
+        entry = next((e for e in inventory if e.get("id") == item_id
+                      or e.get("name", "").lower() == item_name.lower()), None)
+        if entry is None:
+            return {"error": f"'{item_name}' not in inventory"}
+        mech = prog.mechanize_item({"slot": slot, "tier": tier, "type": item_type}) or {}
+        entry.update(type=item_type, slot=slot, tier=tier, effect_tag=effect_tag,
+                     attire=perception.normalize_attire(attire, slot=mech.get("slot")))
+        if visual_desc:
+            entry["visual_desc"] = visual_desc
+        if description and not str(entry.get("description") or "").strip():
+            entry["description"] = description
+        price = prog.catalog_price(entry)
+        if price is not None:
+            entry["value"] = price
+        player.inventory = inventory
+        auto = prog.auto_equip(session, player, entry.get("id") or item_id)
+        session.commit()
+        result = {"success": True, "item": entry.get("name") or item_name, "regraded": True,
+                  "quantity": entry.get("quantity", 1)}
+        if auto:
+            result["auto_equipped"] = auto.get("item_name")
     return result
 
 

@@ -370,10 +370,13 @@ def transfer_item(
         setattr(source, source_inv_field, [item.to_dict() for item in source_inv])
         setattr(dest, dest_inv_field, [item.to_dict() for item in dest_inv])
 
-        # A sword that sits in the bag doing nothing is a bug report
+        # A sword that sits in the bag doing nothing is a bug report — and a
+        # bought one strictly better than what they wear goes on (counter
+        # and @buy alike: progression.auto_equip)
         equipped = None
         if to_type == "player":
-            auto = prog.auto_equip(session, dest, source_item.id)
+            auto = prog.auto_equip(session, dest, source_item.id,
+                                   upgrade=is_purchase and from_type == "npc")
             if auto:
                 equipped = auto.get("item_name")
 

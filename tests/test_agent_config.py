@@ -39,3 +39,27 @@ def test_env_override_swaps_one_model(monkeypatch):
     assert cfg["npc_agent"].model == "openrouter/test/model"
     assert cfg["dm_orchestrator"].model != "openrouter/test/model"
     monkeypatch.setattr(config_module, "_agents_config", None)
+
+
+def test_concurrent_first_load_never_sees_a_half_built_config(monkeypatch):
+    """The campaign author loads config on its own thread at character creation;
+    a reader racing the first load must see every agent or wait, never `{}`."""
+    import threading
+
+    import src.config as config_mod
+
+    for _ in range(20):
+        monkeypatch.setattr(config_mod, "_agents_config", None)
+        seen: list[int] = []
+        start = threading.Barrier(8)
+
+        def load():
+            start.wait()
+            seen.append(len(config_mod.load_agents_config()))
+
+        threads = [threading.Thread(target=load) for _ in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        assert seen and min(seen) > 0, seen

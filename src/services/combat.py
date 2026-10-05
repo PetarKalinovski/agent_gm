@@ -291,8 +291,8 @@ def build_combat_start(npc_ids: list[str], player_id: str) -> dict[str, Any]:
                 return {
                     "error": (
                         f"{npc.name} is in the player's party — they fight BESIDE the player, "
-                        "never against them. If they have turned on the player, call "
-                        "leave_party first, then start_combat."
+                        "never against them. If they have turned on the player, write "
+                        "`@leave <name>` first, then `@fight <name>`."
                     )
                 }
             if npc.current_location_id != player.current_location_id:
@@ -466,6 +466,11 @@ def apply_combat_result(
             if floor_idx > current_idx:
                 player.health_status = floor
                 changes["health"] = floor
+        # ...and where that leaves them, said either way: the aftermath of a
+        # clean fight was told "your arm throbs where teeth caught you"
+        # (fleet10-tamsin T14) for want of a word (combat_outcome_message)
+        changes["health_now"] = player.health_status or "healthy"
+        changes["wounded"] = outcome == "defeat" or _severity_units(hits_taken, hearts_lost, hearts_healed) > 0
 
         # --- Defeated NPCs die, permanently, with a world event ---
         clock = session.query(WorldClock).first()
@@ -582,6 +587,41 @@ def _kill_roster(changes: dict[str, Any]) -> str:
     return ", ".join(d["npc_name"] for d in changes.get("npc_deaths") or [])
 
 
+def _carried_by_the_dead(changes: dict[str, Any]) -> list[str]:
+    """"Torn-Ear Wolf carries nothing worth taking", "Vex carries Ashwood
+    Blade and a little coin" — each death's body as the engine left it
+    (src/services/loot.py), read back off its location. Words only, never a
+    number; [] when there were no deaths or the world cannot be read."""
+    deaths = [d for d in changes.get("npc_deaths") or [] if isinstance(d, dict) and d.get("npc_id")]
+    if not deaths:
+        return []
+    try:
+        from src.models import Location
+        from src.services.scene_objects import normalize_objects
+
+        lines = []
+        with get_session() as session:
+            for death in deaths:
+                npc = session.get(NPC, death["npc_id"])
+                payload: dict[str, Any] = {}
+                place = session.get(Location, npc.current_location_id) if npc is not None and \
+                    npc.current_location_id else None
+                for obj in normalize_objects(place.objects if place is not None else []):
+                    if obj["kind"] == "body" and (obj.get("payload") or {}).get("npc_id") == death["npc_id"]:
+                        payload = obj.get("payload") or {}
+                        break
+                held = [str(i.get("name")) for i in payload.get("items") or [] if isinstance(i, dict) and i.get("name")]
+                if payload.get("coin"):
+                    held.append("a little coin")
+                name = death.get("npc_name") or (npc.name if npc is not None else "the fallen")
+                said = held[0] if len(held) == 1 else ", ".join(held[:-1]) + f" and {held[-1]}" if held else ""
+                lines.append(f"{name} carries {said}" if said else f"{name} carries nothing worth taking")
+        return lines
+    except Exception as e:      # the aftermath still gets told
+        logger.debug(f"bodies unreadable for the aftermath: {e}")
+        return []
+
+
 def combat_outcome_message(changes: dict[str, Any], fled: bool = False) -> str:
     """The system turn text the frontend sends so the DM narrates aftermath.
 
@@ -595,7 +635,9 @@ def combat_outcome_message(changes: dict[str, Any], fled: bool = False) -> str:
         parts.append(
             f"Killed: {roster} (already marked dead — do NOT call kill_npc). "
             "Match the weight of your aftermath to those words: a 'harmless' kill "
-            "is an ugly little murder; a 'boss' kill is the end of a chapter."
+            "is an ugly little murder; a 'boss' kill is the end of a chapter. They "
+            "died by the player's hand: nobody called them off, and nobody speaks as "
+            "if they withdrew."
         )
     if changes.get("bodies"):
         parts.append(
@@ -603,8 +645,33 @@ def combat_outcome_message(changes: dict[str, Any], fled: bool = False) -> str:
             "canvas the player can search. Do not narrate the contents and do not "
             "hand anything over."
         )
+    # What each body really holds, so the aftermath invents no loot.
+    # fleet8-wenna T13: a dead stand-in wolf with nothing on it got "a thin
+    # leather cord with something small and pale knotted into it", which
+    # became the authored proof lying at another place — seven turns of
+    # refusals and retcons
+    carried = _carried_by_the_dead(changes)
+    if carried:
+        parts.append(
+            "On the fallen, per the engine (for you; the player learns it by searching): " + "; ".join(carried)
+            + ". Nothing else is on them — no cord, token, note or clue; put nothing else on a body."
+        )
     if changes.get("health"):
-        parts.append(f"Player health is now '{changes['health']}' (already applied — do NOT call update_player_health for these wounds).")
+        parts.append(f"Player health is now '{changes['health']}' (already applied — never write @health for these wounds).")
+    elif changes.get("health_now"):
+        # The health line, always (fleet10-tamsin T14: a fight won with no hit
+        # taken got "your arm throbs where teeth caught you" and @health
+        # winded; T19, one that added no wound, @health badly_hurt) — and the
+        # aftermath reply refuses a worse @health (commands._worse_after_fight)
+        if not changes.get("wounded") and changes["health_now"] == "healthy":
+            parts.append("The player came through unhurt — nothing landed on them: no bite, no wound, no "
+                         "throbbing arm; write no @health.")
+        elif not changes.get("wounded"):
+            parts.append(f"Nothing landed on the player this fight: health stays '{changes['health_now']}' (the "
+                         "hurt they already had, nothing new) — write no @health and no new wound.")
+        else:
+            parts.append(f"Health stays '{changes['health_now']}' — what landed in this fight is already counted "
+                         "and added no wound beyond it; write no @health.")
     if changes.get("allies_fought"):
         parts.append(
             f"Fought beside the player: {', '.join(changes['allies_fought'])} — give them their "

@@ -4,6 +4,7 @@ from typing import Any
 
 from rich.console import Console
 from rich.panel import Panel
+from rich.markdown import Markdown
 from rich.prompt import Prompt
 from rich.text import Text
 
@@ -52,8 +53,14 @@ class GameSession:
 
         self.starting_location_id = starting_location_id
 
-        # Initialize DM
-        self.dm = DMOrchestrator(self.player_id)
+        # Initialize DM — its reply streams through the CLI handler, which
+        # prints prose, voices speaker lines and applies @commands
+        from src.game.cli_stream import CliReplyHandler
+
+        self.reply = CliReplyHandler(self.console, self.player_id)
+        self.command_ledger: list[str] = []
+        self.dm = DMOrchestrator(self.player_id, callback_handler=self.reply)
+
     def create_player(self) -> str:
         """Create a new player character.
 
@@ -233,7 +240,7 @@ class GameSession:
         self.console.print()
 
         # Show initial scene
-        self.dm.describe_scene()
+        self.console.print(Markdown(self.dm.describe_scene()))
         self.console.print()
 
         # Main game loop
@@ -257,14 +264,35 @@ class GameSession:
                     self._show_status()
                     continue
                 elif player_input.lower() in ["look", "l"]:
-                    self.dm.describe_scene()
+                    self.console.print(Markdown(self.dm.describe_scene()))
                     continue
 
                 # Process input through DM
                 turn_start_clock = snapshot_clock()
                 turn_start_tension = snapshot_turn_tension(self.player_id)
-                response = self.dm.process_input(player_input)
-                # Response is already printed by tools (narrate, describe_location, etc.)
+                context = self.dm._build_context(player_input, command_ledger=self.command_ledger)
+                present = list((self.dm.last_brief or {}).get("present") or {})
+                self.reply.start_turn(present)
+                response = self.dm.agent(context)
+                self.command_ledger = self.reply.finish_turn()
+                self.console.print()
+                # What was said goes into each speaker's markdown memory,
+                # exactly as on the web path
+                try:
+                    from src.services.dialogue import record_turn_dialogue, resolve_speaker
+                    speeches = []
+                    with get_session() as session:
+                        for parsed in self.reply.speeches:
+                            npc = resolve_speaker(session, parsed["speaker"], present)
+                            if npc is not None:
+                                speeches.append({"npc_id": npc.id, "text": parsed["text"],
+                                                 "label": parsed["speaker"], "npc_name": npc.name})
+                    record_turn_dialogue(self.player_id, player_input, speeches)
+                except Exception:
+                    pass
+                # A stranger's @trust/@reveal waited for their introduction
+                if self.reply.runner is not None:
+                    self.command_ledger = self.reply.runner.ledger()
 
                 # If the DM forgot to advance time, apply a minimum cost so
                 # the world clock (and scheduled events) can't freeze
@@ -275,7 +303,12 @@ class GameSession:
 
                 # Did the DM actually deliver the campaign beat it was handed?
                 # (the web path does the same before its reality audit)
-                mark_beat_delivery(self.player_id, response)
+                spoken_text = " ".join(p["text"] for p in self.reply.speeches)
+                speakers = [p["speaker"] for p in self.reply.speeches]
+                told = f"{response}\n{spoken_text}"
+                mark_beat_delivery(self.player_id, told, speakers=speakers)
+                from src.services.world_tick import mark_event_delivery
+                mark_event_delivery(told, speakers=speakers)
 
                 # New in-game day → advance the world offscreen (background
                 # thread so the player isn't kept waiting)

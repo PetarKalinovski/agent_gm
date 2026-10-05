@@ -786,7 +786,7 @@ class AssetManager:
         # 4. Left idle = mirror of right (matches the mirrored left walk)
         left = directory / f"{player_id}_left.png"
         if not self._frame_ready(left):
-            ImageOps.mirror(Image.open(paths["right"]).convert("RGBA")).save(left)
+            await asyncio.to_thread(lambda: ImageOps.mirror(Image.open(paths["right"]).convert("RGBA")).save(left))
         paths["left"] = str(left)
 
         # 5. Walk strips front/back/right <- the matching VARIANT idles
@@ -819,7 +819,9 @@ class AssetManager:
                 for frame in range(1, ImageGenerator.WALK_FRAME_COUNT + 1)
             })
         else:
-            paths.update(self.image_gen.mirror_walk_cycle(player_id, "right", "left", sig=sig))
+            paths.update(await asyncio.to_thread(
+                self.image_gen.mirror_walk_cycle, player_id, "right", "left", sig=sig
+            ))
 
         # 7. Dodge strip <- the variant right idle (body axis, ruling A3)
         paths.update(await self._ensure_dodge_strip(
@@ -1136,6 +1138,36 @@ class AssetManager:
                 logger.info(f"Pre-warming background for connected location {loc_id}")
         except Exception as e:
             logger.warning(f"Pre-warm of connected locations failed: {e}")
+
+    def prewarm_people_at(self, location_id: str | None, limit: int = 4) -> None:
+        """Start the sprite sets of the people where the player is HEADED.
+
+        Backgrounds of every neighbour are pre-warmed; people are not (cost).
+        But the lead's target is where the player is about to go, and on the
+        2026-10-04 playtest the Hollow's four characters started painting only
+        on arrival — a minute and more behind "Bringing the scene to life".
+        Same dedup key as the scene load uses, so nothing is ever generated
+        twice; already-drawn characters are skipped.
+        """
+        if not location_id:
+            return
+        try:
+            with get_session() as db:
+                npc_ids = [
+                    n.id for n in db.query(NPC).filter(
+                        NPC.current_location_id == location_id, NPC.status == "alive"
+                    ).all()
+                    if not (self.assets_dir / "sprites" / f"{n.id}_front.png").exists()
+                ][:limit]
+            for npc_id in npc_ids:
+                self.spawn_generation(
+                    f"sprites:{npc_id}",
+                    lambda npc_id=npc_id: self.ensure_all_sprites_generated(npc_id, "npc"),
+                )
+            if npc_ids:
+                logger.info(f"Pre-warming {len(npc_ids)} character(s) at lead target {location_id}")
+        except Exception as e:
+            logger.warning(f"Pre-warm of people at {location_id} failed: {e}")
 
     async def pregenerate_location_assets(self, location_id: str) -> None:
         """Pre-generate all assets for a location (background + all NPC sprites/portraits)."""

@@ -247,6 +247,8 @@ TRUTH = {
         {"id": "t1", "spoiler_keywords": ["Vell", "brother", "ledger"]},
         {"id": "t2", "spoiler_keywords": ["mine"]},
     ],
+    # Any two terms leak a truth now — but a name the player knows is context
+    "known_words": ["Vell"],
 }
 
 

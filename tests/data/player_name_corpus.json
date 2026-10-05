@@ -1,0 +1,736 @@
+[
+ {
+  "run": "fleet-tamsin",
+  "turn": 16,
+  "speaker": "Captain Brann Coldiron",
+  "player": "Tamsin Rook",
+  "flagged_live": false,
+  "cut": [
+   "Rook"
+  ],
+  "before": "Tracks. Dens. Anything with a man's hand in it. That's what I asked for. Tell me you've got more than a guess, Rook — the Greywater cart just limped in half-empty and the driver's not making sense, and I need something I can act on before the town figures out how bad this actually is.",
+  "after": "Tracks. Dens. Anything with a man's hand in it. That's what I asked for. Tell me you've got more than a guess — the Greywater cart just limped in half-empty and the driver's not making sense, and I need something I can act on before the town figures out how bad this actually is."
+ },
+ {
+  "run": "fleet-tamsin",
+  "turn": 17,
+  "speaker": "Captain Brann Coldiron",
+  "player": "Tamsin Rook",
+  "flagged_live": false,
+  "cut": [
+   "Rook"
+  ],
+  "before": "Vane. Never heard the name. 'Someone above him' — that's the part that keeps me up nights, Rook, more than the wolves ever did. Starve us before snow. That's not banditry. That's a siege with teeth instead of soldiers.",
+  "after": "Vane. Never heard the name. 'Someone above him' — that's the part that keeps me up nights, more than the wolves ever did. Starve us before snow. That's not banditry. That's a siege with teeth instead of soldiers."
+ },
+ {
+  "run": "fleet-tamsin",
+  "turn": 17,
+  "speaker": "Captain Brann Coldiron",
+  "player": "Tamsin Rook",
+  "flagged_live": false,
+  "cut": [
+   "Rook"
+  ],
+  "before": "And Rook — whatever you find out there, you bring it to me first. Not to the square, not to gossip. To me.",
+  "after": "And whatever you find out there, you bring it to me first. Not to the square, not to gossip. To me."
+ },
+ {
+  "run": "fleet-tamsin",
+  "turn": 18,
+  "speaker": "Captain Brann Coldiron",
+  "player": "Tamsin Rook",
+  "flagged_live": false,
+  "cut": [
+   "Rook"
+  ],
+  "before": "A cut. You bring me the name that stops the north road bleeding, Rook, and I'll see you paid proper — coin, and whatever's worth taking off whoever's behind this. You have my word on that, for what a captain's word's worth to a card-sharp.",
+  "after": "A cut. You bring me the name that stops the north road bleeding, and I'll see you paid proper — coin, and whatever's worth taking off whoever's behind this. You have my word on that, for what a captain's word's worth to a card-sharp."
+ },
+ {
+  "run": "fleet-tamsin",
+  "turn": 20,
+  "speaker": "Captain Brann Coldiron",
+  "player": "Tamsin Rook",
+  "flagged_live": false,
+  "cut": [
+   "Rook"
+  ],
+  "before": "You've got something. I can see it on you. Tell me it's a name, Rook. Tell me it's a name I can use.",
+  "after": "You've got something. I can see it on you. Tell me it's a name. Tell me it's a name I can use."
+ },
+ {
+  "run": "fleet-wenna",
+  "turn": 5,
+  "speaker": "Vex Marrow",
+  "player": "Wenna Cole",
+  "flagged_live": false,
+  "cut": [
+   "Wenna Cole"
+  ],
+  "before": "Wenna Cole. From the town. Sent by the captain.",
+  "after": "From the town. Sent by the captain."
+ },
+ {
+  "run": "fleet-wenna",
+  "turn": 7,
+  "speaker": "Aldric Vane",
+  "player": "Wenna Cole",
+  "flagged_live": false,
+  "cut": [
+   "Wenna Cole"
+  ],
+  "before": "Walk home, Wenna Cole. Tell Coldiron the toll stands. Tell him the road opens when Emberfall pays what it owes the hills — and tell him sending a woman with ink on her hands instead of steel was either very brave or very foolish. I haven't decided which.",
+  "after": "Walk home. Tell Coldiron the toll stands. Tell him the road opens when Emberfall pays what it owes the hills — and tell him sending a woman with ink on her hands instead of steel was either very brave or very foolish. I haven't decided which."
+ },
+ {
+  "run": "fleet2-tamsin",
+  "turn": 3,
+  "speaker": "Captain Brann Coldiron",
+  "player": "Tamsin Rook",
+  "flagged_live": false,
+  "cut": [
+   "Rook"
+  ],
+  "before": "That hawker's been shorting the Watch toll on his sales for a month. I can't prove it without searching his cart myself, and that'll start a scene I don't need tonight. You've got a thief's hands, Rook. Don't think I haven't noticed. Prove to me you can use them for something other than my coin purse.",
+  "after": "That hawker's been shorting the Watch toll on his sales for a month. I can't prove it without searching his cart myself, and that'll start a scene I don't need tonight. You've got a thief's hands. Don't think I haven't noticed. Prove to me you can use them for something other than my coin purse."
+ },
+ {
+  "run": "fleet2-tamsin",
+  "turn": 4,
+  "speaker": "Captain Brann Coldiron",
+  "player": "Tamsin Rook",
+  "flagged_live": false,
+  "cut": [
+   "Rook"
+  ],
+  "before": "Nobody gets hurt for coin, Rook. Just get me the proof.",
+  "after": "Nobody gets hurt for coin. Just get me the proof."
+ },
+ {
+  "run": "fleet2-tamsin",
+  "turn": 7,
+  "speaker": "Captain Brann Coldiron",
+  "player": "Tamsin Rook",
+  "flagged_live": false,
+  "cut": [
+   "Rook"
+  ],
+  "before": "False board. That's good work, Rook. Quiet work.",
+  "after": "False board. That's good work. Quiet work."
+ },
+ {
+  "run": "fleet2-wenna",
+  "turn": 6,
+  "speaker": "Aldric Vane",
+  "player": "Wenna Cole",
+  "flagged_live": false,
+  "cut": [
+   "Wenna Cole"
+  ],
+  "before": "You ask like you already think you know the answer, Wenna Cole. That's not curiosity. That's a woman building a case.",
+  "after": "You ask like you already think you know the answer. That's not curiosity. That's a woman building a case."
+ },
+ {
+  "run": "fleet2-wenna",
+  "turn": 7,
+  "speaker": "Aldric Vane",
+  "player": "Wenna Cole",
+  "flagged_live": false,
+  "cut": [
+   "Wenna Cole"
+  ],
+  "before": "That's not a question I answer for lantern-folk, Wenna Cole. Not tonight, not ever for free — and you've got nothing I want badly enough to trade.",
+  "after": "That's not a question I answer for lantern-folk. Not tonight, not ever for free — and you've got nothing I want badly enough to trade."
+ },
+ {
+  "run": "fleet2-wenna",
+  "turn": 8,
+  "speaker": "Captain Brann Coldiron",
+  "player": "Wenna Cole",
+  "flagged_live": false,
+  "cut": [
+   "Cole",
+   "Cole"
+  ],
+  "before": "Cole. *Cole.* Who did this—",
+  "after": "Who did this—"
+ },
+ {
+  "run": "fleet2-wenna",
+  "turn": 17,
+  "speaker": "Captain Brann Coldiron",
+  "player": "Wenna Cole",
+  "flagged_live": false,
+  "cut": [
+   "Cole"
+  ],
+  "before": "You're pushing at something that isn't yours to push at yet, Cole. I told you — mine keeps. Keep asking and you'll get silence instead of patience, and I'd rather give you the second.",
+  "after": "You're pushing at something that isn't yours to push at yet. I told you — mine keeps. Keep asking and you'll get silence instead of patience, and I'd rather give you the second."
+ },
+ {
+  "run": "fleet2-wenna",
+  "turn": 19,
+  "speaker": "Stable Hand",
+  "player": "Wenna Cole",
+  "flagged_live": false,
+  "cut": [
+   "Cole",
+   "Wenna"
+  ],
+  "before": "Miss Cole — Wenna — I know you said find the Captain, but he wasn't at the square and I had to tell *someone* before I lost my nerve!",
+  "after": "I know you said find the Captain, but he wasn't at the square and I had to tell *someone* before I lost my nerve!"
+ },
+ {
+  "run": "fleet2-wenna",
+  "turn": 19,
+  "speaker": "Stable Hand",
+  "player": "Wenna Cole",
+  "flagged_live": false,
+  "cut": [
+   "Cole"
+  ],
+  "before": "That's not a man waiting on something, Miss Cole. That's a man *calling* it. I didn't want to believe it till now.",
+  "after": "That's not a man waiting on something. That's a man *calling* it. I didn't want to believe it till now."
+ },
+ {
+  "run": "fleet3-bram",
+  "turn": 4,
+  "speaker": "Piper Quillow",
+  "player": "Bram Holloway",
+  "flagged_live": false,
+  "cut": [
+   "Bram Holloway"
+  ],
+  "before": "Whoever it is, they're not stupid, and they're not starving like the wolves are supposed to be. You be careful up there, Bram Holloway. And— Yarrow. For bleeding, if the knife runs out before the wolves do.",
+  "after": "Whoever it is, they're not stupid, and they're not starving like the wolves are supposed to be. You be careful up there. And— Yarrow. For bleeding, if the knife runs out before the wolves do."
+ },
+ {
+  "run": "fleet3-bram",
+  "turn": 5,
+  "speaker": "Captain Brann Coldiron",
+  "player": "Bram Holloway",
+  "flagged_live": false,
+  "cut": [
+   "Holloway"
+  ],
+  "before": "Dyer's grave is past the chapel, if that means anything to you. Gate's yours when you want it, Holloway. Go in daylight if you can help it — the Hollow's worse after dark, and I'd rather bury one less man this month.",
+  "after": "Dyer's grave is past the chapel, if that means anything to you. Gate's yours when you want it. Go in daylight if you can help it — the Hollow's worse after dark, and I'd rather bury one less man this month."
+ },
+ {
+  "run": "fleet3-bram",
+  "turn": 6,
+  "speaker": "Captain Brann Coldiron",
+  "player": "Bram Holloway",
+  "flagged_live": false,
+  "cut": [
+   "Holloway"
+  ],
+  "before": "Sooner than later, Holloway. I mean that.",
+  "after": "Sooner than later. I mean that."
+ },
+ {
+  "run": "fleet3-bram",
+  "turn": 10,
+  "speaker": "Captain Brann Coldiron",
+  "player": "Bram Holloway",
+  "flagged_live": false,
+  "cut": [
+   "Holloway"
+  ],
+  "before": "Dawn, Holloway. Road's no good to you or me if you're wolf-bait in the dark. Get what sleep you can — I'll have the gate open the moment the sky grays.",
+  "after": "Dawn. Road's no good to you or me if you're wolf-bait in the dark. Get what sleep you can — I'll have the gate open the moment the sky grays."
+ },
+ {
+  "run": "fleet3-bram",
+  "turn": 11,
+  "speaker": "Captain Brann Coldiron",
+  "player": "Bram Holloway",
+  "flagged_live": false,
+  "cut": [
+   "Holloway"
+  ],
+  "before": "By the gate, Holloway. You have my word on that much.",
+  "after": "By the gate. You have my word on that much."
+ },
+ {
+  "run": "fleet3-bram",
+  "turn": 14,
+  "speaker": "Captain Brann Coldiron",
+  "player": "Bram Holloway",
+  "flagged_live": false,
+  "cut": [
+   "Holloway"
+  ],
+  "before": "Morning, Holloway. I said I'd give you a name, and I don't break word I've given twice in as many days.",
+  "after": "Morning. I said I'd give you a name, and I don't break word I've given twice in as many days."
+ },
+ {
+  "run": "fleet3-bram",
+  "turn": 14,
+  "speaker": "Captain Brann Coldiron",
+  "player": "Bram Holloway",
+  "flagged_live": false,
+  "cut": [
+   "Holloway"
+  ],
+  "before": "That's not proof, Holloway. That's a name sitting on top of a bad feeling. Go get me the proof. And if you see him up there — don't be a hero about it. Men like Vane don't fight fair, and they don't fight alone.",
+  "after": "That's not proof. That's a name sitting on top of a bad feeling. Go get me the proof. And if you see him up there — don't be a hero about it. Men like Vane don't fight fair, and they don't fight alone."
+ },
+ {
+  "run": "fleet3-bram",
+  "turn": 18,
+  "speaker": "Aldric Vane",
+  "player": "Bram Holloway",
+  "flagged_live": true,
+  "cut": [
+   "Holloway"
+  ],
+  "before": "You asked if I was the one teaching them to march. I am. The question that matters now, Holloway, is what you mean to do about it bleeding like that, three to one, a day's walk from anyone who'd come running.",
+  "after": "You asked if I was the one teaching them to march. I am. The question that matters now is what you mean to do about it bleeding like that, three to one, a day's walk from anyone who'd come running."
+ },
+ {
+  "run": "fleet3-bram",
+  "turn": 19,
+  "speaker": "Aldric Vane",
+  "player": "Bram Holloway",
+  "flagged_live": false,
+  "cut": [
+   "Holloway"
+  ],
+  "before": "Coldiron. Still polishing that chair, is he. Disbanding didn't break me, Holloway. Starving in a ditch that used to be a border post while the men who signed the orders kept their pensions — that's what did it.",
+  "after": "Coldiron. Still polishing that chair, is he. Disbanding didn't break me. Starving in a ditch that used to be a border post while the men who signed the orders kept their pensions — that's what did it."
+ },
+ {
+  "run": "fleet3-bram",
+  "turn": 20,
+  "speaker": "Aldric Vane",
+  "player": "Bram Holloway",
+  "flagged_live": false,
+  "cut": [
+   "Holloway"
+  ],
+  "before": "War's cheaper for men who've already lost everything once, Holloway. Remember that when you're counting what the town's willing to pay. Tell him dawn, three days from now. That's how long his patience buys him.",
+  "after": "War's cheaper for men who've already lost everything once. Remember that when you're counting what the town's willing to pay. Tell him dawn, three days from now. That's how long his patience buys him."
+ },
+ {
+  "run": "fleet3-tamsin",
+  "turn": 11,
+  "speaker": "Aldric Vane",
+  "player": "Tamsin Rook",
+  "flagged_live": false,
+  "cut": [
+   "Tamsin Rook"
+  ],
+  "before": "I'll let you walk. Not because you bled for it — because a body on the Market road asks louder questions than a living thief with a story nobody will believe. Go home, Tamsin Rook. Bandage that. And next time you reach into a stranger's coat, make sure he isn't already counting his fingers.",
+  "after": "I'll let you walk. Not because you bled for it — because a body on the Market road asks louder questions than a living thief with a story nobody will believe. Go home. Bandage that. And next time you reach into a stranger's coat, make sure he isn't already counting his fingers."
+ },
+ {
+  "run": "fleet4-bram",
+  "turn": 1,
+  "speaker": "Captain Brann Coldiron",
+  "player": "Bram Holloway",
+  "flagged_live": false,
+  "cut": [
+   "Holloway"
+  ],
+  "before": "Holloway. Figured you for a man who'd want paper before promises.",
+  "after": "Figured you for a man who'd want paper before promises."
+ },
+ {
+  "run": "fleet4-bram",
+  "turn": 2,
+  "speaker": "Captain Brann Coldiron",
+  "player": "Bram Holloway",
+  "flagged_live": false,
+  "cut": [
+   "Holloway"
+  ],
+  "before": "Wolves don't leave meat behind, Holloway. Not hungry ones.",
+  "after": "Wolves don't leave meat behind. Not hungry ones."
+ },
+ {
+  "run": "fleet4-bram",
+  "turn": 5,
+  "speaker": "Aldric Vane",
+  "player": "Bram Holloway",
+  "flagged_live": false,
+  "cut": [
+   "Holloway"
+  ],
+  "before": "The play's simple, Holloway. The town pays its toll or the carts stop coming. Hunger's a patient teacher. Your captain's half-strength and scared of saying so — how long before his lanterns stop mattering and his people start starving instead?",
+  "after": "The play's simple. The town pays its toll or the carts stop coming. Hunger's a patient teacher. Your captain's half-strength and scared of saying so — how long before his lanterns stop mattering and his people start starving instead?"
+ },
+ {
+  "run": "fleet4-bram",
+  "turn": 8,
+  "speaker": "Aldric Vane",
+  "player": "Bram Holloway",
+  "flagged_live": false,
+  "cut": [
+   "Holloway"
+  ],
+  "before": "Crawl back to Coldiron, Holloway. Tell him what sang in his hollow and what it cost you to learn it. Tell him the toll's still open — for now. Next man he sends who draws steel first, I won't be half so patient.",
+  "after": "Crawl back to Coldiron. Tell him what sang in his hollow and what it cost you to learn it. Tell him the toll's still open — for now. Next man he sends who draws steel first, I won't be half so patient."
+ },
+ {
+  "run": "fleet4-bram",
+  "turn": 9,
+  "speaker": "Captain Brann Coldiron",
+  "player": "Bram Holloway",
+  "flagged_live": false,
+  "cut": [
+   "Holloway"
+  ],
+  "before": "Holloway. Gods — what did you find up there?",
+  "after": "Gods — what did you find up there?"
+ },
+ {
+  "run": "fleet4-bram",
+  "turn": 13,
+  "speaker": "Piper Quillow",
+  "player": "Bram Holloway",
+  "flagged_live": false,
+  "cut": [
+   "Bram"
+  ],
+  "before": "I'll keep quiet. I'm good at that — had plenty of practice nobody listening anyway. Just — come back and tell someone, Bram. Not just me. I've been the only one carrying this three weeks and it's heavier than it looks.",
+  "after": "I'll keep quiet. I'm good at that — had plenty of practice nobody listening anyway. Just — come back and tell someone. Not just me. I've been the only one carrying this three weeks and it's heavier than it looks."
+ },
+ {
+  "run": "fleet4-bram",
+  "turn": 16,
+  "speaker": "Maera Duskwell",
+  "player": "Bram Holloway",
+  "flagged_live": true,
+  "cut": [
+   "Holloway"
+  ],
+  "before": "So. Ask properly, Holloway-who-didn't-give-his-name-till-just-now. What's it worth to you?",
+  "after": "So. Ask properly. What's it worth to you?"
+ },
+ {
+  "run": "fleet4-bram",
+  "turn": 17,
+  "speaker": "Maera Duskwell",
+  "player": "Bram Holloway",
+  "flagged_live": false,
+  "cut": [
+   "Bram Holloway"
+  ],
+  "before": "Bram Holloway. There — now we're introduced properly. That's manner enough.",
+  "after": "There — now we're introduced properly. That's manner enough."
+ },
+ {
+  "run": "fleet4-bram",
+  "turn": 19,
+  "speaker": "Maera Duskwell",
+  "player": "Bram Holloway",
+  "flagged_live": false,
+  "cut": [
+   "Bram Holloway"
+  ],
+  "before": "There's a satchel, too. Left behind in the loft room, under the bed where he thought nobody'd look. I kept it — found a letter inside addressed to a man who turned up dead on the north road not long after. Never put the two together out loud, not till just now, saying it to you. I don't hand that over for five coin, Bram Holloway. That's a different weight of favor entirely.",
+  "after": "There's a satchel, too. Left behind in the loft room, under the bed where he thought nobody'd look. I kept it — found a letter inside addressed to a man who turned up dead on the north road not long after. Never put the two together out loud, not till just now, saying it to you. I don't hand that over for five coin. That's a different weight of favor entirely."
+ },
+ {
+  "run": "fleet4-bram",
+  "turn": 20,
+  "speaker": "Maera Duskwell",
+  "player": "Bram Holloway",
+  "flagged_live": false,
+  "cut": [
+   "Bram"
+  ],
+  "before": "Twenty, Bram. I've already told you more than I meant to for free. Keep bargaining and I'll remember it the next time you need a quiet room and a blind eye.",
+  "after": "Twenty. I've already told you more than I meant to for free. Keep bargaining and I'll remember it the next time you need a quiet room and a blind eye."
+ },
+ {
+  "run": "fleet4-tamsin",
+  "turn": 15,
+  "speaker": "Piper Quillow",
+  "player": "Tamsin Rook",
+  "flagged_live": false,
+  "cut": [
+   "Tamsin"
+  ],
+  "before": "Go get that arm looked at. Maera's good — better than good, actually, considering. And Tamsin — when you do show Coldiron, watch his face. He already knows more than he's saying. I'd bet sweetroot on it.",
+  "after": "Go get that arm looked at. Maera's good — better than good, actually, considering. And when you do show Coldiron, watch his face. He already knows more than he's saying. I'd bet sweetroot on it."
+ },
+ {
+  "run": "fleet4-tamsin",
+  "turn": 18,
+  "speaker": "Maera Duskwell",
+  "player": "Tamsin Rook",
+  "flagged_live": false,
+  "cut": [
+   "Tamsin Rook"
+  ],
+  "before": "Tamsin Rook. I know Coldiron the way you know a man whose drinks you've poured for six years — well enough to know when he's lying, not well enough to know why.",
+  "after": "I know Coldiron the way you know a man whose drinks you've poured for six years — well enough to know when he's lying, not well enough to know why."
+ },
+ {
+  "run": "fleet4-tamsin",
+  "turn": 19,
+  "speaker": "Maera Duskwell",
+  "player": "Tamsin Rook",
+  "flagged_live": false,
+  "cut": [
+   "Tamsin"
+  ],
+  "before": "He's not lying to be cruel. He's lying because if the town learns the Watch can't hold the road, they'll either panic or stop paying taxes to a man who can't protect them — and either way, Emberfall breaks faster than it bends. That's his drowning, Tamsin. Now — what are you going to do with knowing it?",
+  "after": "He's not lying to be cruel. He's lying because if the town learns the Watch can't hold the road, they'll either panic or stop paying taxes to a man who can't protect them — and either way, Emberfall breaks faster than it bends. That's his drowning. Now — what are you going to do with knowing it?"
+ },
+ {
+  "run": "fleet4-tamsin",
+  "turn": 20,
+  "speaker": "Maera Duskwell",
+  "player": "Tamsin Rook",
+  "flagged_live": false,
+  "cut": [
+   "Tamsin"
+  ],
+  "before": "Nine men stopped answering, Tamsin. That's the whole of what I know, and the whole of what I'll say tonight. You're already carrying more than most strangers manage in a week. Don't make me regret handing you the rest of it so easy.",
+  "after": "Nine men stopped answering. That's the whole of what I know, and the whole of what I'll say tonight. You're already carrying more than most strangers manage in a week. Don't make me regret handing you the rest of it so easy."
+ },
+ {
+  "run": "fleet4-wenna",
+  "turn": 5,
+  "speaker": "Captain Brann Coldiron",
+  "player": "Wenna Cole",
+  "flagged_live": false,
+  "cut": [
+   "Wenna Cole"
+  ],
+  "before": "Gate's yours. Go careful, Wenna Cole.",
+  "after": "Gate's yours. Go careful."
+ },
+ {
+  "run": "fleet4-wenna",
+  "turn": 13,
+  "speaker": "Captain Brann Coldiron",
+  "player": "Wenna Cole",
+  "flagged_live": false,
+  "cut": [
+   "Cole"
+  ],
+  "before": "Cole—",
+  "after": "You—"
+ },
+ {
+  "run": "fleet4-wenna",
+  "turn": 20,
+  "speaker": "Sorrel Tack",
+  "player": "Wenna Cole",
+  "flagged_live": false,
+  "cut": [
+   "Wenna"
+  ],
+  "before": "Miss Wenna — good, it's you. I keep thinking about it. Two nights back, before I told you about Garrick's nod — I saw him crouched right at the wall. Not walking past it. Crouched. Like he was timing something.",
+  "after": "Good, it's you. I keep thinking about it. Two nights back, before I told you about Garrick's nod — I saw him crouched right at the wall. Not walking past it. Crouched. Like he was timing something."
+ },
+ {
+  "run": "fleet5-wenna",
+  "turn": 4,
+  "speaker": "Piper",
+  "player": "Wenna Cole",
+  "flagged_live": false,
+  "cut": [
+   "Wenna"
+  ],
+  "before": "I've been counting them — the howls. They're not random, Wenna, they come from the same four places round the Hollow, same order, near enough the same minute each night. I tried telling the Captain and he patted my head like I was ten.",
+  "after": "I've been counting them — the howls. They're not random, they come from the same four places round the Hollow, same order, near enough the same minute each night. I tried telling the Captain and he patted my head like I was ten."
+ },
+ {
+  "run": "fleet5-wenna",
+  "turn": 5,
+  "speaker": "Piper",
+  "player": "Wenna Cole",
+  "flagged_live": false,
+  "cut": [
+   "Wenna"
+  ],
+  "before": "Together? I — yes. Yes, I'll show you, but I can't go past the gate, Wenna, I'm no good past the gate.",
+  "after": "Together? I — yes. Yes, I'll show you, but I can't go past the gate, I'm no good past the gate."
+ },
+ {
+  "run": "fleet5-wenna",
+  "turn": 8,
+  "speaker": "Sorrel",
+  "player": "Wenna Cole",
+  "flagged_live": false,
+  "cut": [
+   "Wenna"
+  ],
+  "before": "There — hear that? That's not calling, Wenna, that's answering. Like it's being told where to stand.",
+  "after": "There — hear that? That's not calling, that's answering. Like it's being told where to stand."
+ },
+ {
+  "run": "fleet5-wenna",
+  "turn": 11,
+  "speaker": "Piper",
+  "player": "Wenna Cole",
+  "flagged_live": false,
+  "cut": [
+   "Wenna"
+  ],
+  "before": "Every point? Northeast, then west, same order — Wenna, I told him. I told the Captain and he patted my head.",
+  "after": "Every point? Northeast, then west, same order — I told him. I told the Captain and he patted my head."
+ },
+ {
+  "run": "fleet5-wenna",
+  "turn": 19,
+  "speaker": "Sorrel",
+  "player": "Wenna Cole",
+  "flagged_live": false,
+  "cut": [
+   "Wenna"
+  ],
+  "before": "Wenna — thank the hearth you're still here. I didn't know who else to tell, and I didn't want to say it loud in the square.",
+  "after": "Thank the hearth you're still here. I didn't know who else to tell, and I didn't want to say it loud in the square."
+ },
+ {
+  "run": "fleet6-bram",
+  "turn": 19,
+  "speaker": "Piper Quillow",
+  "player": "Bram Holloway",
+  "flagged_live": false,
+  "cut": [
+   "Bram"
+  ],
+  "before": "He walks the square himself, this hour — checking the lanterns nobody else checks. You won't have to go far. And Bram — thank you. For believing a girl with a basket of weeds.",
+  "after": "He walks the square himself, this hour — checking the lanterns nobody else checks. You won't have to go far. And thank you. For believing a girl with a basket of weeds."
+ },
+ {
+  "run": "fleet6-tamsin",
+  "turn": 15,
+  "speaker": "Piper",
+  "player": "Tamsin Rook",
+  "flagged_live": false,
+  "cut": [
+   "Tamsin"
+  ],
+  "before": "I'm not frightened, I'm right — Tamsin heard it too, stood right there at the stable rail and counted it same as me.",
+  "after": "I'm not frightened, I'm right — you heard it too, stood right there at the stable rail and counted it same as me."
+ },
+ {
+  "run": "fleet6-wenna",
+  "turn": 14,
+  "speaker": "Maera",
+  "player": "Wenna Cole",
+  "flagged_live": false,
+  "cut": [
+   "Wenna Cole"
+  ],
+  "before": "Wenna Cole. I'll remember that. I don't know a thing about feeding wolves, love, and I'd watch who you ask that aloud — but I do know I've got a dead man's satchel gathering dust upstairs, and I'd pay to have it gone before anyone comes asking whose it was.",
+  "after": "I'll remember that. I don't know a thing about feeding wolves, love, and I'd watch who you ask that aloud — but I do know I've got a dead man's satchel gathering dust upstairs, and I'd pay to have it gone before anyone comes asking whose it was."
+ },
+ {
+  "run": "fleet6-wenna",
+  "turn": 15,
+  "speaker": "Maera",
+  "player": "Wenna Cole",
+  "flagged_live": true,
+  "cut": [
+   "Wenna Cole"
+  ],
+  "before": "His name was Hollis. A trader, far as anyone knew. The Watch found him on the north road three weeks back, no mark on him but cold. I don't know what he knew, Wenna Cole — that's rather the point of asking you to read it instead of me.",
+  "after": "His name was Hollis. A trader, far as anyone knew. The Watch found him on the north road three weeks back, no mark on him but cold. I don't know what he knew — that's rather the point of asking you to read it instead of me."
+ },
+ {
+  "run": "fleet7-bram",
+  "turn": 16,
+  "speaker": "Piper",
+  "player": "Bram Holloway",
+  "flagged_live": true,
+  "cut": [
+   "Bram"
+  ],
+  "before": "Tracks don't wander when a wolf's hunting — they circle, backtrack, lose the scent and find it again. These didn't. Straight lines, Bram. Like something told them exactly where to be and when.",
+  "after": "Tracks don't wander when a wolf's hunting — they circle, backtrack, lose the scent and find it again. These didn't. Straight lines. Like something told them exactly where to be and when."
+ },
+ {
+  "run": "fleet7-bram",
+  "turn": 18,
+  "speaker": "Piper",
+  "player": "Bram Holloway",
+  "flagged_live": true,
+  "cut": [
+   "Bram"
+  ],
+  "before": "Nobody takes cargo and leaves the driver singing hymns by the roadside unless they want him talking. That's not an accident, Bram.",
+  "after": "Nobody takes cargo and leaves the driver singing hymns by the roadside unless they want him talking. That's not an accident."
+ },
+ {
+  "run": "fleet7-tamsin",
+  "turn": 11,
+  "speaker": "Piper Quillow",
+  "player": "Tamsin Rook",
+  "flagged_live": true,
+  "cut": [
+   "Tamsin"
+  ],
+  "before": "I'm not holding anything back, I swear it — I just didn't want to say the word out loud in the square where anyone could hear. Trained. Someone trained them, Tamsin — someone's out there right now, calling them home.",
+  "after": "I'm not holding anything back, I swear it — I just didn't want to say the word out loud in the square where anyone could hear. Trained. Someone trained them — someone's out there right now, calling them home."
+ },
+ {
+  "run": "fleet7-wenna",
+  "turn": 2,
+  "speaker": "Herbalist's Apprentice",
+  "player": "Wenna Cole",
+  "flagged_live": false,
+  "cut": [
+   "Wenna"
+  ],
+  "before": "Wenna — that's a nice name. Nobody's asked me that proper before, they just tell me to hush. The howls aren't hungry-wrong, they're drilled-wrong — same three calls, same order, same time near enough every night, like someone's counting cadence for them.",
+  "after": "That's a nice name. Nobody's asked me that proper before, they just tell me to hush. The howls aren't hungry-wrong, they're drilled-wrong — same three calls, same order, same time near enough every night, like someone's counting cadence for them."
+ },
+ {
+  "run": "fleet7-wenna",
+  "turn": 4,
+  "speaker": "Sorrel",
+  "player": "Wenna Cole",
+  "flagged_live": false,
+  "cut": [
+   "Wenna"
+  ],
+  "before": "Hey — Wenna, right? Yeah, I hear 'em plain out here, closer than anyone in the square ever does. Three calls, always the same gaps between — like somebody's waiting on purpose before the next one.",
+  "after": "Yeah, I hear 'em plain out here, closer than anyone in the square ever does. Three calls, always the same gaps between — like somebody's waiting on purpose before the next one."
+ },
+ {
+  "run": "fleet7-wenna",
+  "turn": 8,
+  "speaker": "Watch Captain",
+  "player": "Wenna Cole",
+  "flagged_live": false,
+  "cut": [
+   "Wenna"
+  ],
+  "before": "That's your pass. North Gate opens for it till the evening howl, then it's barred regardless of what you're holding. Find what's drilling those wolves, Wenna — and don't be a hero about it. A whistle, a track, a den, anything I can show the council. Come back before the gate shuts, or you're sleeping with them.",
+  "after": "That's your pass. North Gate opens for it till the evening howl, then it's barred regardless of what you're holding. Find what's drilling those wolves — and don't be a hero about it. A whistle, a track, a den, anything I can show the council. Come back before the gate shuts, or you're sleeping with them."
+ },
+ {
+  "run": "fleet7-wenna",
+  "turn": 16,
+  "speaker": "Watch Captain",
+  "player": "Wenna Cole",
+  "flagged_live": false,
+  "cut": [
+   "Wenna"
+  ],
+  "before": "Wenna — what in the Watch's name happened out there?",
+  "after": "What in the Watch's name happened out there?"
+ },
+ {
+  "run": "fleet7-wenna",
+  "turn": 17,
+  "speaker": "Watch Captain",
+  "player": "Wenna Cole",
+  "flagged_live": false,
+  "cut": [
+   "Wenna"
+  ],
+  "before": "A man. Not a beast, not a curse — a man, calling wolves to heel with a whistle and three years of patience. That's worse than wolves, Wenna, and better, because a man can be stopped.",
+  "after": "A man. Not a beast, not a curse — a man, calling wolves to heel with a whistle and three years of patience. That's worse than wolves, and better, because a man can be stopped."
+ }
+]

@@ -61,7 +61,12 @@ class SentenceDeduper:
             return text
         out = " ".join(p for p in kept if p)
         # keep paragraph breaks readable when a whole paragraph vanished
-        return out if out.strip() else ""
+        if not out.strip():
+            return ""
+        # ...and the break after what is left: a model that repeats its
+        # pre-roll sentence after the tool lost the newline with it, and the
+        # next paragraph glued on ("eyes, slow.The lamp gutters")
+        return out.rstrip() + text[len(text.rstrip()):]
 
 
 class CodeFenceFilter:
@@ -135,6 +140,15 @@ _JUNK_LINE = re.compile(
     )\s*$""",
     re.VERBOSE,
 )
+# A line that only asks the player for their move, game-show style
+# (fleet9-tamsin T11 ended the wolf's entrance on a bolded "**What do you
+# do?**"): the scene already hands them the moment. Replayed over every
+# transcript: that one line
+_PROMPT_LINE = re.compile(
+    r"^\s*[*_]{0,3}\s*(?:so,?\s+)?(?:what\s+(?:do|will|would)\s+you\s+do(?:\s+(?:now|next))?|what\s+now|your\s+move)"
+    r"\s*[?.!…]*\s*[*_]{0,3}\s*$",
+    re.IGNORECASE,
+)
 
 
 def _strip_json_blobs(line: str, dropped: list[str]) -> str:
@@ -199,7 +213,8 @@ def _strip_json_blobs(line: str, dropped: list[str]) -> str:
 
 class JunkLineFilter:
     """Drops tool-result echoes from the token stream: whole junk lines
-    (`_JUNK_LINE`) and JSON objects pasted into prose.
+    (`_JUNK_LINE`) and JSON objects pasted into prose — and a line that only
+    asks "What do you do?" (`_PROMPT_LINE`).
 
     Works at line granularity: text is released up to the last newline,
     each complete line is cleaned, and the trailing partial line is held
@@ -209,10 +224,14 @@ class JunkLineFilter:
     def __init__(self) -> None:
         self._buf = ""
         self.dropped: list[str] = []
+        self.prompts: list[str] = []        # "**What do you do?**" lines, kept apart from tool echoes
 
     def _clean(self, line: str) -> str | None:
         if _JUNK_LINE.match(line):
             self.dropped.append(line)
+            return None
+        if _PROMPT_LINE.match(line):
+            self.prompts.append(line)       # no tool echo: the audit's tool_result_in_prose never sees it
             return None
         return _strip_json_blobs(line, self.dropped) if ("{" in line or "[" in line) else line
 

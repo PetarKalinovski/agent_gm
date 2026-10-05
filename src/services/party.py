@@ -130,6 +130,16 @@ def can_join(session, player, npc) -> dict[str, Any] | None:
     other = party_of(session, npc.id)
     if other is not None and other.id != player.id:
         return {"error": "taken", "message": f"{npc.name} already travels with {other.name}."}
+    # The story's antagonists have their own ends, whatever the numbers say
+    try:
+        from src.services.campaign import get_campaign_row
+
+        campaign = get_campaign_row(session, player.id)
+        if campaign is not None and npc.id in (campaign.villain_npc_id, campaign.successor_npc_id):
+            return {"error": "enemy",
+                    "message": f"{npc.name} has their own ends here — they will not walk beside the player."}
+    except Exception as e:
+        logger.debug(f"campaign check for join skipped: {e}")
     refusal = standing.join_refusal(npc, standing.relationship_for(session, player.id, npc.id))
     if refusal:
         return refusal

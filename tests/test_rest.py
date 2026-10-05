@@ -1,6 +1,6 @@
 """Rest: a bed ends the day, heals by its quality, and charges first."""
 
-from src.models import DMState, Location, LocationType, Player, WorldClock, get_session
+from src.models import DMState, Event, Location, LocationType, Player, WorldClock, get_session
 from src.services import rest as rest_mod
 from src.services.rest import hours_until_morning, normalize_rest, rest_here, rest_now
 from src.services.scene_objects import normalize_objects, resolve_interaction
@@ -138,3 +138,110 @@ def test_seed_tavern_sleeps_and_the_hollow_does_not(tmp_path):
         assert rest_here(tavern) == {"kind": "inn", "price": 8, "quality": "good"}
         assert any(o["kind"] == "rest" for o in normalize_objects(tavern.objects))
         assert rest_here(hollow) is None
+
+
+# ----------------------------------------------------------------------
+# A night is not a skip button: scheduled events wake the sleeper
+# ----------------------------------------------------------------------
+
+def _schedule(name, day, hour, *, places=(), visible=True):
+    with get_session() as session:
+        event = Event(name=name, description=f"{name} happens.", event_type="meso",
+                      scheduled_day=day, scheduled_hour=hour, locations_involved=list(places),
+                      consequences=["The North Gate is barred"], player_visible=visible)
+        session.add(event)
+        session.commit()
+        return event.id
+
+
+def _event(event_id):
+    with get_session() as session:
+        e = session.get(Event, event_id)
+        return {"occurred": (e.occurred_day, e.occurred_hour), "narrated": e.narrated_to_player,
+                "witnessed": e.player_witnessed}
+
+
+def test_the_evening_howl_wakes_the_sleeper_and_the_bed_waits_for_a_whole_night(db):
+    """Playtest 2026-10-04: sleeping at 19:30 jumped past the seeded 20:00
+    Evening Howl, and the town's set piece never reached the screen."""
+    with get_session() as session:
+        world = _world(session, hour=19, minute=30, health="badly_hurt", spec=normalize_rest(INN))
+    howl = _schedule("The Evening Howl", 1, 20, places=[world["tavern"]])
+    pending_actions.clear(world["player"])
+
+    result = rest_now(world["player"])
+    assert result["success"] and result["interrupted"] is True
+    assert result["woken_by"]["name"] == "The Evening Howl"
+    assert (result["day"], result["hour"], result["minute"], result["hours"]) == (1, 20, 0, 0.5)
+    assert result["paid"] == 0 and result["cinematic"] is None
+    assert result["health"] == {"before": "badly_hurt", "after": "badly_hurt"}, "half an hour heals nothing"
+    assert result["summary"].startswith("Woken at 20:00 by The Evening Howl")
+    after = _snapshot(world)
+    assert (after["day"], after["hour"], after["minute"], after["coin"]) == (1, 20, 0, 20)
+    # Fired at the moment it woke them; the ledger line is its narration
+    assert _event(howl) == {"occurred": (1, 20), "narrated": True, "witnessed": True}
+    block = pending_actions.format_pending_actions(pending_actions.drain(world["player"]))
+    assert "woken at 20:00 on Day 1 by The Evening Howl" in block and "happening NOW" in block
+    assert "The North Gate is barred" in block and "Open on the MORNING" not in block
+
+    # Back to bed: the howl is spent, so this night runs to first light, paid
+    again = rest_now(world["player"])
+    assert again["interrupted"] is False and again["woken_by"] is None
+    assert (again["day"], again["hour"], again["paid"]) == (2, 7, 8)
+    assert again["health"]["after"] == "healthy"
+
+
+def test_a_broken_night_heals_the_share_that_was_slept(db):
+    with get_session() as session:
+        world = _world(session, hour=22, health="badly_hurt", spec=normalize_rest(INN))
+    _schedule("Wolves at the Wall", 2, 3)                     # no place: the world's own
+    result = rest_now(world["player"])
+    assert result["interrupted"] and result["hours"] == 5.0
+    assert result["health"]["after"] == "hurt", "5 of 9 hours of a 3-step bed is one step"
+    assert (result["day"], result["hour"]) == (2, 3)
+
+
+def test_an_event_already_due_wakes_them_before_sleep_comes(db):
+    """Due but unfired: the tick that would fire it has not run yet (the
+    reply moved the clock with @time and then wrote @rest)."""
+    with get_session() as session:
+        world = _world(session, hour=20, minute=15, spec=normalize_rest(INN))
+    _schedule("The Evening Howl", 1, 20)
+    result = rest_now(world["player"])
+    assert result["interrupted"] and result["hours"] == 0 and (result["hour"], result["minute"]) == (20, 15)
+    assert "before sleep came" in result["summary"]
+    assert _snapshot(world)["coin"] == 20
+
+
+def test_hidden_distant_and_dawn_events_let_them_sleep(db):
+    with get_session() as session:
+        world = _world(session, hour=21, spec=normalize_rest(INN))
+    hidden = _schedule("Smugglers Meet", 1, 23, visible=False)
+    distant = _schedule("Ambush in the Hollow", 2, 1, places=[world["hollow"]])   # another settlement
+    dawn = _schedule("Market Bell", 2, rest_mod.MORNING_HOUR)                     # first light itself
+    result = rest_now(world["player"])
+    assert result["interrupted"] is False and (result["day"], result["hour"]) == (2, 7)
+    # Sleep never fires what it did not stop for — the next tick does
+    for event_id in (hidden, distant, dawn):
+        assert _event(event_id)["occurred"] == (None, None)
+
+
+def test_a_broken_night_reads_in_minutes_and_a_free_camp_charges_nothing(db):
+    with get_session() as session:
+        world = _world(session, hour=19, minute=47, spec=normalize_rest({"kind": "camp", "price": 0}))
+    _schedule("The Evening Howl", 1, 20)
+    pending_actions.clear(world["player"])
+    result = rest_now(world["player"])
+    assert result["summary"] == (
+        "Woken at 20:00 by The Evening Howl, after 13 minutes of sleep at The Drowned Lantern. "
+        "The night is broken."
+    ), "never '0.22 hours'; and a free camp has no bed to not charge"
+    block = pending_actions.format_pending_actions(pending_actions.drain(world["player"]))
+    assert "by The Evening Howl after 13 minutes of sleep" in block
+
+
+def test_a_long_broken_night_rounds_to_hours():
+    assert rest_mod._slept(0) == "before sleep came"
+    assert rest_mod._slept(1) == "after 1 minute of sleep"
+    assert rest_mod._slept(120) == "after 2 hours of sleep"
+    assert rest_mod._slept(200) == "after about 3 hours of sleep"

@@ -5,9 +5,10 @@ code owns the whole interaction — no LLM, no DM turn. That only stays safe
 because `normalize_objects` strips every number and effect an LLM might
 invent: the creator agent picks ONE word from `take / read / open / search`
 and writes flavour text, and the engine owns everything else. Item payloads
-are cut down to {name, type, description, value, quantity} — scene objects
-never carry `slot`, `tier`, or `effect_tag`; tiered gear enters the world
-only through merchants and quest rewards.
+are cut down to {name, type, description, value, quantity} (and a document's
+own words, `reads`) — scene objects never carry `slot`, `tier`, or
+`effect_tag`; tiered gear enters the world only through merchants and quest
+rewards.
 
 HTTP mapping for `resolve_interaction` results (the endpoint owns the
 status codes): `locked` / `spent` / `error == "not here"` -> 409,
@@ -38,10 +39,15 @@ MAX_BODIES_PER_LOCATION = 4      # the engine pool; oldest evicted first
 LABEL_MAX = 48
 TEXT_MAX = 400
 
-# The ONLY keys an authored item payload may carry
-ITEM_KEYS = ("name", "type", "description", "value", "quantity")
+# The ONLY keys an authored item payload may carry. `reads` is a document's
+# own words (a letter, a ledger page), optional and never mechanics: fleet6-
+# wenna T17 opened the satchel, found a letter whose payload said only who it
+# was addressed to, and the DM wrote its contents itself — three sealed
+# campaign truths in one paragraph
+ITEM_KEYS = ("name", "type", "description", "value", "quantity", "reads")
 ITEM_TYPES = ("consumable", "weapon", "armor", "quest_item", "misc")
 MAX_ITEM_QUANTITY = 5
+READS_MAX = 600
 
 COORD_MIN, COORD_MAX = 10.0, 90.0
 DEFAULT_X, DEFAULT_Y = 50.0, 65.0
@@ -82,13 +88,17 @@ def _normalize_item(raw: Any) -> dict[str, Any] | None:
         quantity = 1
 
     item_type = str(raw.get("type") or "").strip().lower()
-    return {
+    item = {
         "name": name,
         "type": item_type if item_type in ITEM_TYPES else "misc",
         "description": str(raw.get("description") or "")[:TEXT_MAX],
         "value": max(0, value),
         "quantity": min(MAX_ITEM_QUANTITY, max(1, quantity)),
     }
+    reads = raw.get("reads")
+    if isinstance(reads, str) and reads.strip():
+        item["reads"] = reads.strip()[:READS_MAX]
+    return item
 
 
 def _normalize_loot_item(raw: Any) -> dict[str, Any] | None:
@@ -253,13 +263,17 @@ def _mark_consumed(location_id: str, object_id: str) -> None:
             session.commit()
 
 
-def resolve_interaction(player_id: str, location_id: str, object_id: str) -> dict[str, Any]:
+def resolve_interaction(player_id: str, location_id: str, object_id: str,
+                        unlocked: bool = False) -> dict[str, Any]:
     """Apply a canvas interaction in code. Returns the /api/interact body.
 
     Args:
         player_id: The player's ID.
         location_id: The scene the client thinks it is in.
         object_id: Which interactable was touched.
+        unlocked: The DM's fiction opened a locked container (`@interact
+            <thing> | through`: the owner's leave, the key, a good roll).
+            The canvas never passes it.
 
     Returns:
         On success `{"success": True, "object_id", "kind", "label",
@@ -289,8 +303,11 @@ def resolve_interaction(player_id: str, location_id: str, object_id: str) -> dic
         payload = match["payload"]
         already_consumed = match["consumed"]
 
-    # A locked container is fiction, not code — hand it to the DM untouched
-    if kind == "open" and payload.get("lock"):
+    # A locked container is fiction, not code — hand it to the DM untouched.
+    # Once the DM says the fiction opened it, the engine hands over what is
+    # inside like any open: before this, Maera's satchel letter could reach
+    # the pack only by a @give that left the satchel "holding" it forever
+    if kind == "open" and payload.get("lock") and not unlocked:
         return {
             "success": False,
             "locked": True,
@@ -346,6 +363,7 @@ def resolve_interaction(player_id: str, location_id: str, object_id: str) -> dic
             }.get(reason, "You cannot rest now.")
             return {"success": False, "refused": True, "error": reason, "label": label, "message": message}
 
+    document = None
     if kind not in ("read", "body", "rest") and item:
         added = add_to_inventory(
             player_id,
@@ -358,13 +376,21 @@ def resolve_interaction(player_id: str, location_id: str, object_id: str) -> dic
         if added.get("success"):
             items_gained.append({"name": item["name"], "quantity": item["quantity"]})
             floater = f"+ {item['name']}"
+            # A document found is read on the spot, in its own words only
+            if item.get("reads"):
+                document = {"item": item["name"], "text": item["reads"]}
 
     consumed = kind in CONSUMING_KINDS
     if consumed:
         _mark_consumed(location_id, object_id)
 
     show_panel = bool(text) and kind in ("read", "open", "search", "body")
-    return {
+    panel_title = label if show_panel else None
+    panel_text = text if show_panel else None
+    if document:
+        panel_title = panel_title or document["item"]
+        panel_text = f"{panel_text}\n\n{document['text']}" if panel_text else document["text"]
+    body = {
         "success": True,
         "object_id": object_id,
         "kind": kind,
@@ -372,10 +398,13 @@ def resolve_interaction(player_id: str, location_id: str, object_id: str) -> dic
         "consumed": consumed,
         "result": {
             "floater": floater,
-            "panel_title": label if show_panel else None,
-            "panel_text": text if show_panel else None,
+            "panel_title": panel_title,
+            "panel_text": panel_text,
             "items_gained": items_gained,
             "coin_gained": coin_gained,
             "rest": rest_result,
         },
     }
+    if document:
+        body["result"]["document"] = document
+    return body

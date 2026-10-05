@@ -87,7 +87,7 @@ def test_first_visit_adds_describe_hint():
     _move(pid, "Market Square", "The Salt Tavern", first_visit=True)
     block = format_pending_actions(drain(pid))
     assert "They are now in The Salt Tavern" in block
-    assert "Call describe_location for it before anything else.]" in block
+    assert "Open with what they see there — sight, sound, smell — before anything else.]" in block
 
     _move(pid, "The Salt Tavern", "Market Square", first_visit=False)
     block = format_pending_actions(drain(pid))
@@ -114,7 +114,7 @@ def test_block_header_names_tools_without_backticks():
     block = format_pending_actions(drain(pid))
     assert block.startswith("[SINCE YOUR LAST TURN the player acted on the canvas.")
     assert "`" not in block
-    assert "move_player, advance_time, or add_to_inventory" in block
+    assert "Do NOT write @move, @time, or @give for any of it" in block
 
 
 def test_combat_entries_carry_tools_but_no_prose():

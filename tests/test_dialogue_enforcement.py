@@ -294,6 +294,17 @@ def test_repeated_paragraph_is_dropped_second_time():
     assert d.filter(PARA + " Then the door bangs open behind you.").strip() == "Then the door bangs open behind you."
 
 
+def test_a_dropped_repeat_keeps_the_paragraph_break_after_it():
+    # A model that repeats its pre-roll sentence after the tool: the break
+    # went with it and the next paragraph glued on ("slow.The lamp")
+    d = SentenceDeduper()
+    d.filter("He weighs whether honesty costs him anything tonight.\n")
+    assert d.filter("He weighs whether honesty costs him anything tonight. "
+                    "Something shifts behind his eyes, slow.\n\n") == "Something shifts behind his eyes, slow.\n\n"
+    assert d.filter("Something shifts behind his eyes, slow. The lamp gutters low, trailing \n") == (
+        "The lamp gutters low, trailing \n")
+
+
 def test_short_sentences_are_never_deduped():
     d = SentenceDeduper()
     assert d.filter("Yes. Yes. Yes.") == "Yes. Yes. Yes."

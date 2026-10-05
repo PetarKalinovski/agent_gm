@@ -269,6 +269,17 @@
             gap: 0.4rem;
             margin-bottom: 0.5rem;
         }
+        /* Players never see pills (only ?debug=1 fills it) — no blank gap */
+        .tools-container:empty { display: none; }
+
+        /* A DM reply is a sequence: prose, a spoken line, more prose. A
+           prose segment that never received text must not leave a bubble. */
+        .message.assistant .message-content:empty { display: none; }
+        .message.assistant .message-content + .message-content { margin-top: 6px; }
+
+        /* Stopped / failed turn — appended after whatever already streamed */
+        .message-note { font-size: 0.85rem; color: var(--text-secondary); padding: 0.25rem 0.2rem; font-style: italic; }
+        .message-note.error { color: var(--error); font-style: normal; }
 
         .tool-pill {
             display: inline-flex;
@@ -522,6 +533,7 @@
         .lead-tracker .lead-diamond { color: #f59e0b; font-size: 0.75rem; }
         .lead-tracker .lead-quest { color: var(--text-secondary); font-size: 0.7rem; margin-left: 0.3rem; white-space: nowrap; }
         .lead-tracker.pulse { animation: leadPulse 0.9s ease-out 1; }
+        .hud-chip.pulse { animation: leadPulse 0.9s ease-out 2; box-shadow: 0 0 0 2px #fbbf24; }
         @keyframes leadPulse {
             0% { transform: translateX(-8px); opacity: 0.2; }
             100% { transform: none; opacity: 1; }
@@ -540,6 +552,18 @@
             object-fit: cover; border: 1px solid #6366f1; flex-shrink: 0;
         }
         .speech-line em { color: var(--text-secondary, #9ca3af); font-size: 0.85em; }
+
+        /* Location header — where the player now stands, at its true place
+           in the story (arrivals mid-turn, the opening scene) */
+        .scene-header {
+            display: flex; align-items: baseline; gap: 0.5rem;
+            margin: 6px 0 4px; padding: 0 2px 4px;
+            border-bottom: 1px solid rgba(99, 102, 241, 0.3);
+            font-family: Georgia, serif;
+        }
+        .scene-header .scene-mark { color: #6366f1; font-size: 0.7rem; }
+        .scene-header .scene-name { font-weight: 700; font-size: 0.95rem; letter-spacing: 0.03em; color: var(--text-primary); }
+        .scene-header .scene-time { font-style: italic; font-size: 0.78rem; color: var(--text-secondary, #9ca3af); }
 
         /* NPC-specific thinking state during sub-agent delegation */
         .thinking-npc {
@@ -1443,6 +1467,7 @@
             <span class="hud-chip clickable" id="hud-campaign-chip" title="Story" style="display:none">&#9650; <span id="hud-campaign">Act I &middot; 0/0</span></span>
             <span class="hud-chip" id="hud-clock-chip" style="display:none">&#8987; <span id="hud-clock"></span></span>
             <span class="hud-chip clickable" id="hud-bag-chip" title="Inventory">&#128188; <span id="hud-bag">0</span></span>
+            <span class="hud-chip clickable" id="hud-journal-chip" title="Journal — what you have learned" style="display:none">&#128214; <span id="hud-journal">0</span></span>
             <span class="hud-chip clickable" id="hud-audio-chip" title="Audio"><span id="hud-audio-icon">&#128266;</span></span>
             <span class="hud-chip clickable" id="hud-help-chip" title="Controls">?</span>
         </div>
@@ -1941,6 +1966,13 @@
         // while the DM is mid-thought about where they are).
         window.forgeTurnBusy = false;
 
+        // Tool calls are plumbing — the player reads a story, not a trace.
+        // ?debug=1 brings the tool pills back for developers.
+        const DEBUG_UI = (() => {
+            try { return new URLSearchParams(window.location.search).get('debug') === '1'; }
+            catch (e) { return false; }
+        })();
+
         // World Selection DOM elements
         const worldSelectionPage = document.getElementById('world-selection-page');
         const worldsGrid = document.getElementById('worlds-grid');
@@ -2324,18 +2356,24 @@
                 );
             }
 
+            // Keyed by item id: a shown name changes once a person's name in
+            // it is heard ("the Captain's Whistle" → "Coldiron's Whistle")
+            // and that is no new item
             const count = (inv) => {
                 const m = {};
-                for (const i of (inv || [])) m[i.name] = (m[i.name] || 0) + (i.quantity || 1);
+                for (const i of (inv || [])) {
+                    const key = i.id || i.name;
+                    m[key] = { name: i.name, n: ((m[key] && m[key].n) || 0) + (i.quantity || 1) };
+                }
                 return m;
             };
             const before = count(prev.inventory), after = count(state.inventory);
-            for (const name in after) {
-                const gained = after[name] - (before[name] || 0);
-                if (gained > 0) game.spawnFloater(`+ ${name}`, 0xa5b4fc);
+            for (const key in after) {
+                const gained = after[key].n - ((before[key] && before[key].n) || 0);
+                if (gained > 0) game.spawnFloater(`+ ${after[key].name}`, 0xa5b4fc);
             }
-            for (const name in before) {
-                if ((after[name] || 0) < before[name]) game.spawnFloater(`− ${name}`, 0x9ca3af);
+            for (const key in before) {
+                if (((after[key] && after[key].n) || 0) < before[key].n) game.spawnFloater(`− ${before[key].name}`, 0x9ca3af);
             }
 
             // Safety net for growth that arrives with no event of its own
@@ -2386,6 +2424,8 @@
         function applyPlayerState(state) {
             if (!state) return;
             try { spawnStateFloaters(lastPlayerState, state); } catch (e) { /* cosmetic only */ }
+            // A new journal line arrives with the turn that wrote it
+            refreshJournal();
             lastPlayerState = state;
             window.lastPlayerState = state; // game.js reads combat stats + health
 
@@ -2501,7 +2541,9 @@
                 if (game && game.setLead) game.setLead(null);
                 return;
             }
-            el.querySelector('.lead-text').textContent = lead.text;
+            // What the job pays, after the step (the step text itself stays
+            // the chip's words): "… — pays 60 coin and a Wolf-Tooth Charm"
+            el.querySelector('.lead-text').textContent = lead.pays ? `${lead.text} — pays ${lead.pays}` : lead.text;
             el.querySelector('.lead-quest').textContent =
                 lead.source === 'quest' && lead.quest_title ? lead.quest_title
                 : lead.source === 'beat' ? 'the story' : '';
@@ -2535,6 +2577,15 @@
             }
             panel.classList.remove('hidden');
 
+            if (hudPanelMode === 'journal') {
+                panel.innerHTML = '<h4>Journal</h4>' + (journalEntries.length
+                    ? journalEntries.slice().reverse().map(e => {
+                        const m = /^\(([^)]*)\)\s*(.*)$/.exec(e);
+                        return `<div class="hud-item" style="display:block;"><span class="muted" style="font-size:.75em;">${esc(m ? m[1] : '')}</span><div>${esc(m ? m[2] : e)}</div></div>`;
+                    }).join('')
+                    : '<div class="muted">Nothing written down yet.</div>');
+                return;
+            }
             if (hudPanelMode === 'inventory') {
                 const items = lastPlayerState.inventory || [];
                 const quickId = ((lastPlayerState.combat || {}).quick_slot || {}).item_id;
@@ -2645,7 +2696,36 @@
         function toggleHudPanel(mode) {
             hudPanelMode = (hudPanelMode === mode) ? null : mode;
             if (hudPanelMode === 'campaign') refreshCampaignView();
+            if (hudPanelMode === 'journal') refreshJournal();
             renderHudPanel();
+        }
+
+        // --- Journal (GET /api/journal/{id}): the clues the character has
+        //     earned, written by the DM's @journal lines. Refreshed after each
+        //     turn; the chip appears once there is something in it ---
+        let journalEntries = [];
+        let journalPending = false;
+        async function refreshJournal() {
+            if (!currentPlayerId || journalPending) return;
+            journalPending = true;
+            try {
+                const res = await fetch(`/api/journal/${currentPlayerId}`);
+                const data = await res.json();
+                const before = journalEntries.length;
+                journalEntries = (data && data.entries) || [];
+                const chip = document.getElementById('hud-journal-chip');
+                document.getElementById('hud-journal').textContent = journalEntries.length;
+                chip.style.display = journalEntries.length ? '' : 'none';
+                if (before && journalEntries.length > before) {
+                    chip.classList.add('pulse');
+                    setTimeout(() => chip.classList.remove('pulse'), 2400);
+                }
+                if (hudPanelMode === 'journal') renderHudPanel();
+            } catch (e) {
+                console.warn('Journal unavailable:', e);
+            } finally {
+                journalPending = false;
+            }
         }
 
         // --- Campaign panel (GET /api/campaign/{id} — already spoiler-safe:
@@ -2831,6 +2911,14 @@
                 if (o.all_done && o.quest_title) {
                     setTimeout(() => showToast(`&#10022; ${escapeHtml(o.quest_title)}: all objectives met`, 'quest'), 900);
                 }
+                // A met step pays a slice of the quest's XP: the bar moves
+                // here, on the toast, never as a number in the chat
+                const p = o.progression;
+                if (p && p.xp_gained) {
+                    pulseXpBar();
+                    if (game && game.spawnFloater) game.spawnFloater(`+${p.xp_gained} XP`, 0xa5b4fc);
+                    if (p.leveled_up) showLevelUp(p);
+                }
             });
         }
         /** A new character's first moment: card → scene → the DM's first words. */
@@ -2842,7 +2930,18 @@
                 if (!data.opening) { fallback(); return; }
                 if (data.cinematic && game && game.playCinematic) game.playCinematic(data.cinematic);
                 if (data.scene) {
-                    addMessage('assistant', `**${data.scene.location}** (${data.scene.time_of_day})\n\n${data.scene.description || ''}`);
+                    // Same header an arrival gets mid-turn, then the room
+                    const sceneEl = document.createElement('div');
+                    sceneEl.className = 'message assistant';
+                    sceneEl.appendChild(buildSceneHeader(data.scene));
+                    if (data.scene.description) {
+                        const desc = document.createElement('div');
+                        desc.className = 'message-content';
+                        desc.innerHTML = formatText(data.scene.description);
+                        sceneEl.appendChild(desc);
+                    }
+                    chatMessages.appendChild(sceneEl);
+                    chatMessages.scrollTop = chatMessages.scrollHeight;
                     if (window.forgeAudio) window.forgeAudio.handlePlayEvent({ type: 'scene', ...data.scene });
                 }
                 if (data.dm_message) {
@@ -2929,6 +3028,7 @@
         document.getElementById('hud-bag-chip').addEventListener('click', () => toggleHudPanel('inventory'));
         document.getElementById('hud-level-chip').addEventListener('click', () => toggleHudPanel('character'));
         document.getElementById('hud-campaign-chip').addEventListener('click', () => toggleHudPanel('campaign'));
+        document.getElementById('hud-journal-chip').addEventListener('click', () => toggleHudPanel('journal'));
 
         // --- Death & rebirth (the character dies; the world persists) ---
         let deathScreenShown = false;
@@ -3030,9 +3130,15 @@
         }
 
         // THE CORE TRIGGER
+        // Each selection gets a token; async work from an older selection
+        // (history, the "Previously…" recap) is dropped when it lands late.
+        // Two quick selections used to pin the recap twice.
+        let playerSelectToken = 0;
         playerSelect.addEventListener('change', async (e) => {
             const playerId = e.target.value;
             if (!playerId) return;
+            const selectToken = ++playerSelectToken;
+            const stale = () => selectToken !== playerSelectToken;
 
             console.log("--- Player Selected: " + playerId + " ---");
             currentPlayerId = playerId;
@@ -3069,29 +3175,18 @@
             try {
                 const historyRes = await fetch(`/api/chat-history/${playerId}?limit=50`);
                 const historyData = await historyRes.json();
+                if (stale()) return;
                 if (historyData.messages && historyData.messages.length > 0) {
                     console.log(`Loading ${historyData.messages.length} messages from history`);
-                    for (const msg of historyData.messages) {
-                        let content = msg.content || '';
-                        // The auto-sent combat turn is an engine message; the
-                        // player saw a short label live, never the brackets
-                        // The opening directive is engine text; the player saw
-                        // a title card and the scene, never the brackets
-                        if (msg.role === 'user' && /^\s*\[OPENING\]/.test(content)) continue;
-                        if (msg.role === 'user' && /^\s*\[COMBAT OUTCOME/.test(content)) {
-                            content = /: victory/.test(content) ? '\u2694 The fight is over.'
-                                : /: defeat/.test(content) ? '\u2694 You fall.'
-                                : '\u2694 The fight ends.';
-                        }
-                        addMessage(msg.role === 'user' ? 'user' : 'assistant', content);
-                    }
+                    for (const msg of historyData.messages) renderHistoryMessage(msg);
+                    chatMessages.scrollTop = chatMessages.scrollHeight;
                     // Returning to an ongoing story — fetch a "Previously..."
                     // recap in the background and pin it at the bottom
                     if (historyData.messages.length >= 6) {
                         fetch(`/api/recap/${playerId}`)
                             .then(r => r.json())
                             .then(d => {
-                                if (d.recap) {
+                                if (d.recap && !stale()) {
                                     const el = document.createElement('div');
                                     el.className = 'message assistant';
                                     el.innerHTML = `<div class="message-content" style="font-style:italic;color:var(--text-secondary,#9ca3af);border-left:3px solid #6366f1;padding-left:10px;"><strong>Previously&hellip;</strong><br>${formatText(d.recap)}</div>`;
@@ -3336,6 +3431,14 @@
                 showObjectivesDone(data.objectives_done);
                 await handleLocationChange(data.destination_id, data.destination_name);
                 showToast(`${esc(data.destination_name)} &middot; ${data.minutes} min`, '', 2200);
+                // The engine's encounter director: something here jumped
+                // them on arrival. startCombat queues itself until the scene
+                // is playable; the [COMBAT OUTCOME] turn tells the story
+                const ambush = data.ambush && data.ambush.combat_start;
+                if (ambush && game && game.startCombat) {
+                    showToast(`&#9876; ${esc(data.ambush.line || 'Ambush!')}`, 'quest-failed', 3000);
+                    game.startCombat(ambush.enemies || [], ambush.boss || null, ambush.allies || []);
+                }
             } catch (err) {
                 console.error('canvas travel failed:', err);
             }
@@ -3508,6 +3611,92 @@
             chatMessages.scrollTop = chatMessages.scrollHeight;
         }
 
+        /** Prose as the player reads it. "@command" lines are the engine's
+         *  (the server hides them live; old history still carries them) —
+         *  an unfinished one at the stream's edge is hidden too, so a
+         *  half-typed "@giv" never flickers into the chat. A command typed
+         *  as inline code ("`@give X`") is still a command (the server's
+         *  is_command_text agrees), and a ``` fence is a tool call typed as
+         *  text that the live stream never showed — history replay keeps
+         *  both, so they are hidden here or a reload shows what play hid. */
+        function cleanProse(text) {
+            if (!text) return '';
+            return String(text)
+                .replace(/```[\s\S]*?(?:```|$)/g, '')
+                .replace(/^[ \t]*`?[ \t]*@[^\n]*(?:\n|$)/gm, '')
+                .replace(/\n{3,}/g, '\n\n')
+                .trim();
+        }
+
+        /** One spoken line — the same element live and in history replay,
+         *  so a reloaded story looks exactly like the one the player heard. */
+        function buildSpeechLine(s) {
+            const line = document.createElement('div');
+            line.className = 'speech-line';
+            line.innerHTML =
+                (s.npc_id ? `<img src="/api/assets/portrait/${encodeURIComponent(s.npc_id)}" onerror="this.style.display='none'" alt="">` : '') +
+                `<span><b>${esc(s.npc_name || '???')}</b>` +
+                (s.action ? ` <em>${esc(s.action)}</em>` : '') +
+                `<br>&ldquo;${esc(s.text)}&rdquo;</span>`;
+            return line;
+        }
+
+        /** Small "where you are now" header: location name + time of day. */
+        function buildSceneHeader(scene) {
+            const el = document.createElement('div');
+            el.className = 'scene-header';
+            el.innerHTML =
+                `<span class="scene-mark">&#9670;</span>` +
+                `<span class="scene-name">${esc(scene.location)}</span>` +
+                (scene.time_of_day ? `<span class="scene-time">${esc(scene.time_of_day)}</span>` : '');
+            return el;
+        }
+
+        /** One stored turn. A DM reply with `parts` replays prose and speech
+         *  in the order they streamed; without them, its flat `content`. */
+        function renderHistoryMessage(msg) {
+            if (msg.role !== 'user' && Array.isArray(msg.parts) && msg.parts.length) {
+                const messageEl = document.createElement('div');
+                messageEl.className = 'message assistant';
+                for (const part of msg.parts) {
+                    if (!part) continue;
+                    if (part.kind === 'speech' && part.text) {
+                        messageEl.appendChild(buildSpeechLine(part));
+                    } else if (part.kind === 'text') {
+                        const shown = cleanProse(part.text);
+                        if (!shown) continue;
+                        const seg = document.createElement('div');
+                        seg.className = 'message-content';
+                        seg.innerHTML = formatText(shown);
+                        messageEl.appendChild(seg);
+                    }
+                }
+                // A turn that was all engine commands has nothing to show
+                if (messageEl.childElementCount) chatMessages.appendChild(messageEl);
+                return;
+            }
+            let content = msg.content || '';
+            if (!content && Array.isArray(msg.parts)) {
+                content = msg.parts.filter(p => p && p.kind === 'text').map(p => p.text || '').join('\n');
+            }
+            if (msg.role === 'user') {
+                // The opening directive is engine text; the player saw a
+                // title card and the scene, never the brackets
+                if (/^\s*\[OPENING\]/.test(content)) return;
+                // The auto-sent combat turn is an engine message; the
+                // player saw a short label live, never the brackets
+                if (/^\s*\[COMBAT OUTCOME/.test(content)) {
+                    content = /: victory/.test(content) ? '⚔ The fight is over.'
+                        : /: defeat/.test(content) ? '⚔ You fall.'
+                        : '⚔ The fight ends.';
+                }
+                if (content.trim()) addMessage('user', content);
+                return;
+            }
+            content = cleanProse(content);
+            if (content) addMessage('assistant', content);
+        }
+
         function createStreamingMessage() {
             const messageEl = document.createElement('div');
             messageEl.className = 'message assistant';
@@ -3646,17 +3835,30 @@
             // Create streaming message
             const messageEl = createStreamingMessage();
             const toolsContainer = messageEl.querySelector('.tools-container');
-            const contentEl = messageEl.querySelector('.message-content');
-            let textBuffer = '';
             let turnState = null;
+
+            // The reply is a SEQUENCE: prose, a spoken line, more prose, a
+            // location header… in the order the stream delivered them.
+            // Tokens append to the open prose segment; a speech line or
+            // header closes it, and the next token opens a fresh segment
+            // below. (It used to be one prose bubble with every line
+            // inserted above it — all dialogue floated over all narration.)
+            let segment = { el: messageEl.querySelector('.message-content'), text: '' };
+            const dirtySegments = new Set();
+            let lastSceneName = null;
 
             // Re-rendering the whole message on EVERY token starves the
             // PixiJS canvas (combat hitches during streaming). Batch DOM
-            // updates to one per animation frame instead.
+            // updates to one per animation frame instead — a segment closed
+            // mid-frame keeps its pending text until that frame renders it.
             let renderQueued = false;
             const flushChatRender = () => {
                 renderQueued = false;
-                contentEl.innerHTML = formatText(textBuffer);
+                dirtySegments.forEach(s => {
+                    const shown = cleanProse(s.text);
+                    s.el.innerHTML = shown ? formatText(shown) : '';
+                });
+                dirtySegments.clear();
                 chatMessages.scrollTop = chatMessages.scrollHeight;
             };
             const queueChatRender = () => {
@@ -3664,6 +3866,28 @@
                     renderQueued = true;
                     requestAnimationFrame(flushChatRender);
                 }
+            };
+            const appendProse = (text) => {
+                if (!segment) {
+                    const el = document.createElement('div');
+                    el.className = 'message-content';
+                    messageEl.appendChild(el);
+                    segment = { el, text: '' };
+                }
+                segment.text += text;
+                dirtySegments.add(segment);
+                queueChatRender();
+            };
+            const appendBlock = (el) => {
+                segment = null;
+                messageEl.appendChild(el);
+                queueChatRender();
+            };
+            const appendNote = (text, isError = false) => {
+                const note = document.createElement('div');
+                note.className = isError ? 'message-note error' : 'message-note';
+                note.textContent = text;
+                appendBlock(note);
             };
 
             try {
@@ -3704,28 +3928,41 @@
                                     const payload = JSON.parse(line.slice(5).trim());
                                     if (window.forgeAudio) window.forgeAudio.handlePlayEvent(payload);
                                     if (payload.type === 'token' && payload.data) {
-                                        clearThinking(messageEl);
-                                        textBuffer += payload.data;
-                                        queueChatRender();
+                                        // Whitespace alone (the newline after a spoken
+                                        // line) must not end the wait for real words
+                                        if (payload.data.trim()) clearThinking(messageEl);
+                                        appendProse(payload.data);
                                     } else if (payload.type === 'narration' && payload.content) {
                                         clearThinking(messageEl);
-                                        textBuffer += payload.content;
-                                        queueChatRender();
+                                        appendProse(payload.content);
                                     } else if (payload.type === 'error') {
                                         // A turn that died server-side used to leave an empty
                                         // bubble; say so, so the player knows to try again
                                         clearThinking(messageEl);
                                         const why = (payload.message || '').slice(0, 160);
-                                        textBuffer += `\n\n*(The story stumbled${why ? ': ' + why : ''}. Say it again.)*`;
-                                        queueChatRender();
+                                        appendProse(`\n\n*(The story stumbled${why ? ': ' + why : ''}. Say it again.)*`);
                                     } else if (payload.type === 'tool_update' && payload.tool) {
-                                        renderToolPill(toolsContainer, payload.tool);
-                                        if (payload.tool.name === 'prompt_npc_agent' &&
-                                            payload.tool.status === 'running' && payload.tool.npc_id) {
-                                            npcThinking(messageEl, payload.tool.npc_id);
+                                        // At most a roll_check now, and its outcome
+                                        // shows on the canvas — pills are debug-only
+                                        if (DEBUG_UI) {
+                                            renderToolPill(toolsContainer, payload.tool);
+                                            if (payload.tool.name === 'prompt_npc_agent' &&
+                                                payload.tool.status === 'running' && payload.tool.npc_id) {
+                                                npcThinking(messageEl, payload.tool.npc_id);
+                                            }
                                         }
                                     } else if (payload.type === 'tool_summary' && payload.payload && payload.payload.tools) {
-                                        payload.payload.tools.forEach(t => renderToolPill(toolsContainer, t));
+                                        if (DEBUG_UI) payload.payload.tools.forEach(t => renderToolPill(toolsContainer, t));
+                                    } else if (payload.type === 'scene' && payload.description != null && payload.location) {
+                                        // An arrival: mark where the story now stands,
+                                        // at its place between the prose around it.
+                                        // (audio.js already took the mood cue above.)
+                                        // The KEY marks the arrival — a place with no
+                                        // written description ("") is still arrived at.
+                                        if (payload.location !== lastSceneName) {
+                                            lastSceneName = payload.location;
+                                            appendBlock(buildSceneHeader(payload));
+                                        }
                                     } else if (payload.type === 'state' && payload.state) {
                                         turnState = payload.state;
                                         applyPlayerState(payload.state);
@@ -3738,20 +3975,17 @@
                                         // text the player reads always matches the voice.
                                         // A synthesized event was lifted out of prose the
                                         // player already read: voice + bubble only.
+                                        // It lands where it was spoken: after the prose
+                                        // before it, above the prose after it.
                                         if (!payload.synthesized) {
                                             clearThinking(messageEl);
-                                            const line = document.createElement('div');
-                                            line.className = 'speech-line';
-                                            line.innerHTML =
-                                                (payload.npc_id ? `<img src="/api/assets/portrait/${payload.npc_id}" onerror="this.style.display='none'" alt="">` : '') +
-                                                `<span><b>${escapeHtml(payload.npc_name || '???')}</b>` +
-                                                (payload.action ? ` <em>${escapeHtml(payload.action)}</em>` : '') +
-                                                `<br>&ldquo;${escapeHtml(payload.text)}&rdquo;</span>`;
-                                            messageEl.insertBefore(line, contentEl);
-                                            queueChatRender();
+                                            appendBlock(buildSpeechLine(payload));
                                         }
                                     } else if (payload.type === 'objective_done') {
                                         showObjectivesDone([payload]);
+                                    } else if (payload.type === 'kindness' && payload.text) {
+                                        // A gift that earned trust: who, never how much
+                                        showToast(`&#9829; ${escapeHtml(payload.text)}`, 'quest', 3600);
                                     } else if (payload.type === 'quest_activated') {
                                         showToast(`&#10022; New Quest: ${escapeHtml(payload.title || '')}`, 'quest');
                                     } else if (payload.type === 'quest_completed') {
@@ -3809,23 +4043,34 @@
                 // fall back to a session poll if we never received one
                 if (turnState) {
                     await handleLocationChange(turnState.location_id, turnState.location);
+                    // Same place, different people (someone walked off, the
+                    // night cleared the square): re-sync who stands here
+                    if (turnState.location_id === currentLocationId && turnState.present_ids &&
+                        game && game.syncNpcs) {
+                        game.syncNpcs(turnState.present_ids);
+                    }
                 } else {
                     const session = await getSessionData(currentPlayerId);
                     if (session) await handleLocationChange(session.location_id, session.location);
                 }
             } catch (error) {
                 clearThinking(messageEl);
+                // A note element, not prose: the final flush below re-renders
+                // the open segment and would overwrite anything written into it
                 if (error.name === 'AbortError') {
-                    contentEl.innerHTML += `<span style="color: var(--text-secondary);"><em> (stopped)</em></span>`;
+                    appendNote('(stopped)');
                     // The turn may have partially executed server-side — resync the HUD
                     getSessionData(currentPlayerId).catch(() => {});
                 } else {
                     console.error('Play error:', error);
-                    contentEl.innerHTML = `<span style="color: var(--error);">Error: ${escapeHtml(error.message)}</span>`;
+                    appendNote(`Error: ${error.message}`, true);
                 }
             } finally {
                 clearThinking(messageEl);
                 flushChatRender();
+                // A turn that was all engine work (commands, a fight starting)
+                // leaves no empty husk in the chat
+                if (!messageEl.textContent.trim()) messageEl.remove();
                 isProcessing = false;
                 document.getElementById('action-chips').classList.remove('busy');
                 window.forgeTurnBusy = false;

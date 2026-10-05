@@ -28,3 +28,7 @@ class Quest(Base):
     # Effort scale — a LABEL. Code maps it to XP. NULL reads as "job".
     scale: Mapped[str | None] = mapped_column(String(20), nullable=True, default=None)
     # errand | job | mission | saga
+
+    # XP its met steps already paid (progression.step_xp); completion pays
+    # the rest of the scale's total. NULL = nothing paid yet: the old game.
+    step_xp_paid: Mapped[int | None] = mapped_column(Integer, nullable=True, default=None)

@@ -1,5 +1,6 @@
 """Image generation service using Gemini image generation API."""
 
+import asyncio
 import base64
 import io
 import logging
@@ -550,8 +551,7 @@ The reference image is the ground truth for how this place looks. Match it."""
         logger.info(f"Generating location background for: {location.name}")
 
         image_data = await self._call_api(prompt, aspect_ratio="16:9", reference_image=reference_image)
-        path = self._save_image(image_data, f"locations/{location.id}.png")
-        return path
+        return await asyncio.to_thread(self._save_image, image_data, f"locations/{location.id}.png")
 
     async def generate_character_sprite(
         self,
@@ -599,16 +599,15 @@ CRITICAL: Output must contain ONLY ONE character, ONE pose. NOT a sprite sheet, 
 
         # Remove background for transparency; if the model painted a full
         # scene rembg couldn't segment, one fresh generation usually fixes it
-        cutout = self._remove_background(image_data)
-        if self._cutout_failed(cutout):
+        cutout, failed = await asyncio.to_thread(self._cutout_checked, image_data)
+        if failed:
             logger.warning(f"Cutout failed for {character.name} ({direction}); regenerating once")
             image_data = await self._call_api(prompt, aspect_ratio="1:1", image_size="1K", reference_image=reference_image)
-            retry = self._remove_background(image_data)
-            if not self._cutout_failed(retry):
+            retry, retry_failed = await asyncio.to_thread(self._cutout_checked, image_data)
+            if not retry_failed:
                 cutout = retry
 
-        path = self._save_image(cutout, f"sprites/{character.id}_{direction}.png")
-        return path
+        return await asyncio.to_thread(self._save_image, cutout, f"sprites/{character.id}_{direction}.png")
 
     async def generate_portrait(
         self,
@@ -651,8 +650,7 @@ DO NOT invent a new face or appearance. The reference image IS what this charact
         logger.info(f"Generating portrait for: {npc.name}")
 
         image_data = await self._call_api(prompt, aspect_ratio="1:1", image_size="1K", reference_image=reference_image)
-        path = self._save_image(image_data, f"portraits/{npc.id}.png")
-        return path
+        return await asyncio.to_thread(self._save_image, image_data, f"portraits/{npc.id}.png")
 
     async def generate_character_sprite_with_reference(
         self,
@@ -705,17 +703,16 @@ CRITICAL: Output ONE character only. NOT a sprite sheet, NOT multiple views side
             reference_image=reference_image
         )
 
-        cutout = self._remove_background(image_data)
-        if self._cutout_failed(cutout):
+        cutout, failed = await asyncio.to_thread(self._cutout_checked, image_data)
+        if failed:
             logger.warning(f"Cutout failed for {name} ({direction}); regenerating once")
             image_data = await self._call_api(
                 prompt, aspect_ratio="1:1", image_size="1K", reference_image=reference_image
             )
-            retry = self._remove_background(image_data)
-            if not self._cutout_failed(retry):
+            retry, retry_failed = await asyncio.to_thread(self._cutout_checked, image_data)
+            if not retry_failed:
                 cutout = retry
-        path = self._save_image(cutout, f"sprites/{character.id}_{direction}.png")
-        return path
+        return await asyncio.to_thread(self._save_image, cutout, f"sprites/{character.id}_{direction}.png")
 
     # Same wording as `_build_sprite_prompt`'s direction_map — a variant idle
     # must be framed exactly like the base idle it is generated from.
@@ -785,19 +782,21 @@ Pose: standing idle, {view_desc}
         image_data = await self._call_api(
             prompt, aspect_ratio="1:1", image_size="1K", reference_image=reference_image
         )
-        cutout = self._remove_background(image_data)
-        if self._cutout_failed(cutout):
+        cutout, failed = await asyncio.to_thread(self._cutout_checked, image_data)
+        if failed:
             logger.warning(
                 f"Cutout failed for {character.name} ({direction}, {sig}); regenerating once"
             )
             image_data = await self._call_api(
                 prompt, aspect_ratio="1:1", image_size="1K", reference_image=reference_image
             )
-            retry = self._remove_background(image_data)
-            if not self._cutout_failed(retry):
+            retry, retry_failed = await asyncio.to_thread(self._cutout_checked, image_data)
+            if not retry_failed:
                 cutout = retry
 
-        return self._save_image(cutout, self.sprite_rel(sig, f"{character.id}_{direction}.png"))
+        return await asyncio.to_thread(
+            self._save_image, cutout, self.sprite_rel(sig, f"{character.id}_{direction}.png")
+        )
 
     # One Gemini call per direction produces the KEY poses as a filmstrip.
     # Frames generated together stay consistent (style, scale, proportions);
@@ -1098,28 +1097,19 @@ no text, no shadows."""
         strip_data = await self._call_api(
             prompt, aspect_ratio="21:9", image_size="2K", reference_image=reference_image
         )
-        self._save_debug_strip(action, character.id, strip_data)
-        cells = self._slice_walk_strip(strip_data, n)
         try:
-            frames = self._normalize_walk_frames(cells, reference_image, partner_repair=False)
+            frames = await asyncio.to_thread(
+                self._strip_to_frames, action, character.id, strip_data, n, reference_image, False
+            )
         except ValueError as e:
             logger.warning(f"{action} strip unusable ({e}); regenerating once")
             strip_data = await self._call_api(
                 prompt, aspect_ratio="21:9", image_size="2K", reference_image=reference_image
             )
-            self._save_debug_strip(action, character.id, strip_data)
-            cells = self._slice_walk_strip(strip_data, n)
-            frames = self._normalize_walk_frames(cells, reference_image, partner_repair=False)
-
-        paths: dict[str, str] = {}
-        for i, frame_img in enumerate(frames, start=1):
-            buf = io.BytesIO()
-            frame_img.save(buf, format="PNG")
-            key = f"{action}{i}"
-            paths[key] = self._save_image(
-                buf.getvalue(), self.sprite_rel(sig, f"{character.id}_{key}.png")
+            frames = await asyncio.to_thread(
+                self._strip_to_frames, action, character.id, strip_data, n, reference_image, False
             )
-        return paths
+        return await asyncio.to_thread(self._save_frames, frames, character.id, action, sig)
 
     async def generate_walk_cycle(
         self,
@@ -1169,10 +1159,10 @@ no text, no shadows."""
         strip_data = await self._call_api(
             prompt, aspect_ratio="21:9", image_size="2K", reference_image=reference_image
         )
-        self._save_debug_strip(f"walk_{direction}", character.id, strip_data)
-        cells = self._slice_walk_strip(strip_data, n)
         try:
-            frames = self._normalize_walk_frames(cells, reference_image)
+            frames = await asyncio.to_thread(
+                self._strip_to_frames, f"walk_{direction}", character.id, strip_data, n, reference_image, True
+            )
         except ValueError as e:
             # Too many broken cells to repair — one fresh strip is cheaper
             # than shipping a glitchy cycle. Second failure propagates.
@@ -1180,27 +1170,48 @@ no text, no shadows."""
             strip_data = await self._call_api(
                 prompt, aspect_ratio="21:9", image_size="2K", reference_image=reference_image
             )
-            self._save_debug_strip(f"walk_{direction}", character.id, strip_data)
-            cells = self._slice_walk_strip(strip_data, n)
-            frames = self._normalize_walk_frames(cells, reference_image)
-        logger.info(
-            f"Walk cycle ({direction}) for {character.name}: motion "
-            f"{self._motion_score(frames):.2f} (0 = every key identical)"
-        )
+            frames = await asyncio.to_thread(
+                self._strip_to_frames, f"walk_{direction}", character.id, strip_data, n, reference_image, True
+            )
+        return await asyncio.to_thread(self._finish_walk_cycle, frames, character, direction, sig)
 
-        # In-between the keys locally: n keys -> 2n frames (free, seconds)
-        from src.services.frame_interpolator import interpolate_cycle
-        frames = interpolate_cycle(frames)
+    # --- CPU work, always on a worker thread -------------------------------
+    # The generators above are coroutines on the SERVER's event loop
+    # (AssetManager.spawn_generation). Slicing, rembg, RIFE and PNG encoding
+    # used to run inline there and froze every request for seconds at a time
+    # — a DM turn on 2026-10-04 streamed nothing for 76 s while a walk strip
+    # was processed. Everything below is synchronous and only ever reached
+    # through asyncio.to_thread.
 
+    def _cutout_checked(self, image_data: bytes) -> tuple[bytes, bool]:
+        cutout = self._remove_background(image_data)
+        return cutout, self._cutout_failed(cutout)
+
+    def _strip_to_frames(self, debug_tag: str, character_id: str, strip_data: bytes, n: int,
+                         reference_image: bytes, partner_repair: bool):
+        self._save_debug_strip(debug_tag, character_id, strip_data)
+        cells = self._slice_walk_strip(strip_data, n)
+        return self._normalize_walk_frames(cells, reference_image, partner_repair=partner_repair)
+
+    def _save_frames(self, frames, character_id: str, prefix: str, sig: str) -> dict[str, str]:
         paths: dict[str, str] = {}
         for i, frame_img in enumerate(frames, start=1):
             buf = io.BytesIO()
             frame_img.save(buf, format="PNG")
-            key = f"{direction}_walk{i}"
+            key = f"{prefix}{i}"
             paths[key] = self._save_image(
-                buf.getvalue(), self.sprite_rel(sig, f"{character.id}_{key}.png")
+                buf.getvalue(), self.sprite_rel(sig, f"{character_id}_{key}.png")
             )
         return paths
+
+    def _finish_walk_cycle(self, frames, character, direction: str, sig: str) -> dict[str, str]:
+        logger.info(
+            f"Walk cycle ({direction}) for {character.name}: motion "
+            f"{self._motion_score(frames):.2f} (0 = every key identical)"
+        )
+        # In-between the keys locally: n keys -> 2n frames (free, seconds)
+        from src.services.frame_interpolator import interpolate_cycle
+        return self._save_frames(interpolate_cycle(frames), character.id, f"{direction}_walk", sig)
 
     def upgrade_walk_cycle(
         self, character_id: str, direction: str, sig: str = appearance.BASE_BODY_SIG
@@ -1823,7 +1834,7 @@ no text, no shadows."""
         # from the other three views. Re-mirroring is free and idempotent.
         left_path = sprites_dir / f"{character.id}_left.png"
         from PIL import ImageOps
-        ImageOps.mirror(Image.open(paths["right"]).convert("RGBA")).save(left_path)
+        await asyncio.to_thread(lambda: ImageOps.mirror(Image.open(paths["right"]).convert("RGBA")).save(left_path))
         paths["left"] = str(left_path)
 
         # 3. Generate walk cycles — one filmstrip call per direction (frames
@@ -1859,7 +1870,7 @@ no text, no shadows."""
 
             # Left cycle: always the mirror of right — free, guaranteed
             # symmetric, and matches the (re-mirrored) left idle above
-            paths.update(self.mirror_walk_cycle(character.id, "right", "left"))
+            paths.update(await asyncio.to_thread(self.mirror_walk_cycle, character.id, "right", "left"))
 
         logger.info(f"Prepared {len(paths)} sprites for {character.name}")
         return paths

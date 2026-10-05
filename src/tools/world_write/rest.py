@@ -38,9 +38,14 @@ def rest(player_id: str) -> dict[str, Any]:
                 "Let the keeper refuse them in their own voice, or let them earn it."
             )
         return result
+    if result.get("interrupted"):
+        result["message"] = (
+            f"{result.get('summary') or 'They were woken in the night.'} (already applied — it is "
+            "NOT morning). Open on what woke them."
+        )
+        return result
     result["message"] = (
         f"They slept at {result['location_name']} and it is now the morning of Day "
-        f"{result['day']} (already applied — do NOT call advance_time or "
-        "update_player_health for this). Open on the morning."
+        f"{result['day']} (already applied — never @time or @health for this). Open on the morning."
     )
     return result

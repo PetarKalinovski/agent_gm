@@ -105,10 +105,7 @@ class BaseGameAgent(ABC):
         session_id = self._get_session_id()
         session_manager = FileSessionManager(session_id=session_id)
 
-        conv_manager = SemanticSummarizingConversationManager(
-            embedding_model="all-MiniLM-L12-v2"
-        )
-        semantic_hook = SemanticMemoryHook()
+        conv_manager, hooks = self._conversation_setup()
 
         try:
             agent = create_agent(
@@ -117,12 +114,13 @@ class BaseGameAgent(ABC):
                 tools=self._get_tools(),
                 session_manager=session_manager,
                 conversation_manager=conv_manager,
-                hooks=[semantic_hook],
+                hooks=hooks,
                 callback_handler=self.context.callback_handler,
             )
             removed = strip_reasoning_blocks(getattr(agent, "messages", None) or [])
             if removed:
                 logger.info(f"{self.AGENT_NAME}: dropped {removed} stored reasoning block(s) from history")
+            self._after_history_loaded(agent)
             return agent
         except SessionException as e:
             # Session is corrupted - delete it and retry
@@ -131,15 +129,31 @@ class BaseGameAgent(ABC):
 
             # Create fresh session manager and retry
             session_manager = FileSessionManager(session_id=session_id)
+            conv_manager, hooks = self._conversation_setup()
             return create_agent(
                 agent_name=self.AGENT_NAME,
                 system_prompt=self._build_system_prompt(),
                 tools=self._get_tools(),
                 session_manager=session_manager,
                 conversation_manager=conv_manager,
-                hooks=[semantic_hook],
+                hooks=hooks,
                 callback_handler=self.context.callback_handler,
             )
+
+    def _conversation_setup(self) -> tuple[Any, list]:
+        """(conversation manager, hooks) for this agent's history.
+
+        Default: semantic summarization on overflow + semantic recall. The DM
+        overrides this with a turn window (src/agents/turn_window.py).
+        """
+        conv_manager = SemanticSummarizingConversationManager(
+            embedding_model="all-MiniLM-L12-v2"
+        )
+        return conv_manager, [SemanticMemoryHook()]
+
+    def _after_history_loaded(self, agent: Agent) -> None:
+        """Hook for subclasses to tidy a history restored from disk."""
+        return None
 
     def _delete_corrupted_session(self, session_id: str) -> None:
         """Delete a corrupted session directory.

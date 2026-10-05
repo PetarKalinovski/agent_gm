@@ -42,9 +42,9 @@ def _world(session):
             "brann": brann.id, "vex": vex.id}
 
 
-def _quest(session, world, objectives, status=QuestStatus.ACTIVE, title="Teeth on the North Road"):
+def _quest(session, world, objectives, status=QuestStatus.ACTIVE, title="Teeth on the North Road", **fields):
     quest = Quest(title=title, description="", status=status,
-                  objectives=obj.normalize_objectives(objectives, session=session))
+                  objectives=obj.normalize_objectives(objectives, session=session), **fields)
     session.add(quest)
     session.flush()
     if status == QuestStatus.ACTIVE:
@@ -294,3 +294,143 @@ def test_activate_quest_repairs_a_legacy_seed(db):
         "target_type": None, "target_name": None, "item_name": None, "done": False,
     }
     assert result["objectives"][1]["done"] is True
+
+
+# ----------------------------------------------------------------------
+# Return steps: a loop is never closed by the conversation that opens it
+# ----------------------------------------------------------------------
+
+def _done(quest_id):
+    return [o["done"] for o in _objectives(quest_id)]
+
+
+def test_a_step_back_to_the_quest_giver_waits_for_every_step_before_it(db):
+    """Playtest 2026-10-04: "Bring proof back to Captain Coldiron" ticked on
+    turn 0 because Coldiron speaks while offering the job."""
+    with get_session() as session:
+        world = _world(session)
+        quest_id = _quest(session, world, [
+            {"text": "Get the gate pass", "kind": "obtain", "item_name": "Gate Pass"},
+            {"text": "Reach the hollow", "kind": "go_to", "target_id": world["hollow"]},
+            {"text": "Bring proof back to Coldiron", "kind": "talk_to", "target_id": world["brann"]},
+        ], assigned_by_npc_id=world["brann"])
+    assert obj.note_conversation(world["player"], world["brann"]) == []
+    add_to_inventory(world["player"], "Gate Pass", item_type="key")
+    assert obj.note_conversation(world["player"], world["brann"]) == [], "the hollow is still unvisited"
+    move_player(world["player"], world["hollow"])
+    ticked = obj.note_conversation(world["player"], world["brann"])
+    assert [r["text"] for r in ticked] == ["Bring proof back to Coldiron"] and ticked[0]["all_done"]
+    assert _done(quest_id) == [True, True, True]
+
+
+def test_a_hand_over_to_the_giver_waits_too_but_a_stranger_is_not_held_back(db):
+    with get_session() as session:
+        world = _world(session)
+        quest_id = _quest(session, world, [
+            {"text": "Reach the hollow", "kind": "go_to", "target_id": world["hollow"]},
+            {"text": "Give Coldiron the letter", "kind": "deliver",
+             "target_id": world["brann"], "item_name": "letter"},
+            {"text": "Warn Vex", "kind": "talk_to", "target_id": world["vex"]},
+        ], assigned_by_npc_id=world["brann"])
+    add_to_inventory(world["player"], "Sealed Letter", item_type="quest_item", quantity=2)
+    transfer_item(world["player"], world["brann"], "sealed_letter", from_type="player", to_type="npc")
+    assert _done(quest_id) == [False, False, False]
+    # Not a return step: talking to Vex out of order is still talking to Vex
+    obj.note_conversation(world["player"], world["vex"])
+    assert _done(quest_id) == [False, False, True]
+    move_player(world["player"], world["hollow"])
+    transfer_item(world["player"], world["brann"], "sealed_letter", from_type="player", to_type="npc")
+    assert _done(quest_id) == [True, True, True]
+
+
+def test_talking_to_the_giver_first_still_ticks_a_first_step(db):
+    with get_session() as session:
+        world = _world(session)
+        quest_id = _quest(session, world, [
+            {"text": "Hear Coldiron out", "kind": "talk_to", "target_id": world["brann"]},
+            {"text": "Reach the hollow", "kind": "go_to", "target_id": world["hollow"]},
+        ], assigned_by_npc_id=world["brann"])
+    assert len(obj.note_conversation(world["player"], world["brann"])) == 1
+    assert _done(quest_id) == [True, False]
+
+
+def test_a_repeated_target_waits_even_without_a_giver(db):
+    with get_session() as session:
+        world = _world(session)
+        quest_id = _quest(session, world, [
+            {"text": "Find Coldiron", "kind": "talk_to", "target_id": world["brann"]},
+            {"text": "Report back to Coldiron", "kind": "talk_to", "target_id": world["brann"]},
+        ])
+    obj.note_conversation(world["player"], world["brann"])
+    assert _done(quest_id) == [True, False], "one conversation never opens and closes the loop"
+    obj.note_conversation(world["player"], world["brann"])
+    assert _done(quest_id) == [True, True]
+
+
+def test_the_seeded_north_road_quest_ticks_in_its_authored_order(tmp_path):
+    """obtain Gate Pass -> go_to Wolf's Hollow -> custom find-out -> deliver
+    the Cracked Bone Whistle to Coldiron, on the real Emberfall seed: the
+    opening conversation ticks nothing, and the proof is the last to land.
+    (The proof step was a talk_to until fleet4 ticked it on hearsay; it is
+    now a hand-over, deliberately re-pinned here.)"""
+    from src.data.playtest_seed import create_playtest_world
+    from src.models import reset_engine
+
+    reset_engine()
+    try:
+        create_playtest_world(str(tmp_path / "emberfall.db"))
+        with get_session() as session:
+            square = session.query(Location).filter(Location.name == "Market Square").one()
+            hollow = session.query(Location).filter(Location.name == "Wolf's Hollow").one()
+            brann = session.query(NPC).filter(NPC.name.like("%Coldiron%")).one()
+            quest = session.query(Quest).filter(Quest.title == "Teeth on the North Road").one()
+            player = Player(name="Bram", current_location_id=square.id)
+            session.add(player)
+            session.commit()
+            player_id, quest_id, brann_id, hollow_id = player.id, quest.id, brann.id, hollow.id
+        activate_quest(quest_id)
+
+        assert obj.note_conversation(player_id, brann_id) == [], "the offer is not the report"
+        assert _done(quest_id) == [False, False, False, False]
+        add_to_inventory(player_id, "Gate Pass", item_type="key")
+        move_player(player_id, hollow_id, requirements_met=True)
+        assert _done(quest_id) == [True, True, False, False]
+        assert obj.note_conversation(player_id, brann_id) == [], "nothing found out yet"
+        custom_id = _objectives(quest_id)[2]["id"]
+        obj.note_custom_done(player_id, quest_id, custom_id)
+        assert obj.note_conversation(player_id, brann_id) == [], "talk is not proof"
+        add_to_inventory(player_id, "Cracked Bone Whistle", item_type="quest_item")
+        handed = transfer_item(from_id=player_id, to_id=brann_id, item_id="cracked_bone_whistle",
+                               from_type="player", to_type="npc")
+        assert handed.get("success") and handed.get("objectives_done")
+        assert _done(quest_id) == [True, True, True, True]
+    finally:
+        reset_engine()
+
+
+def test_the_dm_marking_a_step_touches_only_that_quest(db):
+    """`note_custom_done` used to narrow `player.active_quests`, which only
+    orders quests — so marking "o1" on one quest ticked "o1" on every one."""
+    with get_session() as session:
+        world = _world(session)
+        first = _quest(session, world, [{"text": "Find out who pays the wolves", "kind": "custom"}])
+        second = _quest(session, world, [{"text": "Learn the cart driver's name", "kind": "custom"}],
+                        title="The Greywater Cart")
+    ticked = obj.note_custom_done(world["player"], first, "o1")
+    assert [r["quest_id"] for r in ticked] == [first]
+    assert _done(first) == [True] and _done(second) == [False]
+    with get_session() as session:
+        assert session.get(Player, world["player"]).active_quests == [first, second], "the order is untouched"
+
+
+def test_a_kill_is_never_held_back_by_an_earlier_step_on_the_same_target(db):
+    """A death cannot happen twice: a kill step waiting on "Talk to Vex"
+    would stay open forever once Vex is dead."""
+    with get_session() as session:
+        world = _world(session)
+        quest_id = _quest(session, world, [
+            {"text": "Hear Vex out", "kind": "talk_to", "target_id": world["vex"]},
+            {"text": "Kill Vex", "kind": "kill", "target_id": world["vex"]},
+        ])
+    kill_npc(world["vex"], "a crossbow bolt")
+    assert _done(quest_id) == [False, True]

@@ -17,6 +17,18 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)
 
+# Strands installs OpenTelemetry's threading instrumentation when its tracer
+# is first built (the first Agent). A thread STARTED before that and RUN after
+# it dies on `_otel_context` — on 2026-10-04 that silently killed a new
+# character's campaign generation, and the session played with no story.
+# Build the tracer at import, before anything can start a thread.
+try:
+    from strands.telemetry.tracer import get_tracer as _get_tracer
+
+    _get_tracer()
+except Exception as _e:  # telemetry is never worth a failed import
+    logger.debug(f"early tracer setup skipped: {_e}")
+
 # OAuth token prefix used by Anthropic setup-tokens
 _ANTHROPIC_OAUTH_PREFIX = "sk-ant-oat"
 
@@ -112,6 +124,75 @@ def _create_anthropic_model(agent_name: str) -> AnthropicModel:
     return model
 
 
+def _is_claude(model_id: str) -> bool:
+    """True for Claude ids on any LiteLLM route (openrouter/anthropic/...)."""
+    return "claude" in (model_id or "").lower()
+
+
+def _with_cache_control(message: dict[str, Any]) -> dict[str, Any]:
+    """Return `message` with an ephemeral cache breakpoint on its last block.
+
+    String content becomes a one-part text array (the only shape that can
+    carry `cache_control`). Messages with nothing to mark pass through.
+    """
+    content = message.get("content")
+    if isinstance(content, str):
+        if not content:
+            return message
+        return {**message, "content": [{"type": "text", "text": content,
+                                        "cache_control": {"type": "ephemeral"}}]}
+    if isinstance(content, list) and content:
+        parts = [dict(part) if isinstance(part, dict) else part for part in content]
+        for part in reversed(parts):
+            if isinstance(part, dict) and part.get("type") == "text" and part.get("text"):
+                part["cache_control"] = {"type": "ephemeral"}
+                return {**message, "content": parts}
+    return message
+
+
+class CachingLiteLLMModel(LiteLLMModel):
+    """LiteLLM model that sets Anthropic prompt-cache breakpoints.
+
+    Claude over OpenRouter caches nothing unless a request carries explicit
+    `cache_control` breakpoints — every round-trip of the agent loop re-read
+    the ~20k-token system prompt + tool schemas + history at full price and
+    full latency. Three breakpoints: the system prompt (Anthropic orders the
+    prefix tools -> system, so this covers every tool schema too), the end
+    of the previous turn (what the next turn reads back), and the last
+    message (what the next round-trip within this turn reads back). Measured live: 12,139
+    of 12,147 prompt tokens served from cache, ~10x cheaper per call.
+    """
+
+    def format_request(self, messages, tool_specs=None, system_prompt=None, tool_choice=None,
+                       *, system_prompt_content=None, **kwargs):
+        request = super().format_request(
+            messages, tool_specs, system_prompt, tool_choice,
+            system_prompt_content=system_prompt_content, **kwargs,
+        )
+        if not _is_claude(self.config.get("model_id", "")):
+            return request
+        formatted = list(request.get("messages") or [])
+        if not formatted:
+            return request
+        if formatted[0].get("role") == "system":
+            formatted[0] = _with_cache_control(formatted[0])
+        last = len(formatted) - 1
+        if last > 0:
+            formatted[last] = _with_cache_control(formatted[last])
+        # The end of the PREVIOUS turn: each turn's big context block is
+        # compacted once the turn ends (src/agents/turn_window.py), so the
+        # entry the last call wrote no longer matches — this breakpoint, set
+        # before the newest player message, is the one the next turn reads
+        turn_start = max((i for i, m in enumerate(formatted) if m.get("role") == "user"), default=0)
+        for i in range(turn_start - 1, 0, -1):
+            marked = _with_cache_control(formatted[i])
+            if marked is not formatted[i]:
+                formatted[i] = marked
+                break
+        request["messages"] = formatted
+        return request
+
+
 def _create_litellm_model(agent_name: str) -> LiteLLMModel:
     """Create a LiteLLM model for OpenRouter/OpenAI/other providers.
 
@@ -144,7 +225,7 @@ def _create_litellm_model(agent_name: str) -> LiteLLMModel:
         # forwards extra_body untouched to OpenAI-compatible providers
         params["extra_body"] = {"reasoning": dict(config.reasoning)}
 
-    return LiteLLMModel(
+    return CachingLiteLLMModel(
         model_id=config.model,
         client_args=client_args,
         params=params,

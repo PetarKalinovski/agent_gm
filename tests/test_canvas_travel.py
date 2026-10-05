@@ -102,6 +102,82 @@ def test_locked_route_blocks_and_does_not_move(db):
     assert _clock() == (1, 8, 0), "a blocked route must not spend time"
 
 
+def test_carrying_the_pass_a_road_names_opens_it(db):
+    """fleet7-bram T5/T11: the DM gave him a Gate Pass and @move past "needs
+    a gate pass" was still refused. The pass in the pack is the say-so, for
+    the DM's @move and the canvas door alike; a lantern opens nothing."""
+    with get_session() as session:
+        ids = _build_world(session)
+        player = session.get(Player, ids["player"])
+        player.inventory = [{"id": "lantern", "name": "Lantern", "type": "misc"}]
+        session.commit()
+    assert travel_now(ids["player"], ids["hollow"]).get("blocked") is True
+
+    with get_session() as session:
+        player = session.get(Player, ids["player"])
+        player.inventory = [{"id": "gate_pass", "name": "Gate Pass", "type": "quest_item"}]
+        session.commit()
+    result = travel_now(ids["player"], ids["hollow"])
+    assert result["success"] is True and _location_of(ids["player"]) == ids["hollow"]
+    assert move_player(player_id=ids["player"], destination_id=ids["square"]).get("success")
+
+
+
+def _gate_at_night(ids, *, hour, requirement=None, event=False):
+    from src.models import Event
+    with get_session() as session:
+        road = session.query(Connection).filter_by(to_location_id=ids["hollow"]).one()
+        if requirement:
+            road.requirements = [requirement]
+        if event:
+            session.add(Event(name="The Evening Howl", description="Howling; the gate is barred.",
+                              event_type="meso", occurred_day=1, occurred_hour=20,
+                              locations_involved=[ids["hollow"]],
+                              consequences=["North Gate barred for the night"]))
+        session.query(WorldClock).first().hour = hour
+        player = session.get(Player, ids["player"])
+        player.inventory = [{"id": "gate_pass", "name": "Gate Pass", "type": "quest_item"}]
+        session.commit()
+
+
+def test_a_pass_does_not_open_a_gate_barred_for_the_night(db):
+    """After the howl the HAPPENED block said the gate was barred, and the
+    travel line said to walk through it with the pass. At night the pass is
+    not the say-so; by day it is, and the DM's `| through` always is."""
+    with get_session() as session:
+        ids = _build_world(session)
+    _gate_at_night(ids, hour=21, requirement="a gate pass (gates are barred after the evening howl)")
+    with get_session() as session:
+        route = check_route(session, ids["square"], ids["hollow"], session.get(Player, ids["player"]))
+    assert route["blocked"] is True and any("Barred for the night" in r for r in route["requirements"])
+    assert travel_now(ids["player"], ids["hollow"]).get("blocked") is True
+    assert move_player(player_id=ids["player"], destination_id=ids["hollow"], requirements_met=True).get("success")
+
+    with get_session() as session:
+        session.get(Player, ids["player"]).current_location_id = ids["square"]
+        session.query(WorldClock).first().hour = 9
+        session.commit()
+    assert travel_now(ids["player"], ids["hollow"])["success"] is True
+
+
+def test_a_fired_event_bars_the_gated_road_at_its_end(db):
+    with get_session() as session:
+        ids = _build_world(session)
+    _gate_at_night(ids, hour=2, event=True)
+    assert travel_now(ids["player"], ids["hollow"]).get("blocked") is True
+    with get_session() as session:
+        session.query(WorldClock).first().hour = 7
+        session.commit()
+    assert travel_now(ids["player"], ids["hollow"])["success"] is True
+
+
+def test_an_open_road_is_never_barred_at_night(db):
+    with get_session() as session:
+        ids = _build_world(session)
+    _gate_at_night(ids, hour=23, event=True)
+    assert travel_now(ids["player"], ids["dock"])["success"] is True
+
+
 def test_hierarchy_gate_bypass_still_blocked(db):
     """Mirrors test_travel_gate.py through the canvas path."""
     with get_session() as session:
@@ -161,7 +237,7 @@ def test_move_player_tool_behaviour_unchanged(db):
     assert blocked["destination"] == "Hollow"
     assert blocked["requirements"] == ["gate pass"]
     assert blocked["message"].startswith("This route has requirements the player must satisfy: ")
-    assert "requirements_met=True" in blocked["message"]
+    assert "@move <place> | through" in blocked["message"]
 
     # Confirming the requirements still unlocks the same route
     assert move_player(ids["player"], ids["hollow"], requirements_met=True).get("success")

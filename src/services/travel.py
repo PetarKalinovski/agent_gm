@@ -4,7 +4,9 @@
 never disagree about whether a route is walkable, so both rules live here
 once:
 
-  1. a direct Connection with non-empty `requirements` blocks;
+  1. a direct Connection with non-empty `requirements` blocks — unless
+     the player was waved through it before, or carries the thing a
+     requirement names (a Gate Pass for "needs a gate pass");
   2. with no direct Connection, a destination whose every authored entry
      route is requirement-locked stays locked on ANY approach path — the
      gate-bypass guard (playtest: square -> town container -> gated hollow
@@ -17,11 +19,13 @@ Code enforces, the LLM narrates: the canvas walks the player through
 unlocked doors with no LLM round-trip, and hands locked ones to the DM.
 """
 
+import re
 from typing import Any
 
 from loguru import logger
+from sqlalchemy.orm import object_session
 
-from src.models import Faction, Connection, Location, Player, get_session
+from src.models import Event, Faction, Connection, Location, Player, WorldClock, get_session
 from src.services import perception
 from src.services import standing
 
@@ -82,10 +86,102 @@ def _apply_standing(session, route: dict[str, Any], destination, player) -> dict
     return route
 
 
+# After dark a gate that bars at night is barred to everyone. The pass
+# opened the north road at any hour, so after the howl the DM was told the
+# gate is "barred for the night — true now" AND to write `@move` through it.
+# At night neither a held pass nor an earlier say-so opens such a road by
+# itself; the DM's `| through` still can, when the fiction gets them past.
+NIGHT_HOURS = frozenset(range(20, 24)) | frozenset(range(0, 6))
+CLOSURE = re.compile(r"\b(?:barred|bars?|shut|shuts|closed?|closes|curfew|locked)\b", re.IGNORECASE)
+NIGHTLY = re.compile(r"\b(?:night|nightly|nightfall|dark|dusk|evening|sundown|sunset|howl|curfew|dawn)\b",
+                     re.IGNORECASE)
+# ...and the pass alone never was the fiction that does (fleet8-tamsin
+# T11-T13: the guard said the gate was closed past the howl, read the seal,
+# "the gate swings wide", and `| through` carried her out on the pass). A
+# route barred tonight says so (`barred_tonight` in the route), and the
+# DM's `| through` over it needs a won roll or a bribe (commands._h_move)
+BARRED_TONIGHT = ("Barred for the night until first light — a pass or an earlier say-so does not "
+                  "open it tonight; only a won roll or a bribe gets them through, else they wait for first light")
+
+
+def _says_barred_at_night(texts) -> bool:
+    return any(CLOSURE.search(t) and NIGHTLY.search(t) for t in (str(x) for x in texts or [] if x))
+
+
+def night_why(route: dict[str, Any], player) -> str | None:
+    """What stops them tonight, said plainly, when it is only the night: a
+    route barred tonight whose other requirement is a pass they carry.
+    "(…the player needs a gate pass…)" told the DM the pass was missing while
+    it sat in the pack, beside "a pass does not open it". None otherwise."""
+    if not route.get("barred_tonight"):
+        return None
+    rest = [str(r) for r in route.get("requirements") or [] if r != BARRED_TONIGHT]
+    held = held_pass(rest, player) if rest else None
+    if rest and not held:
+        return None
+    return ("barred for the night until first light" + (f"; the {held} they carry opens it by day" if held else ""))
+
+
+def barred_tonight(connection) -> bool:
+    """Is this gated road shut for the night right now? Its own requirement
+    says it bars after dark ("gates are barred after the evening howl"), or a
+    fired event at either end did ("North Gate barred for the night") — and
+    the clock is in NIGHT_HOURS. A road with no requirement never is."""
+    if not connection.requirements:
+        return False
+    session = object_session(connection)
+    if session is None:
+        return False
+    clock = session.query(WorldClock).first()
+    if clock is None or (clock.hour or 0) not in NIGHT_HOURS:
+        return False
+    if _says_barred_at_night(connection.requirements):
+        return True
+    ends = {connection.from_location_id, connection.to_location_id}
+    for event in session.query(Event).filter(Event.occurred_day.isnot(None)).all():
+        if ends & set(event.locations_involved or []) and _says_barred_at_night(event.consequences):
+            return True
+    return False
+
+
 def _cleared(connection, player) -> bool:
-    """True when this player has already been waved through this route."""
+    """True when this player has already been waved through this route, or
+    carries what its requirements name — never while it is barred tonight."""
+    if barred_tonight(connection):
+        return False
     player_id = getattr(player, "id", None)
-    return bool(player_id) and player_id in (connection.cleared_for or [])
+    if bool(player_id) and player_id in (connection.cleared_for or []):
+        return True
+    return held_pass(connection.requirements, player) is not None
+
+
+_PASS_FILLER = frozenset({"the", "a", "an", "of"})
+
+
+def held_pass(requirements: Any, player) -> str | None:
+    """The item in the player's pack that a requirement names, else None.
+
+    fleet7-bram T5/T11: the DM handed over a Gate Pass, and `@move` past "the
+    player needs a gate pass" was still refused — the pass meant nothing to
+    the road. A whole item name inside the requirement text counts ("Gate
+    Pass" in "needs a gate pass from the Captain"); a one-word name only for
+    a key or quest item of four letters or more, so a "Lantern" in the pack
+    never opens a road that mentions lanterns."""
+    if not requirements or player is None:
+        return None
+    text = " ".join(str(r) for r in requirements if r).lower()
+    inventory = player.inventory if isinstance(getattr(player, "inventory", None), list) else []
+    for item in inventory:
+        if not isinstance(item, dict):
+            continue
+        words = [w for w in re.findall(r"[a-z0-9']+", str(item.get("name") or "").lower()) if w not in _PASS_FILLER]
+        if not words:
+            continue
+        if len(words) == 1 and (item.get("type") not in ("key", "quest_item") or len(words[0]) < 4):
+            continue
+        if re.search(r"\b" + r"\s+".join(re.escape(w) for w in words) + r"s?\b", text):
+            return str(item.get("name"))
+    return None
 
 
 def clear_route_for(session, from_location_id: str | None, destination_id: str, player_id: str) -> int:
@@ -149,14 +245,21 @@ def check_route(session, from_location_id: str | None, destination_id: str,
 
     if conn:
         requirements = list(conn.requirements or [])
+        night = False
         if requirements and _cleared(conn, player):
             requirements = []
-        return _apply_standing(session, _apply_dress_code({
+        elif requirements and barred_tonight(conn):
+            requirements.append(BARRED_TONIGHT)
+            night = True
+        route = {
             "travel_time_hours": conn.travel_time_hours,
             "blocked": bool(requirements),
             "requirements": requirements,
             "reason": "route" if requirements else "",
-        }, destination, player), destination, player)
+        }
+        if night:
+            route["barred_tonight"] = True
+        return _apply_standing(session, _apply_dress_code(route, destination, player), destination, player)
     # No modeled route: entering a child or stepping back out to the parent
     # is a doorway, everything else is an unmodeled walk
     origin = session.get(Location, from_location_id)
@@ -173,12 +276,18 @@ def check_route(session, from_location_id: str | None, destination_id: str,
     entries = [c for c in entries if not (c.requirements and _cleared(c, player))]
     gate_requirements = [r for c in entries for r in (c.requirements or [])]
     if entries and gate_requirements and all(c.requirements for c in entries):
-        return _apply_standing(session, _apply_dress_code({
+        route = {
             "travel_time_hours": travel_time,
             "blocked": True,
             "requirements": gate_requirements,
             "reason": "gate",
-        }, destination, player), destination, player)
+        }
+        # The way round through the town meets the same barred gate
+        # (fleet8-tamsin T13 went square -> Hollow in one `| through`)
+        if any(barred_tonight(c) for c in entries):
+            route["requirements"] = gate_requirements + [BARRED_TONIGHT]
+            route["barred_tonight"] = True
+        return _apply_standing(session, _apply_dress_code(route, destination, player), destination, player)
     return _apply_standing(session, _apply_dress_code({
         "travel_time_hours": travel_time,
         "blocked": False,

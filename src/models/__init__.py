@@ -7,6 +7,7 @@ from src.models.faction import Faction, FactionRelationship
 from src.models.player import Player
 from src.models.world_state import Cinematic, WorldClock, NPCRelationship, Event, Message, DMState
 from src.models.item import Item
+from src.models.memory import MemoryDoc
 from src.models.quests import Quest, QuestStatus
 from src.models.world_bible import WorldBible, HistoricalEvent
 from src.models.campaign import (
@@ -41,6 +42,7 @@ __all__ = [
     "DMState",
     "Cinematic",
     "Item",
+    "MemoryDoc",
     "Quest",
     "QuestStatus",
     "WorldBible",

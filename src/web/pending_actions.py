@@ -60,13 +60,13 @@ _BULLET_LABELS = {
 # the engine never pays a quest out on its own.
 QUEST_READY_NOTE = (
     'Every objective on "{quest}" is now met. The player has done the work. '
-    "Decide whether it is finished — if it is, call update_quest_status."
+    "Decide whether it is finished — if it is, write @quest-done with its title."
 )
 
 _HEADER = (
     "[SINCE YOUR LAST TURN the player acted on the canvas. The engine ALREADY\n"
     "applied every line below to the database — the moves, the time, the items.\n"
-    "Do NOT call move_player, advance_time, or add_to_inventory for any of it,\n"
+    "Do NOT write @move, @time, or @give for any of it,\n"
     "and do NOT narrate them doing it; they watched themselves do it."
 )
 
@@ -112,7 +112,7 @@ def rest_note(location_name: str, kind: str, before: str, after: str, price: int
         note += f"; {', '.join(party_healed)} of their party {'is' if len(party_healed) == 1 else 'are'} no longer wounded"
     note += (
         ". The clock, their coin and their health are ALREADY moved. Open on the MORNING: "
-        "never re-narrate the night, never advance_time or update_player_health for it."
+        "never re-narrate the night, never @time or @health for it."
     )
     return note
 
@@ -270,7 +270,7 @@ def format_pending_actions(actions: list[dict[str, Any]]) -> str:
         if destination:
             tail = (
                 f"\nThey are now in {destination}, which they have never been described."
-                "\nCall describe_location for it before anything else."
+                "\nOpen with what they see there — sight, sound, smell — before anything else."
             )
 
     return _HEADER + "\n" + "\n".join(lines) + tail + "]"

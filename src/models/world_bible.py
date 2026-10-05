@@ -10,6 +10,7 @@ This is the "style guide" that World Forge uses to generate content
 and that the DM uses to maintain consistency.
 """
 
+import re
 import uuid
 from datetime import datetime
 
@@ -127,9 +128,27 @@ Naming: {self.naming_conventions}
 **Key Rules:**
 {chr(10).join(f'- {r}' for r in self.rules[:5])}
 
-**Narration Style:** {self.narration_style}
+**Narration Style:** {dm_narration_style(self.narration_style)}
 **Violence Level:** {self.violence_level}
 """
+
+
+# A world's own point of view never reaches the DM: the playtest seed said
+# "Third person, close and sensory", the DM context printed it every turn
+# against dm.md's second person, and fleet9-bram's whole session went third
+# person (the filter then dropped 17 replies' sentences naming him)
+_POINT_OF_VIEW = re.compile(
+    r"\b(?:first|second|third)[- ]person(?:\s+(?:limited|omniscient|close|present|past))?\b[,;.]?\s*",
+    re.IGNORECASE,
+)
+
+
+def dm_narration_style(style: str | None) -> str:
+    """The world's narration style for the DM: its own point-of-view words
+    dropped, second person always."""
+    rest = _POINT_OF_VIEW.sub("", style or "").strip(" ,;.")
+    rest = rest[:1].upper() + rest[1:]
+    return (f"{rest}. " if rest else "") + 'Always second person: the player character is "you".'
 
 
 class HistoricalEvent(Base):

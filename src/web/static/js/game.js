@@ -684,7 +684,49 @@ class GameRenderer {
         }
         this.npcs = {};
 
-        for (const npcData of npcsData) {
+        for (const npcData of npcsData) await this._addNpc(npcData);
+    }
+
+    /**
+     * Re-read who is here without reloading the scene. The engine moves
+     * people mid-turn — someone who walks along, someone the story sends off,
+     * a square the night clears — and the canvas used to keep showing them
+     * until the player changed location. Arrivals are added; the gone fade out.
+     */
+    async syncNpcs(presentIds) {
+        if (this.isLoading || this.combat || this._pendingCombat || !this.locationId) return;
+        const want = new Set(presentIds || []);
+        const shown = Object.keys(this.npcs).filter(id => this.npcs[id].status !== 'dead');
+        if (shown.length === want.size && shown.every(id => want.has(id))) return;
+        const locationId = this.locationId;
+        let data;
+        try {
+            const res = await fetch(`/api/assets/location/${locationId}?player_id=${this.playerId}`);
+            data = await res.json();
+        } catch (e) { console.warn('NPC sync failed', e); return; }
+        if (!data || data.error || this.isLoading || this.combat || this.locationId !== locationId) return;
+        const here = new Set((data.npcs || []).filter(n => n.status !== 'dead').map(n => n.id));
+        for (const id of Object.keys(this.npcs)) {
+            const npc = this.npcs[id];
+            if (npc.status === 'dead' || here.has(id)) continue;
+            delete this.npcs[id];
+            const t0 = performance.now();
+            const fade = () => {
+                const k = Math.min((performance.now() - t0) / 700, 1);
+                if (!npc.sprite.destroyed) npc.sprite.alpha = 1 - k;
+                if (npc.shadow && !npc.shadow.destroyed) npc.shadow.alpha = 1 - k;
+                if (k < 1) return requestAnimationFrame(fade);
+                if (npc.sprite.parent) npc.sprite.parent.removeChild(npc.sprite);
+                if (npc.shadow && npc.shadow.parent) npc.shadow.parent.removeChild(npc.shadow);
+            };
+            fade();
+        }
+        for (const npcData of data.npcs || []) {
+            if (!this.npcs[npcData.id]) await this._addNpc(npcData);
+        }
+    }
+
+    async _addNpc(npcData) {
             try {
                 const apiUrl = `/api/assets/sprite/npc/${npcData.id}/front.png`;
                 const texture = await PIXI.Assets.load(apiUrl);
@@ -750,7 +792,6 @@ class GameRenderer {
                 this.npcs[npcData.id] = { sprite: sprite, data: npcData, status: npcStatus, baseScale: baseScale, shadow: shadow };
 
             } catch (error) { console.error("NPC Load Error", error); }
-        }
     }
 
     /**

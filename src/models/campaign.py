@@ -66,10 +66,20 @@ class Campaign(Base):
     # "pending" (generation in flight) | "active" | "won" | "lost"
     # | "abandoned" (character died) | "failed" (generation failed)
     generation_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # How many generations this character's campaign has had (this row's
+    # included). A `failed` row is retried while it is under the cap; NULL
+    # (rows from before retries existed) counts as one. The row's
+    # `created_at` is when that attempt was claimed — the backoff clock.
+    generation_attempts: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     # Pacing guard: no two beats fire within CAMPAIGN_BEAT_SPACING_HOURS
     last_beat_day: Mapped[int | None] = mapped_column(Integer, nullable=True)
     last_beat_hour: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Later-act beats whose play trigger already held when the current act
+    # armed, or that the opening's own job made true: the story never pulls
+    # ahead on those until the trigger has gone false and come true again
+    # (`campaign._pull_ahead`). NULL (campaigns from before) = no snapshot.
+    pull_held: Mapped[list | None] = mapped_column(JSON, nullable=True)
 
     generated_day: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

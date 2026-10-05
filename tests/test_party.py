@@ -148,7 +148,7 @@ def test_move_player_carries_the_party_and_settles_them_beside_the_player(db):
     join_party(w["player"], w["piper"])
     result = move_player(w["player"], w["tavern"])
     assert result["success"] and result["party_followed"] == ["Piper Vell"]
-    assert "do NOT call move_npc" in result["party_note"]
+    assert "never @npc-move them" in result["party_note"]
     with get_session() as session:
         p = session.get(Player, w["player"])
         n = _npc(w["piper"])
@@ -238,7 +238,7 @@ def test_combat_roster_carries_fit_allies_and_never_a_companion_as_enemy(db):
     assert "Piper Vell" in roster["instruction"]
 
     refused = build_combat_start([w["piper"]], w["player"])
-    assert "leave_party" in refused["error"]
+    assert "@leave" in refused["error"] and "@fight" in refused["error"]
 
     # A wounded companion sits the fight out
     with get_session() as session:
@@ -318,15 +318,12 @@ def test_come_along_chip_only_when_the_engine_would_say_yes(db):
         assert not any(c["kind"] == "party" for c in suggest_actions(session, player, None, w["square"]))
 
 
-def test_tools_are_registered_for_the_dm_and_the_npc_agent():
-    from src.agents.dm_orchestrator import DM_TOOLS
-    from src.agents.npc_agent import NPC_TOOLS
+def test_party_commands_are_in_the_dms_language():
+    """The DM joins and parts companions with @join / @leave (no tools since
+    2026-10-04); both must run through the engine's party gate."""
+    from src.services.commands import COMMANDS
 
-    def names(tools):
-        return {getattr(t, "tool_name", None) or getattr(t, "__name__", "") for t in tools}
-
-    assert {"join_party", "leave_party"} <= names(DM_TOOLS)
-    assert {"join_party", "leave_party"} <= names(NPC_TOOLS)
+    assert {"join", "leave"} <= set(COMMANDS)
 
 
 def test_combat_start_sse_event_carries_the_allies(db):
