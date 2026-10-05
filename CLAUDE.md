@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Forge is a multi-agent text-based RPG dungeon master powered by LLMs. It uses the Strands Agents SDK for multi-agent orchestration with LiteLLM for provider-agnostic LLM access.
+Forge is a text-based RPG with an LLM dungeon master: one DM agent (Strands Agents SDK + LiteLLM) that writes the story, voices every NPC, and changes the world through inline `@commands` the engine validates and applies. Code owns every number; the LLM narrates.
 
 ## Commands
 
@@ -37,24 +37,338 @@ Optional: `SUNO_API_KEY` (music palette generation), `ELEVENLABS_API_KEY`
 
 ## Architecture
 
-### Agent Hierarchy
+### The DM: one agent, one reply, one tool (hybrid architecture, 2026-10-04)
 
-The DM Orchestrator is the main reasoning engine. It handles combat, economy,
-inventory, and quests **directly with tools** (no delegation — a sub-agent hop
-is player-visible latency) and delegates only where a second persona/memory
-genuinely helps:
+The DM is a SINGLE agent (Claude Sonnet 5 via OpenRouter, reasoning off,
+`config/agents.yaml`). No sub-agents: the NPC agent and creator agent were
+folded in (a turn used to take 4-8 sequential model calls and 38-85 s; the
+opening took 7.5 min). Its only tool is `roll_check` (dice must land before
+prose). Everything else is written INLINE in its streamed reply:
 
-```
-DM Orchestrator (main loop, strongest model)
-├── NPC Agent - Dialogue with persistent memory (fast model)
-└── Creator Agent - On-demand location/NPC generation (fast model)
-```
+- **Prose** — streamed to the player as written (second person).
+- **Speaker lines** — `Name (tone): "words"` alone on a line → voiced speech
+  events with portrait + bubble (`src/web/dialogue_markup.py`). The DM voices
+  every NPC itself from dossiers; there is no `speak`/`prompt_npc_agent`.
+- **`@command` lines** — hidden from the player, parsed and applied by
+  `src/services/commands.py` (`CommandRunner`, ~37 verbs: `@move`, `@time`,
+  `@give`, `@coin`, `@trust`, `@fight`, `@quest-start/done/new`,
+  `@new-place/@new-npc`, `@note`, `@plan`, ...) through the existing engine
+  functions in `src/tools/world_write/*`. Failures and notable engine answers
+  go into the next turn's context ("HOW YOUR LAST COMMANDS LANDED"). The
+  `complete` SSE event lists each command's outcome.
 
-The DM runs on Claude Sonnet 5 via OpenRouter (`config/agents.yaml`; the previous
-thinking model typed tool calls as text and narrated in first person — see the
-model-slop guards below). The DM prompt and `DM_TOOLS` in `src/agents/dm_orchestrator.py` must stay in
-sync — `tests/test_dm_prompt_tools.py` enforces that every tool the prompt
-references is registered. The `journal` tool was removed (nothing read it).
+The DM's instructions are markdown: `src/agents/prompts/dm.md` (rules) +
+`src/agents/prompts/commands.md` (command reference), loaded on every agent
+build. `tests/test_dm_prompt_tools.py` enforces that every taught `@verb`
+exists, every verb is documented, and no retired tool is named.
+
+Each turn's context is assembled in code (`dm_orchestrator._build_context`):
+the player block (coin, gear, pack), quests (custom steps flagged, rewards
+shown as paid by `@quest-done`), the lead, **the scene brief**
+(`src/services/scene_brief.py`: exits with BLOCKED reasons, a dossier per
+NPC present — voice, wants, trust, recognition, memory file, offerable
+quests, trust-gated secrets, would-join verdict, priced stock — plus known
+people/places and a price list), the chronicle, DM notes, world tick,
+canvas ledger, campaign directives, audit feedback. The DM needs no read
+tools.
+
+**Memory is markdown, stored in the world's .db** (`src/services/memory_files.py`,
+`MemoryDoc` rows keyed by player id + doc name, so the .db is the whole save:
+a backup, copy or restore carries every memory with its world): one document
+per NPC per character (`npc:<id>`; Notes / Recent / Earlier, auto-folded),
+`chronicle` (turns trimmed from history, summarized in the background),
+`dm_notes` (`@plan`), `journal`, `heard_names`. Mechanics stay in the DB's
+own tables (trust/disposition gates live on `NPCRelationship`).
+`uv run main.py memory-export --db <world>.db` writes them out as files
+(`data/memory/<world>/players/<pc>/…`) to read or fix; `memory-import` reads
+them back. A pre-database folder in that layout is copied in on its
+character's first touch (never over a stored doc) and marked `.in-database`.
+`src/services/dialogue.py` resolves speaker labels to NPCs and files each
+turn's dialogue into those documents.
+
+History (`src/agents/turn_window.py`): each turn's big context block is
+compacted after the turn; the window trims in steps (30 → 15 turns) into the
+chronicle. Prompt caching (`CachingLiteLLMModel` in `src/agents/base.py`)
+sets 3 Anthropic cache breakpoints — measured ~all of the prompt cached.
+
+Measured after the change: opening 17 s (was 7.5 min), typical turn 9-15 s
+with first text ~2.5 s, one model call (two when a roll is needed).
+
+World generation still uses separate agents:
+- WorldForge - Master world generator
+- Faction/Location/NPC/History generators - Domain-specific generation
+
+Systems added from the AI-playtest rounds (2026-10-04):
+- **Encounters** (`src/services/encounters.py`): the world strikes first. Rolled
+  before each DM turn and on canvas arrival (`/api/travel` returns `ambush`);
+  only beasts on arrival, anyone hostile once the player lingers; night and
+  tension raise the odds; cooldown after any fight; never the campaign
+  villain/successor. The DM gets an `[AMBUSH — ALREADY HAPPENING]` directive.
+  `@fight` also holds the villain out of group fights before act 3. An
+  unanswered combat roster is re-issued at most twice, then breaks off
+  (no soft-lock).
+- **Strangers** (`src/services/dialogue.py`): an NPC the player has not met
+  is shown under `role_label(npc)` ("Ash-Cloaked Man") in dossiers, chips,
+  speech display names, combat rosters and body labels. `NameGate` (per
+  turn): a name counts as introduced only once someone SAYS it in a speaker
+  line; labels show the heard part ("Vex", not "Vex Marrow"); unmet names in
+  prose are rewritten to "the <role>" mid-stream; heard words persist in
+  `heard_names`. Beat/event delivery and the audit read the DM's real
+  names (`dm_turn_text`); the player sees the masked text. `@trust`/`@reveal`
+  on a stranger wait for the reply's end and apply only if they were
+  introduced; `@journal` entries are masked the same way. Lines voicing the
+  player are dropped. Audit checks: `unintroduced_name`, `voiced_the_player`,
+  `unknown_named_person`, `prose_before_roll`. Villains/bosses get no
+  talk chip until met. `note_confessions` marks a trust-gated secret told in
+  plain dialogue as revealed and journals it.
+- **Journal** (`@journal`, `@note <player>`; `memory_files.journal`;
+  `GET /api/journal/{id}`; 📖 HUD chip): the clues the character has learned.
+- **Authored objects**: the brief's "Things here" lists each scene object and,
+  for the DM only, what it reads/holds; `@interact <thing>` resolves it
+  through the same path as the canvas's [E].
+- **Starting kit** (`src/services/starting_kit.py`): every new character gets
+  a crude knife (equipped) and a healing draught on Q. The seed's market has
+  a merchant (Hesk Bramble).
+- Command guards: quest rewards and bed fees are never paid twice; a paid
+  room IS `@rest` (one night per reply); `@rest` walks to an adjacent inn;
+  `@move` into a whole-town node is refused; `@move <person>` goes where they
+  are; `@take` is refused as ambiguous (`@remove` / `@give`); DM-made quest
+  XP scale is clamped by its steps.
+
+- **The loop, round 4** (2026-10-04):
+  - *Names on screen*: `dialogue.player_facing_*` rewrites everything the
+    client shows outside the reply (lead, quest log, chips, toasts, campaign
+    panel, party) at the serialization boundary, so people appear only as far
+    as their names were said; the DM context keeps real names. A `talk_to`
+    step ticks only when the player addressed that NPC (`dialogue._talked_to`).
+  - *Offers*: an `[OFFER THIS REPLY]` line (`dm_orchestrator`) binds the DM
+    to pitch an authored follow-on job, with its pay; `@quest-done` thanks the
+    giver with trust once (`paid_trust`); `reward_unnarrated` audits payoffs
+    nobody saw. Play-triggered next-act beats pull ahead when only clock beats
+    remain (never act 3); a stalled beat re-fires once at its place.
+  - *Proof*: `PROOF HERE:` / `LEFT BEHIND:` brief lines and a lead (+ interact
+    chip) that points at the proof object; handing the real item to the giver
+    also ticks the custom steps before it. The engine journals reads/finds,
+    clue `@give`s and beat-delivery lines (`memory_files.journal_interaction`);
+    coin words are clues, never gear; `@give` of what an authored Thing holds
+    resolves through the Thing; `@new-npc … | status: dead|missing`.
+  - *Risk*: `@move` charges the road's time beyond the turn floor (a `@time`
+    after it is de-duplicated); quiet streaks get a `[COMPLICATION]`
+    (`src/services/complications.py`); audits `wound_without_fight`,
+    `partial_without_cost`, `item_handed_without_command`; a fight chip; world
+    sim events stay at real places and inside the truths; the campaign author
+    sees the world's scheduled events. Memory lives in each test's own
+    temp DB; the autouse fixture in `tests/conftest.py` points the export /
+    legacy folder at `tmp_path`.
+
+- **The loop, round 5** (2026-10-05):
+  - *Who knows whom*: `NPCRelationship.name_known` (the player knows their
+    name) and `knows_player_name` (they know the player's) are separate from
+    the row itself (= they have spoken; trust lives there). NULL = an old row,
+    known both ways. A name heard from anyone (`heard_names`) marks the row;
+    `turn_audit.player_name_said` + `dialogue.note_player_name_heard` decide
+    who learned the player's name; `name_before_introduction` keys on it. A
+    bare trade-word label ("Keeper") resolves to the one present person of
+    that trade (`dialogue._by_trade`); `@trust`/`@reveal` on a stranger land
+    at once on a stranger row.
+  - *Spine*: next-act pull-ahead only on triggers play made true after the
+    act armed (`Campaign.pull_held`); a later act's quests are never offered
+    (`campaign.later_act_quest_ids` — offer directive and dossier); delivery
+    evidence ignores names and campaign-common words and waits out a failed
+    roll; a delivered beat retires its scheduled twin event (CONTINUITY
+    line); hook beats arrive as `STORY HOOK — SHOW IT, THE PLAYER CHOOSES`
+    and hand over nothing until taken up (`_settle_hook`).
+  - *Stakes* (`src/services/stakes.py`, `roll_intent.py`): a partial/failure
+    whose price the DM never wrote is charged by the engine next turn; a
+    failed roll blocks `@step-done` on that step; a risky typed act gets a
+    `[THIS REPLY: call roll_check FIRST…]` line; a stalled main quest's clock
+    produces `[WHILE YOU WAITED]` consequences; unanswered complications come
+    back as `[COMPLICATION — UNANSWERED]` tied to a real person; night at the
+    town's edge can bring a lone beast scout; audits `roll_without_attempt`,
+    `healed_without_command`.
+  - *Ledger*: pay up front is booked against the giver's job
+    (`commands._advanced_quest`) and `@quest-done` pays the rest; a reward is
+    never paid twice within two replies; documents carry canonical `reads`
+    text (the brief quotes it, the audit checks it); the brief's
+    `Coming up:` line marks scheduled events that have not happened (told
+    early → the clock jumps, `world_tick._told_early`); `@move` to where the
+    player already is fails with a hint; the seed gained Stable Yard and
+    North Gatehouse.
+
+- **The loop, round 6** (2026-10-05):
+  - *Travel*: `travel_intent.py` reads where the player said they go and adds
+    a binding `[THIS REPLY: the player goes to X — @move …]` line (or "the
+    way is shut", or "make it with @new-place"); an `[OFFER THIS REPLY]` waits
+    on such a turn. A pass in the pack opens the road its requirement names
+    (`travel.held_pass`) — except at night: a gated road whose requirement
+    or a fired event at its end says it bars after dark is shut 20:00-06:00
+    whatever the player holds (`travel.barred_tonight`; `| through` still
+    can). Prose that walks on past the reply's `@move` to a neighbouring
+    place it names and arrives at (or shows by its Things) moves the player
+    when the way is open (`server._carried_on_to`, warning
+    `story_carried_on`), else warns `arrived_past_the_way`.
+  - *Clock*: told-early needs a happening verb and ignores time-until /
+    denied clauses (`world_tick.told_happening`); a jumped event shows the DM
+    a one-time **HAPPENED** block. The waiting clock resets while the way in
+    is shut to the player (`lead.way_in_blocked`) and pauses for a night
+    closure. A lead about a scheduled future event gives way to a present
+    one, or says when ("Tomorrow morning: …", no chip) (`lead.beat_due_later`).
+  - *Jobs* (`src/services/job_offers.py`, in memory): a pitched job the player
+    takes in words or by setting out on its first step gets a
+    `[START THIS JOB]` line; the engine starts it after the reply if the DM
+    did not, crediting steps done since the pitch. `@quest-done` and
+    `@step-done` refuse a place never stood at or an item never held;
+    `@interact` take/search refuses what the player did not reach for.
+    Audits `refused_but_narrated`, `carried_not_held`. Rewards read "(theirs
+    to keep — …)".
+  - *Names*: the player's name is cut from the lines of speakers who never
+    heard it (bubble, TTS, memory, history replay — `dialogue.cut_player_name`);
+    a Thing's read text counts as heard at once; trade synonyms for bare
+    labels; `@new-npc … | status: dead` is refused when the world already
+    has that lost person, and the brief lists "People the story has lost"
+    (the seed's dead carter Tobin has a row). The `[OPENING]` names
+    strangers by role label, real name bracketed as unknown.
+  - *Spine*: a beat tied to a place (lead target, or a directive "when they
+    reach X") waits there and parks when the player walks off; elsewhere a
+    deadline arrives as WHERE IT HAPPENS news. Clock beats whose scheduled
+    twin already happened come due as its aftermath, and an "as scheduled"
+    beat retires the event it told; earlier-act beats a later beat
+    superseded are skipped. Encounters never send the story's cast
+    (`campaign.story_cast_ids`; a weak stand-in of the pack springs the
+    ambush) and hold once after a reply that ended on a choice. roll_intent
+    knows spoken threats, flight and facing a beast down; gifts no longer
+    reset the complication count. A finale is never skipped for waiting.
+
+- **The loop, round 7** (2026-10-05):
+  - *Proof & ledger*: a refused `@give`/`@interact`/`@hand` of an authored
+    thing lying elsewhere arms a one-time `[SETTLE THIS FIRST]` line at the
+    top of the next context (`src/services/settle.py`); refusals name where it
+    lies and offer a lesser clue under its own name; `carried_not_held` /
+    `refused_but_narrated` read "it" after a refusal (denials and repairs
+    exempt, `turn_audit._moves_on`). `[COMBAT OUTCOME]` lists what each body
+    carries. A same-reply duplicate `@coin`/`@give`/`@remove` and an `x0`
+    count are refused; a payout repeated within two replies is refused when
+    its reason names the job or giver; audit `advance_bought`.
+    `[PAY THIS REPLY]` when every step is done and the giver is present;
+    `[PAID WHILE APART]` for a payout made away from them.
+  - *Spine*: beat delivery reads place names, `@interact` reads and
+    second-stage keywords; beats that script the player are hooks (forge
+    rule 8); a proof hand-over never ticks a "find out" step; an impossible
+    `quest_status` cue comes due; an empty tracker takes the next act's lead
+    (`_starved` pull-ahead). The villain is OFFSTAGE before the first beat
+    that brings them on (`campaign.villain_offstage`: dossier line, audit,
+    and `offstage_ids` keeps them off the canvas and the state's people).
+    `SEALED_KNOWERS_LINE`; a beat that fires as the player leaves goes with
+    them (`with_departure`).
+  - *Travel*: the parser rejects "going to <verb>"; if the reply ignores the
+    travel line the engine walks the player after it (`server._walk_as_said`,
+    unless the prose held them short); people the prose walks along follow
+    (`_walked_along`); `@quest-start` in the reply that pitched the job is
+    refused (`commands._not_taken_yet`); a road barred for the night opens
+    only on a won roll or a bribe this reply or the last (`travel.night_why`).
+  - *Stakes*: a won roll holds the danger it faced down for two rolls (no
+    ambush cancels it); complications wait out a vigil
+    (`complications.keeping_vigil`); a repeated roll of one act returns the
+    first result; junk-reason rolls refused; a willing person told by a fired
+    beat is not rolled on (`stakes.beat_tells_it`); wounds make athletics and
+    stealth harder; on roll-first turns prose before the roll is held and
+    dropped.
+  - *Voice*: `MetaSentenceFilter` drops planning/apology sentences (also on
+    history reload); item names, shop and interact payloads go through the
+    NameGate; person lines carry a look and pronoun; "Coming up" gives the
+    next event's hour; "Already told to the player" in the brief; the
+    player's name cut handles possessives, emphasis and tag questions.
+
+- **The loop, round 8** (2026-10-05):
+  - *Point of view*: the world bible's own point-of-view words never reach
+    the DM (`world_bible.dm_narration_style`: always second person — a seed
+    "Third person" style had turned a whole session third person);
+    `MetaSentenceFilter` rewrites fiction that names the player into "you"
+    (`dialogue_markup.to_second_person`, audit `third_person`) and drops
+    planning that names them; recaps ("…is filed away", "…yours to choose")
+    and a closing "What do you do?" are dropped.
+  - *Reaching for things* (`src/services/intents.py`): binding lines when the
+    player takes what was held out (`@give`, else the engine gives it after
+    the reply — `taken_fallback`), asks for a room (`@rest`; audit
+    `room_without_rest`) or to read a Thing (`@interact`); a look-only
+    `@interact` reveals without taking; a take put back is undone; a quest
+    item a present NPC carries moves out of their hands on `@give`
+    (`WHO CARRIES WHAT THE QUESTS ASK FOR`); a role-only voice heard twice
+    gets a binding `@new-npc` line. Audits `handed_aloud_warning`, slid keepsakes.
+  - *Danger*: facing a beast without a blow is a roll-first stand-off (also
+    unnamed, when a beast is in the room: `encounters.beast_here`); a win
+    sends it home (`encounters.send_off`), a loss provokes it; `[PAY THIS
+    REPLY]` waits out danger; a theft is staged as a choice and answered
+    only when the player saw the cost; a barred night lists the ways still
+    open (bribe, climb, bed); five talk-only turns bring a closing choice
+    (`complications._talk_push`); people a fired event clears go indoors
+    and return at first light (`world_tick.clear_places`).
+  - *Loop*: the seed starts at 15:00 (road open by day, the howl still lands);
+    a job counts as offered only when pitched (`job_offers.pitched`); work
+    done on an unoffered job is credited in a later `[OFFER THIS REPLY]`;
+    offers carry their steps and where the first one's work is; report-backs
+    add something new; a persona-hook line ("What this character wants");
+    bought upgrades go on automatically (never over a disguise).
+  - *Secrets*: speaker lines that say a SEALED truth are cut as they stream
+    (`campaign.seal_line`, audit `sealed_truth_cut`); a plain question gets
+    no social roll; one-word sealed slips, the dead told as alive, borrowed
+    names, altered reads and misnamed rewards are audited; "Knows:" and
+    "Names in use" brief lines.
+  - *Voice*: walk-along/walk-off read more phrasings (`server._along_ids`,
+    `_left_ids`); speaker lines over 60 words split into two bubbles; an
+    "Already used — vary" line (`src/services/voice_tics.py`, never the
+    plot's own things); the canvas re-syncs who stands here after the
+    engine moved someone (`state.present_ids` → `game.syncNpcs`).
+
+- **The loop, round 9** (2026-10-05):
+  - *Spine* (`campaign.py`): a beat binds to the place its directive opens on
+    ("At X,") or whose authored Things its keywords name, and waits there
+    (the not-delivered nag is held while the player is away; audit
+    `memory_of_unvisited_place`); a find never retires a beat that brings
+    on someone not yet met — it makes it due now (THE FIND IS THE CUE +
+    ENTRANCE notes); "if asked … admits X" beats count only the admission's
+    words and get `[THE PLAYER ASKED — … ADMITS IT NOW]` (`asked_note`); a
+    place scene whose people are present skips beat spacing; `@fight` on a
+    story beast before its beat fights a packmate stand-in; the villain's
+    people (successor, faction members never met) are OFFSTAGE until their
+    first beat (`offstage_ids`, no chips, audit `cast_before_their_scene`).
+  - *Clock*: an event firing where the player stands is "HAPPENING WHERE YOU
+    STAND" (also on [COMBAT OUTCOME] turns) and names the job step it answers;
+    denials and long-past mentions are not delivery (`world_tick.told_at_hand`);
+    the waiting clock never contradicts a fresh consequence, pauses while
+    the player works the story's own side job, and registers a missing
+    person with a findable trace; summonses need real news; pushes hold
+    while the player talks with their step's person (spoke in the last two
+    replies) or an armed beat's person is here; watchers are lookouts of the
+    villain faction (`world_name` names); exits give travel time in words
+    (audit `distance_misstated`).
+  - *Agency*: roll_check refuses a roll on a danger this reply introduced
+    (`encounters.introduced_now`); a beast met by a leaving player is shown
+    first (`[DANGER ON THE WAY OUT`, no travel line); `[COMBAT OUTCOME]`
+    always states health and a worse `@health` after it is refused; `@use`
+    needs the player's own reach; rolls have a 10% odds floor and an odds
+    word below 40%; bluff/haggle patterns; `@interact` take needs a reach
+    verb (else a look); audit `lost_gear`.
+  - *Reward*: each met step pays a slice of the quest's XP (total unchanged,
+    `Quest.step_xp_paid`); beast bodies leave a trophy a merchant buys; the
+    lead shows what a job pays; a gift to a present person adds trust once a
+    day (`NPCRelationship.last_gift_day`, cap 70) with a toast; the persona
+    hook is due on reply 3 then every 5th; an unfound proof step shows as
+    "Bring proof back to …" until held (`dialogue.unfound_steps`).
+  - *Identity*: a speaker label borrowing a name in use goes out under the
+    prose's role (audit `name_in_use_borrowed`) and never moves story cast,
+    merchants or anyone seen elsewhere today; walk-off never falls back to
+    the wrong pronoun; departures told after the fact move people; audit
+    `invented_suspect` + the brief offers the authored stranger
+    (`src/services/suspects.py`); closing menus dropped; custom steps and
+    evidence lines journaled; held-road checks noted.
+
+**AI playtester**: `scripts/autoplay.py` — a cheap player model plays a
+character through `/api/play` (fights resolved via `/api/combat/result`),
+logging per-turn latency, commands, failures and audit warnings to
+`data/playtests/<run>/` (`transcript.jsonl`, `report.md`). Run several in
+parallel on separate sandbox servers (`scripts/sandbox_server.py --seed --db
+data/x.db --port N`; `FORGE_TTS=0` silences TTS for a process).
 
 World generation uses separate agents:
 - WorldForge - Master world generator
@@ -192,30 +506,20 @@ World generation uses separate agents:
   (per-kind cooldowns, daily/session caps, once-ever boss intros) keeps them
   special. Rejections carry no `event` key + a say-nothing instruction.
   `DMState.weather` rides the state event as a persistent scene modifier.
-- **Turn integrity** (`src/web/turn_filters.py` + `turn_audit.py`): the
-  DialogueDeduper strips DM re-quotes of lines already delivered as `speech`
-  events; the post-turn audit diffs narration claims (quests, damage, items,
-  arrivals, consequence ledgers, inline-attributed dialogue quotes) against
-  actual tool calls, attaches warnings to the `complete` SSE event, and
-  injects them into the DM's next-turn context as a `[REALITY AUDIT]` block
-  so it self-corrects. ALL dialogue must flow through a speech tool: the DM
-  has `speak` for ambient NPCs and named-NPC one-liners (voiced + bubbled;
-  unknown names degrade to a chat dialogue line), `prompt_npc_agent` for
-  conversations; quoted lines inside `narrate` are silent and get flagged
-  (`dialogue_without_speak`).
-
-- **Model-slop guards** (`src/web/turn_filters.py`, `tool_rescue.py`): the
-  token stream passes `CodeFenceFilter` (a fenced block is a tool call typed
-  as text — hidden, then executed by `rescue_tool_calls` if it is a dialogue
-  tool, NPC slugs like `brann_coldiron` resolved) → `JunkLineFilter` (`[]`,
-  content-block JSON, quest dicts pasted mid-sentence) → `DialogueDeduper`
-  (re-quotes of spoken lines) → `SentenceDeduper` (a `narrate()` paragraph
-  echoed as the reply). Unspoken quoted NPC lines become `synthesized`
-  speech events (voice + bubble, no second chat line); the NPC agent's
-  prose quotes become `events` on its tool result. Audit checks:
-  `tool_call_in_prose`, `tool_result_in_prose`, `dialogue_without_speak`
-  (also fires on said-tag-free action-beat quotes). Stored reasoning blocks
-  are stripped from agent history on load, so the DM model is a config knob
+- **Turn integrity** (`src/web/server.py` play_sse, `dialogue_markup.py`,
+  `turn_filters.py`, `turn_audit.py`): the reply stream runs CodeFenceFilter
+  → DialogueMarkupFilter (ordered `text` / `speech` / `command` segments;
+  commands applied as their line ends, with live state/quest/combat events)
+  → JunkLineFilter → MetaSentenceFilter (drops the model's planning and
+  bookkeeping: "Let me…", "the player", ids) → DialogueDeduper →
+  SentenceDeduper. The post-turn audit diffs narration claims (quests,
+  damage, items, arrivals, consequences, consumables drunk without `@use`,
+  quoted dialogue inside prose, named speakers who are not where the player
+  is) against the commands and tools that actually succeeded, attaches
+  warnings to `complete`, and injects them into the next turn as a
+  `[REALITY AUDIT]` block. Unspoken quoted NPC lines still become
+  `synthesized` speech events. Stored reasoning blocks are stripped from
+  history on load, so the DM model is a config knob
   (`FORGE_MODEL_<AGENT>=provider/model` overrides per process).
 - **Combat continuity**: a `combat_start`/`cinematic` that arrives while the
   client is loading a new scene is queued and fired when the scene is
@@ -288,13 +592,15 @@ World generation uses separate agents:
   and after `STALLED_SKIP_DAYS` it is `skipped` (un-seals nothing) so the act
   can close.
 
-### Tool-Based World Mutation
+### World Mutation
 
-Agents interact with world state exclusively through tools:
-- `src/tools/world_read/` - Query world state (locations, NPCs, quests, etc.)
-- `src/tools/world_write/` - Mutate world state (move player, advance time, etc.)
-- `src/tools/narration.py` - Output to player (narrate, describe_location)
-- `src/tools/agents_as_tools.py` - Sub-agents exposed as tools
+The DM changes the world only through `@command` lines (see above), which
+`src/services/commands.py` maps onto the engine functions:
+- `src/tools/world_write/` - Mutate world state (move player, advance time, etc.);
+  `creation.py` holds `create_location`/`create_npc` (refuse duplicates)
+- `src/tools/world_read/` - Read helpers (the scene brief and REST endpoints use them)
+- `src/tools/narration.py`, `src/tools/agents_as_tools.py` - legacy (the CLI/world
+  forge paths; no longer given to the DM)
 
 ### Data Models
 
